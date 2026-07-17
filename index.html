@@ -1,0 +1,193 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CNCF Graduated Projects — Learning Landscape</title>
+<meta name="description" content="An interactive, self-paced tour of all 36 CNCF graduated projects — what each one is, what it does, and how it works." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpolygon points='12,1 22,6.5 22,17.5 12,23 2,17.5 2,6.5' fill='%23326ce5'/%3E%3Cpolygon points='12,6 17,8.75 17,15.25 12,18 7,15.25 7,8.75' fill='none' stroke='%23ffffff' stroke-width='1.4'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="assets/theme.css" />
+<style>
+  /* ---- App-shell layout chrome only. Visual identity lives in theme.css. ---- */
+  html, body { height: 100%; }
+  body { background-attachment: fixed; }
+
+  .app {
+    display: grid;
+    grid-template-columns: 320px minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+    grid-template-areas: "brand topbar" "sidebar main";
+    min-height: 100vh;
+  }
+
+  /* Brand corner */
+  .brand {
+    grid-area: brand;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: var(--sp-4) var(--sp-5);
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+    position: sticky; top: 0; z-index: 20;
+  }
+  .brand .hex {
+    width: 30px; height: 34px; flex: none;
+    background: linear-gradient(150deg, var(--accent), var(--accent-2));
+    clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+    box-shadow: var(--shadow-sm);
+  }
+  .brand b { font-size: var(--fs-md); letter-spacing: -0.01em; }
+  .brand span { display: block; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); letter-spacing: 0.06em; }
+
+  /* Topbar with global progress */
+  .topbar {
+    grid-area: topbar;
+    display: flex; align-items: center; gap: var(--sp-5);
+    padding: var(--sp-4) var(--sp-6);
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--surface) 80%, transparent);
+    backdrop-filter: blur(8px);
+    position: sticky; top: 0; z-index: 20;
+  }
+  .topbar .home-link { font-weight: 600; font-size: var(--fs-sm); white-space: nowrap; }
+  .progress-wrap { display: flex; align-items: center; gap: var(--sp-3); flex: 1; min-width: 0; }
+  .progress-track { flex: 1; height: 8px; background: var(--surface-3); border-radius: var(--r-pill); overflow: hidden; min-width: 80px; }
+  .progress-fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: var(--r-pill); transition: width .5s ease; }
+  .progress-label { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); white-space: nowrap; }
+
+  /* Sidebar nav */
+  .sidebar {
+    grid-area: sidebar;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+    padding: var(--sp-4) var(--sp-3) var(--sp-7);
+    overflow-y: auto;
+    position: sticky; top: 71px; align-self: start;
+    max-height: calc(100vh - 71px);
+  }
+  .nav-section { margin-bottom: var(--sp-4); }
+  .nav-section > h3 {
+    display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-2);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: var(--sp-4) var(--sp-3) var(--sp-2);
+  }
+  .nav-section > h3 .sec-count { color: var(--text-faint); font-size: 0.9em; }
+  .nav-item {
+    display: flex; align-items: center; gap: var(--sp-3);
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    font-size: var(--fs-sm);
+    color: var(--text);
+    background: none; border: 0;
+    border-radius: var(--r-sm);
+    padding: var(--sp-2) var(--sp-3);
+    cursor: pointer;
+    line-height: 1.3;
+    transition: background .12s, color .12s;
+  }
+  .nav-item:hover { background: var(--surface-2); }
+  .nav-item.active { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); color: var(--accent-strong); font-weight: 600; }
+  .nav-item.active .dot { background: var(--accent); }
+  .nav-item.planned { color: var(--text-faint); cursor: default; }
+  .nav-item.planned:hover { background: var(--surface-2); }
+  .nav-item .dot {
+    width: 9px; height: 10px; flex: none;
+    background: var(--border-strong);
+    clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+  }
+  .nav-item.done .dot { background: var(--signal-green); }
+  .nav-item .np { margin-left: auto; font-size: var(--fs-xs); color: var(--text-faint); font-family: var(--font-mono); }
+
+  /* Main content */
+  .main { grid-area: main; padding: 0; min-width: 0; }
+  .view { max-width: var(--maxw-page); margin: 0 auto; padding: var(--sp-6) var(--sp-6) var(--sp-8); }
+
+  /* Landing hero */
+  .hero { position: relative; overflow: hidden; border-radius: var(--r-lg); border: 1px solid var(--border); background: var(--surface); box-shadow: var(--shadow-md); padding: var(--sp-7) var(--sp-6); margin-bottom: var(--sp-6); }
+  .hero::after {
+    content: ""; position: absolute; right: -40px; top: -40px; width: 260px; height: 260px;
+    background:
+      radial-gradient(circle at 30% 30%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%),
+      radial-gradient(circle at 70% 70%, color-mix(in srgb, var(--accent-2) 22%, transparent), transparent 60%);
+    filter: blur(6px); pointer-events: none;
+  }
+  .hero h1 { font-size: var(--fs-3xl); margin-bottom: var(--sp-3); position: relative; }
+  .hero p { position: relative; }
+
+  .stat-row { display: flex; flex-wrap: wrap; gap: var(--sp-4); margin: var(--sp-5) 0 0; }
+  .stat { flex: 1 1 140px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); padding: var(--sp-4); }
+  .stat .n { font-size: var(--fs-2xl); font-weight: 700; line-height: 1; color: var(--accent-strong); }
+  .stat .l { font-family: var(--font-mono); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-muted); margin-top: var(--sp-2); }
+
+  /* Section overview cards */
+  .sections-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--sp-4); }
+  .sec-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--sp-5); box-shadow: var(--shadow-sm); }
+  .sec-card h3 { margin: 0 0 var(--sp-2); font-size: var(--fs-lg); }
+  .sec-card .sec-meta { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); margin-bottom: var(--sp-3); }
+  .chip-list { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+  .chip {
+    display: inline-flex; align-items: center; gap: 0.4em;
+    font-size: var(--fs-xs); font-family: var(--font-mono);
+    padding: 0.25em 0.6em; border-radius: var(--r-pill);
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted);
+    cursor: pointer;
+  }
+  .chip:hover { border-color: var(--accent); color: var(--accent-strong); }
+  .chip.done { color: var(--signal-green); border-color: color-mix(in srgb, var(--signal-green) 35%, var(--border)); }
+  .chip .cdot { width: 7px; height: 8px; background: var(--border-strong); clip-path: polygon(50% 0,100% 25%,100% 75%,50% 100%,0 75%,0 25%); }
+  .chip.done .cdot { background: var(--signal-green); }
+
+  /* Deep-dive frame */
+  .frame-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-3); margin-bottom: var(--sp-4); }
+  .crumb { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); }
+  .crumb a { color: var(--text-muted); }
+  .frame-actions { margin-left: auto; display: flex; gap: var(--sp-2); }
+  .iframe-shell { border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; box-shadow: var(--shadow-md); background: var(--surface); }
+  iframe.deepdive-frame { width: 100%; border: 0; display: block; height: calc(100vh - 150px); min-height: 480px; background: var(--bg); }
+
+  /* Planned placeholder */
+  .placeholder { text-align: center; padding: var(--sp-8) var(--sp-5); }
+  .placeholder .big-hex { width: 74px; height: 84px; margin: 0 auto var(--sp-5); background: linear-gradient(150deg, var(--border-strong), var(--surface-3)); clip-path: polygon(50% 0,100% 25%,100% 75%,50% 100%,0 75%,0 25%); }
+
+  .err { color: var(--signal-red); }
+
+  /* Responsive: collapse sidebar under a disclosure on narrow screens */
+  @media (max-width: 900px) {
+    .app { grid-template-columns: 1fr; grid-template-areas: "brand" "topbar" "sidebar" "main"; }
+    .brand { border-right: 0; }
+    .sidebar { position: static; max-height: none; border-right: 0; border-bottom: 1px solid var(--border); }
+    iframe.deepdive-frame { height: 78vh; }
+  }
+</style>
+
+<div class="app">
+  <header class="brand">
+    <div class="hex" aria-hidden="true"></div>
+    <div>
+      <b>CNCF Graduated</b>
+      <span>learning landscape</span>
+    </div>
+  </header>
+
+  <div class="topbar">
+    <a href="#overview" class="home-link">◆ Overview</a>
+    <div class="progress-wrap" title="Deep-dives completed">
+      <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+      <span class="progress-label" id="progressLabel">0 / 0</span>
+    </div>
+  </div>
+
+  <nav class="sidebar" id="sidebar" aria-label="Projects">
+    <p class="muted mono" style="padding:var(--sp-3)">Loading…</p>
+  </nav>
+
+  <main class="main" id="main">
+    <div class="view"><p class="muted">Loading the landscape…</p></div>
+  </main>
+</div>
+
+<script src="assets/app.js"></script>
