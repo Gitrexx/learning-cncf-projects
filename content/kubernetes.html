@@ -1,0 +1,547 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kubernetes — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the architecture diagram + pod-scheduling animation. ---- */
+  .arch-wrap {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 900 / 560;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+  }
+  .arch-wrap svg { width: 100%; height: 100%; display: block; }
+
+  .grp-box { fill: none; stroke: var(--border-strong); stroke-width: 1.5; stroke-dasharray: 6 5; rx: 14; }
+  .grp-label { font-family: var(--font-mono); font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; fill: var(--text-faint); }
+
+  .conn-line { stroke: var(--border-strong); stroke-width: 2; }
+
+  .comp-box {
+    fill: var(--surface);
+    stroke: var(--border-strong);
+    stroke-width: 1.6;
+    rx: 10;
+    cursor: pointer;
+    transition: stroke .15s, fill .15s;
+  }
+  .comp-box:hover { stroke: var(--accent); }
+  .comp-box.active { stroke: var(--accent); stroke-width: 2.4; fill: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+  .comp-box.stepping { stroke: var(--cloud-cyan); stroke-width: 2.6; fill: color-mix(in srgb, var(--cloud-cyan) 16%, var(--surface)); }
+
+  .comp-label { font-family: var(--font-mono); font-size: 14px; font-weight: 600; fill: var(--text); pointer-events: none; }
+  .comp-sub { font-family: var(--font-mono); font-size: 10.5px; fill: var(--text-faint); pointer-events: none; }
+
+  .packet {
+    position: absolute;
+    width: 16px; height: 16px;
+    margin: -8px 0 0 -8px;
+    border-radius: 50%;
+    background: var(--signal-amber);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--signal-amber) 25%, transparent), var(--shadow-md);
+    transition: left .65s cubic-bezier(.4,0,.2,1), top .65s cubic-bezier(.4,0,.2,1), opacity .2s;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .packet.on { opacity: 1; }
+
+  .info-panel {
+    min-height: 6.5rem;
+  }
+  .info-panel .info-title { font-family: var(--font-mono); font-size: var(--fs-sm); font-weight: 700; color: var(--accent-strong); margin-bottom: var(--sp-2); }
+
+  .step-controls { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-4); flex-wrap: wrap; }
+  .step-counter { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); margin-left: auto; }
+
+  .boundary-table td:first-child, .boundary-table th:first-child { white-space: nowrap; }
+
+  .diagram-hint { font-size: var(--fs-xs); color: var(--text-faint); margin-top: var(--sp-2); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Foundations &amp; Orchestration · Sub-topic 1 / 36</p>
+  <h1>Kubernetes</h1>
+  <p class="lead">
+    You already run Deployments, write Services, and debug CrashLoopBackOffs. This deep-dive isn't
+    "Kubernetes 101" — it's the one piece of scaffolding the other 35 deep-dives in this landscape
+    lean on. Every other CNCF graduated project either <em>extends</em> Kubernetes (Cilium, Istio),
+    <em>plugs into</em> it through a defined interface (containerd via CRI, Rook via CSI), or
+    <em>runs on top of</em> it (Argo, Dapr, Knative). To place any of them correctly, you need a
+    precise mental model of where Kubernetes' job ends — not the Pods-and-Services surface, but the
+    control loop underneath it.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Kubernetes is CNCF's founding project — donated by Google in 2014, the first project accepted
+    into CNCF's inaugural cohort in 2016, and the first project CNCF ever graduated, in March 2018.
+    Every section of this landscape after this one assumes Kubernetes as the substrate.
+  </div>
+
+  <h2>The problem before Kubernetes</h2>
+  <p>
+    Kubernetes descends from Google's internal <strong>Borg</strong> system, which scheduled and
+    managed containers across Google's fleets for over a decade before Kubernetes existed. The
+    problem it solves predates containers: given a pool of machines and a set of workloads with
+    resource needs, health requirements, and scaling targets, <em>continuously</em> keep the right
+    number of the right workloads running on the right machines, without a human re-running scripts
+    every time something crashes, a node dies, or demand changes.
+  </p>
+  <p>
+    Pre-Kubernetes container orchestration (early Docker Swarm, Mesos + Marathon, home-grown
+    schedulers) mostly treated this as a one-shot placement problem: place container, done. What
+    made Kubernetes different — and is the single idea to hold onto through this whole page — is
+    that it treats orchestration as a <span class="term" title="Continuously compare desired state to actual state and act to close the gap.">closed reconciliation loop</span>
+    running forever, not a placement decision made once.
+  </p>
+
+  <h2>Two control planes: control plane and node</h2>
+  <p>
+    A Kubernetes cluster splits cleanly into two tiers. The <strong>control plane</strong> makes
+    decisions and holds all state; it never runs your workloads. <strong>Nodes</strong> execute
+    workloads and know almost nothing about the cluster as a whole — each node only cares about the
+    Pods assigned to it. Click any component below to see its job; then run the pod-scheduling
+    animation to watch a single <code>kubectl apply</code> travel through all of them.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Cluster architecture — click a component, or step through scheduling a Pod</div>
+    <div class="arch-wrap" id="archWrap">
+      <svg id="archSvg" viewBox="0 0 900 560" role="img" aria-label="Kubernetes control plane and node architecture">
+        <rect class="grp-box" x="30" y="30" width="840" height="270"></rect>
+        <text class="grp-label" x="46" y="55">control plane</text>
+        <rect class="grp-box" x="30" y="340" width="840" height="190"></rect>
+        <text class="grp-label" x="46" y="365">node (× many)</text>
+        <g id="connLayer"></g>
+        <g id="compLayer"></g>
+      </svg>
+      <div class="packet" id="packet"></div>
+    </div>
+    <p class="diagram-hint">Tip: components only ever talk to the API server — nothing talks to etcd, or to each other, directly except through it.</p>
+
+    <div class="card info-panel" id="infoPanel" style="margin-top: var(--sp-4);">
+      <div class="info-title" id="infoTitle">Select a component</div>
+      <p id="infoBody" class="muted" style="margin-bottom:0;">
+        Click any box in the diagram to read what it does, or press "Run animation" to trace a
+        request end to end.
+      </p>
+    </div>
+
+    <div class="step-controls">
+      <button class="btn" id="stepPlay">▶ Run animation: schedule a Pod</button>
+      <button class="btn ghost" id="stepPrev" disabled>◂ Prev</button>
+      <button class="btn ghost" id="stepNext" disabled>Next ▸</button>
+      <button class="btn ghost" id="stepReset" disabled>Reset</button>
+      <span class="step-counter" id="stepCounter"></span>
+    </div>
+  </div>
+
+  <h3>Control plane components</h3>
+  <ul>
+    <li><strong>kube-apiserver</strong> — the only door into the cluster. Every read and write,
+      from <code>kubectl</code>, from controllers, from kubelets, goes through it as a REST/gRPC
+      front end over etcd. It's stateless and horizontally scalable; it does authentication,
+      authorization (RBAC), and runs <span class="term" title="Plugins that intercept a write to validate or default/mutate the object before it's persisted.">admission controllers</span>
+      before anything is persisted.</li>
+    <li><strong>etcd</strong> — the strongly consistent key-value store (its own CNCF graduated
+      project, using Raft consensus) that holds <em>all</em> cluster state. Nothing but the API
+      server ever talks to it directly.</li>
+    <li><strong>kube-scheduler</strong> — watches the API server for Pods that exist but have no
+      node assigned, picks a node for each via filtering + scoring, and writes that decision back
+      through the API server.</li>
+    <li><strong>kube-controller-manager</strong> — runs dozens of independent control loops
+      (Deployment, ReplicaSet, Node, Job, and more) bundled into one process, each watching one
+      slice of desired vs. actual state and reconciling it.</li>
+  </ul>
+
+  <h3>Node components</h3>
+  <ul>
+    <li><strong>kubelet</strong> — the agent on every node. It watches the API server for Pods
+      assigned to <em>its</em> node, drives the container runtime through the
+      <span class="term" title="Container Runtime Interface — the gRPC contract kubelet speaks to any compliant runtime.">CRI</span>
+      to actually run them, runs liveness/readiness probes, and reports status back up.</li>
+    <li><strong>kube-proxy</strong> — maintains the network rules (iptables, IPVS, or nftables,
+      depending on mode) on each node that implement Service virtual IPs, watching Endpoints /
+      EndpointSlices for changes.</li>
+    <li><strong>container runtime</strong> — containerd or CRI-O, reached via CRI; it's what
+      actually pulls images and starts containers. (Its own deep-dive is next in this section —
+      Kubernetes deliberately doesn't implement this itself.)</li>
+  </ul>
+
+  <h2>The idea underneath everything: declarative reconciliation</h2>
+  <p>
+    Every Kubernetes object you write — a Deployment, a Service, a PersistentVolumeClaim, a CRD
+    instance — has a <code>spec</code> (what you want) and a <code>status</code> (what's currently
+    true). A <span class="term" title="A goroutine (or process) implementing Observe → Diff → Act, forever.">controller</span>
+    is a loop that does exactly one thing, forever:
+  </p>
+  <pre><code>for {
+    observed := getCurrentState(object)   // e.g. list actual running Pods
+    desired  := object.Spec               // e.g. replicas: 3
+    diff     := desired - observed        // e.g. 1 Pod short
+    if diff != 0 {
+        act(diff)                         // e.g. create one more Pod
+    }
+    wait for next change or resync period
+}</code></pre>
+  <p>
+    Two properties of this loop matter more than they first look like they should:
+  </p>
+  <div class="callout note">
+    <span class="callout-title">Level-triggered, not edge-triggered</span>
+    A controller doesn't reason about the <em>event</em> that woke it up ("a Pod died"). It always
+    re-reads the <em>full current state</em> and compares it to the full desired state. This is why
+    Kubernetes self-heals from almost anything, including missed or duplicate events, a controller
+    crashing and restarting, or the API server being unreachable for a while — the next reconcile
+    just re-derives the right action from scratch. Contrast with edge-triggered systems, where a
+    missed event means the action never happens.
+  </div>
+  <p>
+    Controllers don't poll the API server in a busy loop, either. They use etcd's <span class="term" title="A long-lived streaming connection where etcd pushes only the changes since a given resourceVersion, instead of the client re-fetching everything.">watch</span>
+    mechanism through the API server: register interest in a resource type, get pushed only the
+    deltas since your last known <code>resourceVersion</code>, and fall back to a periodic full
+    list ("resync") as a safety net in case a watch silently dropped events. This is the same
+    watch/resourceVersion pattern you'll see reused by Argo CD, Flux, and virtually every operator
+    in the ecosystem — Kubernetes didn't just standardize the object model, it standardized how you
+    watch it.
+  </p>
+
+  <h3>The object model is controllers, not magic</h3>
+  <p>
+    Once you see the reconciliation loop, the familiar object hierarchy stops looking like special
+    Kubernetes behavior and starts looking like ordinary controllers watching ordinary objects:
+  </p>
+  <table>
+    <thead><tr><th>Object</th><th>Who reconciles it</th><th>What "reconcile" means here</th></tr></thead>
+    <tbody>
+      <tr><td><code>Deployment</code></td><td>deployment-controller</td><td>Ensure the right <code>ReplicaSet</code> exists for the current template, roll old ReplicaSets down and the new one up.</td></tr>
+      <tr><td><code>ReplicaSet</code></td><td>replicaset-controller</td><td>Ensure exactly <code>spec.replicas</code> Pods matching the label selector exist; create or delete Pods to close the gap.</td></tr>
+      <tr><td><code>Pod</code></td><td>kubelet (per-node) + scheduler</td><td>Get it a node (scheduler), then keep its containers running to match its spec (kubelet).</td></tr>
+      <tr><td><code>Service</code></td><td>endpoint-controller + kube-proxy</td><td>Track which Pods match the selector as Endpoints; kube-proxy turns that into local routing rules.</td></tr>
+    </tbody>
+  </table>
+  <p>
+    This is also exactly the pattern every CRD + operator in the ecosystem follows (Rook for Ceph,
+    cert-manager for certificates, Crossplane for cloud infrastructure): define a custom
+    <code>spec</code>/<code>status</code> object, write a controller that reconciles it. Kubernetes'
+    real export isn't Pods — it's this control-loop pattern, generalized via CRDs so anything can be
+    modeled and reconciled the same way.
+  </p>
+
+  <h2>Where Kubernetes' job ends</h2>
+  <p>
+    Because this landscape is organized around "who does what job around the anchor," it matters to
+    be precise about what's actually implemented <em>inside</em> Kubernetes versus what Kubernetes
+    only defines an <em>interface</em> for for other projects to fill in:
+  </p>
+  <div class="table-wrap" style="overflow-x:auto;">
+    <table class="boundary-table">
+      <thead><tr><th>Layer</th><th>Kubernetes defines</th><th>Who actually does it</th></tr></thead>
+      <tbody>
+        <tr><td>Container execution</td><td>CRI (gRPC interface)</td><td>containerd, CRI-O</td></tr>
+        <tr><td>Pod networking</td><td>CNI (interface)</td><td>Cilium, and other CNI plugins</td></tr>
+        <tr><td>Storage provisioning</td><td>CSI (interface)</td><td>Rook, cloud-provider CSI drivers</td></tr>
+        <tr><td>Service-to-service traffic mgmt</td><td>nothing — sidecar injection is opt-in</td><td>Istio, Linkerd</td></tr>
+        <tr><td>Cluster DNS</td><td>a required cluster add-on</td><td>CoreDNS</td></tr>
+        <tr><td>Metrics &amp; alerting</td><td>a metrics API surface</td><td>Prometheus</td></tr>
+        <tr><td>Continuous delivery from Git</td><td>nothing — it's a client of the API</td><td>Argo CD, Flux</td></tr>
+        <tr><td>Package templating</td><td>nothing — renders plain manifests</td><td>Helm</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    This is the recurring shape of the whole CNCF landscape: Kubernetes defines a narrow interface
+    (CRI, CNI, CSI) or leaves a layer alone entirely, and a graduated project fills it in. Keep this
+    table in mind — you'll see almost every row become its own deep-dive.
+  </p>
+
+  <h2>Why it graduated, and where you actually see it</h2>
+  <p>
+    Kubernetes graduated CNCF's maturity process first (March 2018) essentially by definition — the
+    process itself was modeled around a project of Kubernetes' scale and governance already having
+    proven multi-vendor adoption, a diverse committer base, and production use at organizations
+    beyond its creator. Today it's the substrate under every major managed offering — <span class="term" title="EKS (AWS), GKE (Google Cloud), AKS (Azure) — all run the same upstream Kubernetes control plane, competing on the surrounding operational experience.">EKS, GKE, AKS</span>
+    — and under most private-cloud and on-prem platform teams' internal platforms. When you see
+    "cloud native" used as a near-synonym for "runs on Kubernetes," this is why: it became the
+    portable abstraction that made workloads move between clouds and data centers without a
+    rewrite, which is the whole reason CNCF exists.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    "Kubernetes" the project vs. "a Kubernetes distribution" (OpenShift, Rancher, k3s, EKS/GKE/AKS)
+    — the distributions bundle Kubernetes with their own defaults, add-ons, and support model, but
+    all run the same upstream control-plane code and API. Nothing in this table above is a
+    Kubernetes "feature" you're missing — it's a deliberate interface boundary.
+  </div>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. A controller's reconcile loop crashes and restarts after missing three watch events for a Deployment. What happens?</p>
+      <button class="quiz-option" data-val="a">Those three changes are permanently lost; the Deployment is now out of sync forever.</button>
+      <button class="quiz-option" data-val="b">On restart it re-lists the full current state and compares it to the full desired state, so it self-corrects regardless of which events it missed.</button>
+      <button class="quiz-option" data-val="c">etcd automatically replays the exact missed events to the controller when it reconnects.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. Which of these does Kubernetes itself implement, rather than just define an interface for?</p>
+      <button class="quiz-option" data-val="a">Pulling container images and starting containers (that's CRI / containerd).</button>
+      <button class="quiz-option" data-val="b">Routing traffic between two service versions with mTLS (that's Istio/Linkerd).</button>
+      <button class="quiz-option" data-val="c">Deciding which node a Pod should run on (the scheduler is part of Kubernetes core).</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. Why does only the API server talk to etcd, never the scheduler or kubelet directly?</p>
+      <button class="quiz-option" data-val="a">So auth, admission control, and validation happen in one consistent place, and etcd's data format/consistency guarantees stay an internal implementation detail.</button>
+      <button class="quiz-option" data-val="b">Because etcd can only maintain one open connection at a time.</button>
+      <button class="quiz-option" data-val="c">It's a legacy limitation being phased out in favor of direct etcd access.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var COMPONENTS = {
+    scheduler: {
+      label: "kube-scheduler", sub: "control plane",
+      x: 60, y: 90, w: 190, h: 74,
+      title: "kube-scheduler",
+      body: "Watches the API server for Pods with no <code>nodeName</code> set. For each one, filters out nodes that can't fit it (resources, taints, affinity rules), scores the rest, and writes the winning node back — through the API server — as a binding."
+    },
+    apiserver: {
+      label: "kube-apiserver", sub: "control plane",
+      x: 350, y: 90, w: 200, h: 74,
+      title: "kube-apiserver",
+      body: "The only entry point to the cluster. Every other component — kubectl, the scheduler, controllers, every kubelet — talks only to this. It authenticates the caller, authorizes via RBAC, runs admission controllers, validates the object, then persists to etcd."
+    },
+    etcd: {
+      label: "etcd", sub: "control plane",
+      x: 660, y: 90, w: 170, h: 74,
+      title: "etcd",
+      body: "A strongly consistent, distributed key-value store (Raft consensus) — its own CNCF graduated project. Holds every object in the cluster: every Pod, Deployment, Secret, ConfigMap. Reached exclusively through the API server."
+    },
+    controllermanager: {
+      label: "kube-controller-manager", sub: "control plane",
+      x: 350, y: 205, w: 200, h: 74,
+      title: "kube-controller-manager",
+      body: "One process bundling dozens of independent control loops — Deployment, ReplicaSet, Node, Job, ServiceAccount, and more — each one watching its slice of desired vs. actual state via the API server and reconciling the difference."
+    },
+    kubelet: {
+      label: "kubelet", sub: "node",
+      x: 90, y: 400, w: 190, h: 74,
+      title: "kubelet",
+      body: "The agent running on every node. Watches the API server for Pods scheduled to its own node, drives the container runtime through CRI to run them, runs liveness/readiness probes, and reports Pod status back up."
+    },
+    kubeproxy: {
+      label: "kube-proxy", sub: "node",
+      x: 355, y: 400, w: 190, h: 74,
+      title: "kube-proxy",
+      body: "Watches Services and EndpointSlices via the API server, and programs each node's network rules (iptables, IPVS, or nftables) so a Service's virtual IP load-balances to the right backend Pods."
+    },
+    runtime: {
+      label: "container runtime", sub: "node · via CRI",
+      x: 620, y: 400, w: 210, h: 74,
+      title: "Container runtime (containerd / CRI-O)",
+      body: "Reached by kubelet through the gRPC-based Container Runtime Interface (CRI). Actually pulls images, unpacks layers, and starts/stops containers via runc. Kubernetes never implements this itself — see the containerd deep-dive next."
+    }
+  };
+
+  var CONNECTIONS = [
+    ["scheduler", "apiserver"],
+    ["apiserver", "etcd"],
+    ["controllermanager", "apiserver"],
+    ["kubelet", "apiserver"],
+    ["kubeproxy", "apiserver"],
+    ["runtime", "kubelet"]
+  ];
+
+  function center(c) { return { x: c.x + c.w / 2, y: c.y + c.h / 2 }; }
+
+  var connLayer = document.getElementById("connLayer");
+  var compLayer = document.getElementById("compLayer");
+  var svgNS = "http://www.w3.org/2000/svg";
+
+  CONNECTIONS.forEach(function (pair) {
+    var a = center(COMPONENTS[pair[0]]), b = center(COMPONENTS[pair[1]]);
+    var line = document.createElementNS(svgNS, "line");
+    line.setAttribute("class", "conn-line");
+    line.setAttribute("x1", a.x); line.setAttribute("y1", a.y);
+    line.setAttribute("x2", b.x); line.setAttribute("y2", b.y);
+    connLayer.appendChild(line);
+  });
+
+  var boxEls = {};
+  Object.keys(COMPONENTS).forEach(function (key) {
+    var c = COMPONENTS[key];
+    var g = document.createElementNS(svgNS, "g");
+
+    var rect = document.createElementNS(svgNS, "rect");
+    rect.setAttribute("class", "comp-box");
+    rect.setAttribute("x", c.x); rect.setAttribute("y", c.y);
+    rect.setAttribute("width", c.w); rect.setAttribute("height", c.h);
+    g.appendChild(rect);
+
+    var label = document.createElementNS(svgNS, "text");
+    label.setAttribute("class", "comp-label");
+    label.setAttribute("x", c.x + c.w / 2);
+    label.setAttribute("y", c.y + c.h / 2 - 4);
+    label.setAttribute("text-anchor", "middle");
+    label.textContent = c.label;
+    g.appendChild(label);
+
+    var sub = document.createElementNS(svgNS, "text");
+    sub.setAttribute("class", "comp-sub");
+    sub.setAttribute("x", c.x + c.w / 2);
+    sub.setAttribute("y", c.y + c.h / 2 + 15);
+    sub.setAttribute("text-anchor", "middle");
+    sub.textContent = c.sub;
+    g.appendChild(sub);
+
+    g.style.cursor = "pointer";
+    g.addEventListener("click", function () { selectComponent(key); });
+
+    compLayer.appendChild(g);
+    boxEls[key] = rect;
+  });
+
+  var infoTitle = document.getElementById("infoTitle");
+  var infoBody = document.getElementById("infoBody");
+
+  function clearActive() {
+    Object.keys(boxEls).forEach(function (k) {
+      boxEls[k].classList.remove("active", "stepping");
+    });
+  }
+
+  function selectComponent(key) {
+    stopStepping();
+    clearActive();
+    boxEls[key].classList.add("active");
+    var c = COMPONENTS[key];
+    infoTitle.textContent = c.title;
+    infoBody.innerHTML = c.body;
+  }
+
+  // ---- Pod-scheduling step animation ----
+  var STEPS = [
+    { comp: "apiserver", text: "You run <code>kubectl apply -f pod.yaml</code>. It's an HTTPS request that lands on <strong>kube-apiserver</strong>." },
+    { comp: "apiserver", text: "The API server authenticates you, checks RBAC authorization, runs admission controllers (defaulting/validating webhooks), and validates the object against the OpenAPI schema." },
+    { comp: "etcd", text: "The API server persists the Pod object to <strong>etcd</strong> — with <code>spec.nodeName</code> still empty. The Pod exists, but nothing is running it yet." },
+    { comp: "scheduler", text: "<strong>kube-scheduler</strong> is watching the API server for Pods with no node assigned. It picks up this one." },
+    { comp: "scheduler", text: "The scheduler filters out nodes that can't fit the Pod (resources, taints/tolerations, affinity), then scores the remaining candidates and picks a winner." },
+    { comp: "apiserver", text: "The scheduler writes its decision back as a <strong>Binding</strong>, through the API server — it never touches etcd directly." },
+    { comp: "kubelet", text: "The <strong>kubelet</strong> on the winning node is watching the API server for Pods assigned to its own node. It sees this one appear." },
+    { comp: "runtime", text: "The kubelet calls the <strong>container runtime</strong> over CRI: pull the image, create the sandbox, start the container via runc." },
+    { comp: "kubelet", text: "The kubelet starts running liveness/readiness probes and reports Pod status (Running) back through the API server." },
+    { comp: "kubeproxy", text: "If a Service selects this Pod, <strong>kube-proxy</strong> notices the new Endpoint and updates its node-local routing rules so traffic can reach it." }
+  ];
+
+  var stepIdx = -1;
+  var stepping = false;
+  var playTimer = null;
+
+  var packet = document.getElementById("packet");
+  var archWrap = document.getElementById("archWrap");
+  var stepPlay = document.getElementById("stepPlay");
+  var stepPrev = document.getElementById("stepPrev");
+  var stepNext = document.getElementById("stepNext");
+  var stepReset = document.getElementById("stepReset");
+  var stepCounter = document.getElementById("stepCounter");
+
+  function placePacket(key) {
+    var c = COMPONENTS[key];
+    var cx = c.x + c.w / 2, cy = c.y + c.h / 2;
+    packet.style.left = (cx / 900 * 100) + "%";
+    packet.style.top = (cy / 560 * 100) + "%";
+    packet.classList.add("on");
+  }
+
+  function renderStep() {
+    clearActive();
+    var s = STEPS[stepIdx];
+    boxEls[s.comp].classList.add("stepping");
+    placePacket(s.comp);
+    infoTitle.textContent = "Step " + (stepIdx + 1) + " of " + STEPS.length + " — " + COMPONENTS[s.comp].label;
+    infoBody.innerHTML = s.text;
+    stepCounter.textContent = (stepIdx + 1) + " / " + STEPS.length;
+    stepPrev.disabled = stepIdx === 0;
+    stepNext.disabled = stepIdx === STEPS.length - 1;
+  }
+
+  function startStepping() {
+    stepping = true;
+    stepIdx = 0;
+    stepReset.disabled = false;
+    stepPrev.disabled = true;
+    stepNext.disabled = false;
+    renderStep();
+  }
+
+  function stopStepping() {
+    if (playTimer) { clearInterval(playTimer); playTimer = null; }
+    stepping = false;
+  }
+
+  stepPlay.addEventListener("click", function () {
+    startStepping();
+    if (playTimer) clearInterval(playTimer);
+    playTimer = setInterval(function () {
+      if (stepIdx >= STEPS.length - 1) { clearInterval(playTimer); playTimer = null; return; }
+      stepIdx++;
+      renderStep();
+    }, 1600);
+  });
+
+  stepNext.addEventListener("click", function () {
+    if (playTimer) { clearInterval(playTimer); playTimer = null; }
+    if (stepIdx < STEPS.length - 1) { stepIdx++; renderStep(); }
+  });
+
+  stepPrev.addEventListener("click", function () {
+    if (playTimer) { clearInterval(playTimer); playTimer = null; }
+    if (stepIdx > 0) { stepIdx--; renderStep(); }
+  });
+
+  stepReset.addEventListener("click", function () {
+    if (playTimer) { clearInterval(playTimer); playTimer = null; }
+    stopStepping();
+    clearActive();
+    packet.classList.remove("on");
+    stepIdx = -1;
+    stepPrev.disabled = true;
+    stepNext.disabled = true;
+    stepReset.disabled = true;
+    stepCounter.textContent = "";
+    infoTitle.textContent = "Select a component";
+    infoBody.innerHTML = "Click any box in the diagram to read what it does, or press \"Run animation\" to trace a request end to end.";
+  });
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>

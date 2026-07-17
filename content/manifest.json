@@ -20,7 +20,7 @@
       "summary": "The container orchestrator at the center of the whole ecosystem.",
       "prerequisites": [],
       "file": "kubernetes.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "etcd",
