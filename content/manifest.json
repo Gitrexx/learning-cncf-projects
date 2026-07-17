@@ -1,0 +1,376 @@
+{
+  "topic": "CNCF Graduated Projects",
+  "mode": "landscape",
+  "sections": [
+    { "id": "foundations",   "title": "Foundations & Orchestration",        "order": 1 },
+    { "id": "networking",    "title": "Networking & Service Mesh",           "order": 2 },
+    { "id": "observability", "title": "Observability",                       "order": 3 },
+    { "id": "delivery",      "title": "CI/CD, GitOps & Autoscaling",         "order": 4 },
+    { "id": "security",      "title": "Security, Policy & Supply Chain",     "order": 5 },
+    { "id": "runtime",       "title": "App Runtime & Platform Abstractions", "order": 6 },
+    { "id": "storage",       "title": "Storage & Databases",                 "order": 7 },
+    { "id": "registry",      "title": "Registry & Distribution",             "order": 8 }
+  ],
+  "items": [
+    {
+      "id": "kubernetes",
+      "title": "Kubernetes",
+      "sectionId": "foundations",
+      "order": 1,
+      "summary": "The container orchestrator at the center of the whole ecosystem.",
+      "prerequisites": [],
+      "file": "kubernetes.html",
+      "status": "planned"
+    },
+    {
+      "id": "etcd",
+      "title": "etcd",
+      "sectionId": "foundations",
+      "order": 2,
+      "summary": "The strongly-consistent key-value store that holds all cluster state (via Raft).",
+      "prerequisites": [],
+      "file": "etcd.html",
+      "status": "planned"
+    },
+    {
+      "id": "containerd",
+      "title": "containerd",
+      "sectionId": "foundations",
+      "order": 3,
+      "summary": "The industry-standard container runtime beneath Kubernetes (OCI images & runc).",
+      "prerequisites": [],
+      "file": "containerd.html",
+      "status": "planned"
+    },
+    {
+      "id": "cri-o",
+      "title": "CRI-O",
+      "sectionId": "foundations",
+      "order": 4,
+      "summary": "A lightweight container runtime built purpose-only for the Kubernetes CRI.",
+      "prerequisites": ["containerd"],
+      "file": "cri-o.html",
+      "status": "planned"
+    },
+    {
+      "id": "helm",
+      "title": "Helm",
+      "sectionId": "foundations",
+      "order": 5,
+      "summary": "The package manager for Kubernetes: charts, templates, values, releases.",
+      "prerequisites": ["kubernetes"],
+      "file": "helm.html",
+      "status": "planned"
+    },
+    {
+      "id": "envoy",
+      "title": "Envoy",
+      "sectionId": "networking",
+      "order": 1,
+      "summary": "The universal L4/L7 proxy dataplane behind most meshes and gateways.",
+      "prerequisites": [],
+      "file": "envoy.html",
+      "status": "planned"
+    },
+    {
+      "id": "istio",
+      "title": "Istio",
+      "sectionId": "networking",
+      "order": 2,
+      "summary": "The feature-rich service mesh: traffic management, mTLS, telemetry on Envoy.",
+      "prerequisites": ["envoy"],
+      "file": "istio.html",
+      "status": "planned"
+    },
+    {
+      "id": "linkerd",
+      "title": "Linkerd",
+      "sectionId": "networking",
+      "order": 3,
+      "summary": "The minimal, security-first service mesh with its own ultralight Rust proxy.",
+      "prerequisites": [],
+      "file": "linkerd.html",
+      "status": "planned"
+    },
+    {
+      "id": "cilium",
+      "title": "Cilium",
+      "sectionId": "networking",
+      "order": 4,
+      "summary": "eBPF-powered networking, security, and observability for Kubernetes.",
+      "prerequisites": ["kubernetes"],
+      "file": "cilium.html",
+      "status": "planned"
+    },
+    {
+      "id": "coredns",
+      "title": "CoreDNS",
+      "sectionId": "networking",
+      "order": 5,
+      "summary": "The pluggable DNS server that powers service discovery inside clusters.",
+      "prerequisites": [],
+      "file": "coredns.html",
+      "status": "planned"
+    },
+    {
+      "id": "prometheus",
+      "title": "Prometheus",
+      "sectionId": "observability",
+      "order": 1,
+      "summary": "The de facto metrics & alerting system: pull scraping, labels, PromQL.",
+      "prerequisites": [],
+      "file": "prometheus.html",
+      "status": "planned"
+    },
+    {
+      "id": "opentelemetry",
+      "title": "OpenTelemetry",
+      "sectionId": "observability",
+      "order": 2,
+      "summary": "The vendor-neutral standard for traces, metrics, and logs (graduated 2026).",
+      "prerequisites": ["prometheus"],
+      "file": "opentelemetry.html",
+      "status": "planned"
+    },
+    {
+      "id": "jaeger",
+      "title": "Jaeger",
+      "sectionId": "observability",
+      "order": 3,
+      "summary": "Distributed tracing: follow a single request across many microservices.",
+      "prerequisites": ["opentelemetry"],
+      "file": "jaeger.html",
+      "status": "planned"
+    },
+    {
+      "id": "fluentd",
+      "title": "Fluentd",
+      "sectionId": "observability",
+      "order": 4,
+      "summary": "The unified logging layer: collect, parse, buffer, and route logs anywhere.",
+      "prerequisites": [],
+      "file": "fluentd.html",
+      "status": "planned"
+    },
+    {
+      "id": "argo",
+      "title": "Argo",
+      "sectionId": "delivery",
+      "order": 1,
+      "summary": "GitOps CD, Kubernetes-native workflows, and progressive delivery (Argo family).",
+      "prerequisites": ["kubernetes"],
+      "file": "argo.html",
+      "status": "planned"
+    },
+    {
+      "id": "flux",
+      "title": "Flux",
+      "sectionId": "delivery",
+      "order": 2,
+      "summary": "The GitOps Toolkit: pull-based, continuous, declarative delivery from Git.",
+      "prerequisites": ["kubernetes"],
+      "file": "flux.html",
+      "status": "planned"
+    },
+    {
+      "id": "keda",
+      "title": "KEDA",
+      "sectionId": "delivery",
+      "order": 3,
+      "summary": "Event-driven autoscaling, including scale-to-zero, on top of the HPA.",
+      "prerequisites": ["kubernetes"],
+      "file": "keda.html",
+      "status": "planned"
+    },
+    {
+      "id": "falco",
+      "title": "Falco",
+      "sectionId": "security",
+      "order": 1,
+      "summary": "Runtime threat detection from kernel syscalls — cloud-native intrusion detection.",
+      "prerequisites": [],
+      "file": "falco.html",
+      "status": "planned"
+    },
+    {
+      "id": "opa",
+      "title": "Open Policy Agent (OPA)",
+      "sectionId": "security",
+      "order": 2,
+      "summary": "A general-purpose policy engine (Rego) for admission control and beyond.",
+      "prerequisites": [],
+      "file": "opa.html",
+      "status": "planned"
+    },
+    {
+      "id": "kyverno",
+      "title": "Kyverno",
+      "sectionId": "security",
+      "order": 3,
+      "summary": "Kubernetes-native policy as YAML: validate, mutate, and generate resources.",
+      "prerequisites": ["kubernetes"],
+      "file": "kyverno.html",
+      "status": "planned"
+    },
+    {
+      "id": "cert-manager",
+      "title": "cert-manager",
+      "sectionId": "security",
+      "order": 4,
+      "summary": "Automated X.509 certificates in Kubernetes: Issuers, ACME, auto-renewal.",
+      "prerequisites": ["kubernetes"],
+      "file": "cert-manager.html",
+      "status": "planned"
+    },
+    {
+      "id": "spiffe",
+      "title": "SPIFFE",
+      "sectionId": "security",
+      "order": 5,
+      "summary": "A standard for workload identity: SPIFFE IDs, trust domains, and SVIDs.",
+      "prerequisites": [],
+      "file": "spiffe.html",
+      "status": "planned"
+    },
+    {
+      "id": "spire",
+      "title": "SPIRE",
+      "sectionId": "security",
+      "order": 6,
+      "summary": "The production implementation of SPIFFE: attestation and SVID issuance.",
+      "prerequisites": ["spiffe"],
+      "file": "spire.html",
+      "status": "planned"
+    },
+    {
+      "id": "in-toto",
+      "title": "in-toto",
+      "sectionId": "security",
+      "order": 7,
+      "summary": "Cryptographic integrity for every step of the software supply chain.",
+      "prerequisites": [],
+      "file": "in-toto.html",
+      "status": "planned"
+    },
+    {
+      "id": "tuf",
+      "title": "The Update Framework (TUF)",
+      "sectionId": "security",
+      "order": 8,
+      "summary": "Securing software update systems against key compromise, rollback, and more.",
+      "prerequisites": [],
+      "file": "tuf.html",
+      "status": "planned"
+    },
+    {
+      "id": "dapr",
+      "title": "Dapr",
+      "sectionId": "runtime",
+      "order": 1,
+      "summary": "A sidecar runtime with building-block APIs for distributed applications.",
+      "prerequisites": ["kubernetes"],
+      "file": "dapr.html",
+      "status": "planned"
+    },
+    {
+      "id": "knative",
+      "title": "Knative",
+      "sectionId": "runtime",
+      "order": 2,
+      "summary": "Serverless on Kubernetes: scale-to-zero serving and event-driven eventing.",
+      "prerequisites": ["kubernetes"],
+      "file": "knative.html",
+      "status": "planned"
+    },
+    {
+      "id": "kubeedge",
+      "title": "KubeEdge",
+      "sectionId": "runtime",
+      "order": 3,
+      "summary": "Extending Kubernetes orchestration out to edge nodes with offline autonomy.",
+      "prerequisites": ["kubernetes"],
+      "file": "kubeedge.html",
+      "status": "planned"
+    },
+    {
+      "id": "cloudevents",
+      "title": "CloudEvents",
+      "sectionId": "runtime",
+      "order": 4,
+      "summary": "A specification for describing event data in a common, portable envelope.",
+      "prerequisites": [],
+      "file": "cloudevents.html",
+      "status": "planned"
+    },
+    {
+      "id": "crossplane",
+      "title": "Crossplane",
+      "sectionId": "runtime",
+      "order": 5,
+      "summary": "Build control planes: manage cloud infrastructure as Kubernetes resources.",
+      "prerequisites": ["kubernetes"],
+      "file": "crossplane.html",
+      "status": "planned"
+    },
+    {
+      "id": "rook",
+      "title": "Rook",
+      "sectionId": "storage",
+      "order": 1,
+      "summary": "Storage orchestration for Kubernetes — Ceph as a self-managing operator.",
+      "prerequisites": ["kubernetes"],
+      "file": "rook.html",
+      "status": "planned"
+    },
+    {
+      "id": "cubefs",
+      "title": "CubeFS",
+      "sectionId": "storage",
+      "order": 2,
+      "summary": "A cloud-native distributed file and object store (metadata/data separation).",
+      "prerequisites": [],
+      "file": "cubefs.html",
+      "status": "planned"
+    },
+    {
+      "id": "tikv",
+      "title": "TiKV",
+      "sectionId": "storage",
+      "order": 3,
+      "summary": "A distributed transactional key-value database (multi-Raft, MVCC).",
+      "prerequisites": ["etcd"],
+      "file": "tikv.html",
+      "status": "planned"
+    },
+    {
+      "id": "vitess",
+      "title": "Vitess",
+      "sectionId": "storage",
+      "order": 4,
+      "summary": "Horizontal scaling for MySQL via sharding and query routing (VTGate).",
+      "prerequisites": [],
+      "file": "vitess.html",
+      "status": "planned"
+    },
+    {
+      "id": "harbor",
+      "title": "Harbor",
+      "sectionId": "registry",
+      "order": 1,
+      "summary": "An enterprise registry: RBAC, vulnerability scanning, signing, replication.",
+      "prerequisites": ["containerd"],
+      "file": "harbor.html",
+      "status": "planned"
+    },
+    {
+      "id": "dragonfly",
+      "title": "Dragonfly",
+      "sectionId": "registry",
+      "order": 2,
+      "summary": "Peer-to-peer image & file distribution at scale (graduated 2026).",
+      "prerequisites": ["harbor"],
+      "file": "dragonfly.html",
+      "status": "planned"
+    }
+  ]
+}
