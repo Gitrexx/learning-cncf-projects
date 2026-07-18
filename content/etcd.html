@@ -1,0 +1,681 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>etcd — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the Raft consensus visualizer. ---- */
+  .raft-wrap {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 700 / 480;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+  }
+  .raft-wrap svg { width: 100%; height: 100%; display: block; }
+
+  .raft-line { stroke: var(--border-strong); stroke-width: 1.6; transition: stroke .2s, stroke-width .2s; }
+  .raft-line.vote { stroke: var(--signal-amber); stroke-width: 2.6; stroke-dasharray: 5 4; }
+  .raft-line.replicate { stroke: var(--cloud-cyan); stroke-width: 2.8; }
+  .raft-line.leader { stroke: var(--signal-green); stroke-width: 1.8; }
+
+  .raft-node-circle { stroke-width: 2; transition: stroke .2s, fill .2s, opacity .2s; }
+  .raft-node.follower .raft-node-circle  { stroke: var(--accent); fill: var(--surface); }
+  .raft-node.candidate .raft-node-circle { stroke: var(--signal-amber); fill: color-mix(in srgb, var(--signal-amber) 16%, var(--surface)); }
+  .raft-node.leader .raft-node-circle    { stroke: var(--signal-green); stroke-width: 3; fill: color-mix(in srgb, var(--signal-green) 16%, var(--surface)); }
+  .raft-node.dead .raft-node-circle      { stroke: var(--signal-red); stroke-dasharray: 4 3; fill: var(--surface-2); }
+  .raft-node.dead { opacity: 0.45; }
+
+  .raft-node-label { font-family: var(--font-mono); font-size: 17px; font-weight: 700; fill: var(--text); pointer-events: none; }
+  .raft-node-role  { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; fill: var(--text-faint); pointer-events: none; }
+  .raft-node-term  { font-family: var(--font-mono); font-size: 10px; fill: var(--text-faint); pointer-events: none; }
+
+  .raft-log-sq { stroke: var(--border-strong); stroke-width: 1; rx: 2; }
+  .raft-log-sq.committed   { fill: var(--signal-green); stroke: var(--signal-green); }
+  .raft-log-sq.uncommitted { fill: var(--signal-amber); stroke: var(--signal-amber); }
+  .raft-log-sq.empty       { fill: var(--surface); }
+
+  .raft-info-panel { min-height: 5.5rem; }
+  .raft-info-title { font-family: var(--font-mono); font-size: var(--fs-sm); font-weight: 700; color: var(--accent-strong); margin-bottom: var(--sp-2); }
+
+  .raft-controls { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-4); flex-wrap: wrap; }
+  .raft-legend { display: flex; gap: var(--sp-4); flex-wrap: wrap; font-size: var(--fs-xs); color: var(--text-faint); margin-top: var(--sp-3); }
+  .raft-legend span { display: inline-flex; align-items: center; gap: 0.4em; }
+  .raft-legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+  .quorum-table td:first-child, .quorum-table th:first-child { white-space: nowrap; }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Foundations &amp; Orchestration · Sub-topic 2 / 36</p>
+  <h1>etcd</h1>
+  <p class="lead">
+    The Kubernetes deep-dive ended on one sentence worth re-reading: "nothing but the API server
+    ever talks to etcd directly." That sentence hides the single component whose failure takes down
+    a Kubernetes cluster's ability to accept any write at all. Every Pod spec, every Secret, every
+    ConfigMap, every controller's view of "current state" — all of it lives in etcd, and every one
+    of those reads and writes has to survive network partitions, crashed nodes, and disk hiccups
+    without ever returning two different answers to the question "what does the cluster look like
+    right now?" This deep-dive is about how etcd delivers that guarantee, and what it costs to run.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    etcd graduated CNCF in November 2020. It's a general-purpose, strongly consistent distributed
+    key-value store — nothing about it is Kubernetes-specific — but it became CNCF's canonical
+    <span class="term" title="A protocol multiple nodes use to agree on a single sequence of values (here: writes) even when some nodes fail or messages are delayed.">consensus</span>-backed
+    store because Kubernetes chose it as the one place all cluster state lives. Its own
+    <code>etcd-io/raft</code> Go library, factored out as a standalone module, is independently reused
+    by CockroachDB, TiDB, Project Calico, and Flannel — arguably the most widely deployed production
+    Raft implementation in existence, on top of etcd itself.
+  </div>
+
+  <h2>The problem: agreeing on one truth across unreliable machines</h2>
+  <p>
+    A single database on a single machine never has to ask "which of us is right?" A distributed
+    store that replicates data across several machines for durability and availability constantly
+    does — a network partition or a crashed leader can leave two nodes each convinced they're in
+    charge, and if both accept writes, the cluster now has two histories that disagree. The
+    algorithm that prevents this is called <strong>consensus</strong>: get a set of nodes to agree on
+    a single, ordered sequence of operations, even when some nodes crash or messages are delayed or
+    lost, as long as a majority of nodes can still talk to each other.
+  </p>
+  <p>
+    The first practical consensus algorithm, Paxos, is notoriously hard to reason about and even
+    harder to implement correctly. etcd is built on <strong>Raft</strong>, a consensus algorithm
+    published in 2014 with an explicit design goal: be <em>understandable</em> without sacrificing
+    the same safety guarantees. Raft does this by decomposing the problem into three separable
+    pieces — leader election, log replication, and safety — each with a small, checkable set of
+    rules. What follows is exactly those three pieces, as etcd implements them.
+  </p>
+
+  <h2>Raft: electing a leader and replicating a log</h2>
+  <p>
+    Every etcd node (a "member") is at all times in exactly one of three roles: <strong>follower</strong>,
+    <strong>candidate</strong>, or <strong>leader</strong>. All writes go through the leader; followers
+    only ever replicate what the leader tells them. Time is divided into <span class="term" title="A monotonically increasing integer. At most one leader can exist per term — if two nodes think they're leader, the one with the lower term is stale and steps down.">terms</span>,
+    each identified by an increasing integer, and at most one leader can be elected per term.
+  </p>
+  <ul>
+    <li><strong>Election.</strong> A leader sends empty <code>AppendEntries</code> RPCs as heartbeats
+      to every follower on a fixed interval. Each follower resets a randomized election timeout every
+      time it hears from the leader. If a follower's timeout fires — because the leader crashed, was
+      partitioned away, or was just slow — it increments its term, votes for itself, becomes a
+      candidate, and requests votes from every other node. A candidate that collects votes from a
+      <strong>majority</strong> of the cluster for that term becomes the new leader. The
+      <em>randomized</em> part of the timeout matters: if every follower had the same timeout, they'd
+      all become candidates simultaneously and split the vote every single time.</li>
+    <li><strong>Log replication.</strong> Once a leader exists, every client write is appended to the
+      leader's local log first, then replicated to followers via <code>AppendEntries</code> RPCs
+      carrying real entries instead of empty heartbeats. The leader tracks, per follower, a
+      <code>nextIndex</code> (what to send next) and <code>matchIndex</code> (the highest entry
+      confirmed stored on that follower). Once an entry is durably stored on a <strong>majority</strong>
+      of members — including the leader — the leader advances its <strong>commit index</strong> and
+      applies the entry to its state machine (etcd's key-value store). Followers learn the new commit
+      index on the next heartbeat and apply it locally. A write is never acknowledged to the client
+      until it's on a majority of disks — that's what makes it durable against losing any minority of
+      the cluster.</li>
+  </ul>
+
+  <div class="callout note">
+    <span class="callout-title">Quorum: why odd-sized clusters</span>
+    A cluster of <code>n</code> members needs a <strong>quorum</strong> of <code>floor(n/2)+1</code>
+    nodes to elect a leader or commit a write. Because quorum size doesn't shrink going from an even
+    <code>n</code> down to <code>n-1</code>, an even-sized cluster buys zero extra fault tolerance for
+    an extra machine — a 4-node cluster needs the same 3-node quorum as a 3-node cluster, but tolerates
+    the same single failure. That's why every etcd cluster you'll see in the wild is sized 3, 5, or 7.
+  </div>
+
+  <table class="quorum-table">
+    <thead><tr><th>Cluster size</th><th>Quorum needed</th><th>Failures tolerated</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>1</td><td>0</td></tr>
+      <tr><td>3</td><td>2</td><td>1</td></tr>
+      <tr><td>5</td><td>3</td><td>2</td></tr>
+      <tr><td>7</td><td>4</td><td>3</td></tr>
+    </tbody>
+  </table>
+
+  <div class="widget">
+    <div class="widget-title">Raft consensus visualizer — elect a leader, replicate a log entry, then kill the leader and watch quorum recover</div>
+    <div class="row" style="margin-bottom: var(--sp-2);">
+      <label class="mono" style="font-size: var(--fs-xs); color: var(--text-faint);">CLUSTER SIZE</label>
+      <select id="clusterSize">
+        <option value="3">3 members</option>
+        <option value="5" selected>5 members</option>
+        <option value="7">7 members</option>
+      </select>
+      <span class="badge" id="quorumBadge">quorum: 3 of 5</span>
+    </div>
+    <div class="raft-wrap" id="raftWrap">
+      <svg id="raftSvg" viewBox="0 0 700 480" role="img" aria-label="Raft cluster visualizer">
+        <g id="raftConnLayer"></g>
+        <g id="raftNodeLayer"></g>
+      </svg>
+    </div>
+    <div class="raft-legend">
+      <span><i style="background: var(--signal-green);"></i> leader</span>
+      <span><i style="background: var(--accent); opacity:.6;"></i> follower</span>
+      <span><i style="background: var(--signal-amber);"></i> candidate</span>
+      <span><i style="background: var(--signal-red); opacity:.6;"></i> dead / partitioned</span>
+      <span>squares below each node = its log (green = committed, amber = replicated but not yet committed)</span>
+    </div>
+
+    <div class="card raft-info-panel" id="raftInfoPanel" style="margin-top: var(--sp-4);">
+      <div class="raft-info-title" id="raftInfoTitle">Cluster idle</div>
+      <p id="raftInfoBody" class="muted" style="margin-bottom:0;">
+        Every member starts as a follower with no leader. Click "Start election" to trigger the
+        cluster's first vote.
+      </p>
+    </div>
+
+    <div class="raft-controls">
+      <button class="btn" id="raftElect">Start election</button>
+      <button class="btn" id="raftReplicate" disabled>Replicate a log entry</button>
+      <button class="btn ghost" id="raftKill" disabled>Kill the leader</button>
+      <button class="btn ghost" id="raftRevive" disabled>Revive a dead node</button>
+      <button class="btn ghost" id="raftReset">Reset</button>
+    </div>
+  </div>
+  <p class="diagram-hint" style="font-size: var(--fs-xs); color: var(--text-faint); margin-top: var(--sp-2);">
+    This simulation simplifies away split votes (every reachable node grants the one candidate's
+    request) to isolate the two ideas that matter: a leader only exists with majority backing, and a
+    write only commits once a majority durably has it. Try killing the leader in a 3-member cluster,
+    then killing a second node — watch the cluster go unavailable exactly when it drops below quorum.
+  </p>
+
+  <h2>The data model: MVCC on top of a B+tree</h2>
+  <p>
+    Below Raft, etcd stores its actual key-value data using <span class="term" title="Multi-Version Concurrency Control — instead of overwriting a key's old value, every write creates a new, timestamped version and old versions stay readable.">MVCC</span>
+    on top of <strong>bbolt</strong> (the maintained fork of BoltDB), a single-file, memory-mapped
+    B+tree that gives etcd local ACID transactions. Every write to the store — a <code>put</code> or
+    <code>delete</code>, for any key — increments one global, monotonically increasing
+    <strong>revision</strong> number for the entire keyspace. The actual bbolt row key isn't the
+    user's key at all; it's <code>(revision, sub-revision)</code>, with the sub-revision
+    disambiguating multiple keys written in the same transaction. A separate in-memory index (etcd
+    calls it the <code>keyIndex</code>) maps each logical key name to all of its historical
+    revisions, so a request for "key X as of revision R" is a lookup, not a scan.
+  </p>
+  <p>
+    This is exactly what makes Kubernetes' <code>resourceVersion</code> mean something precise: it
+    <em>is</em> etcd's revision number, passed straight through the API server. "Get this Deployment
+    at resourceVersion 4021" is "get this key at etcd revision 4021" — a genuinely consistent,
+    point-in-time read, not a best-effort snapshot.
+  </p>
+  <div class="callout warn">
+    <span class="callout-title">Compaction and defrag are two different things</span>
+    Because MVCC keeps every historical version of every key, etcd runs periodic
+    <strong>compaction</strong> (Kubernetes' API server triggers one roughly every 5 minutes) to
+    discard old revisions before a cutoff. But bbolt is copy-on-write — compaction frees internal
+    pages onto a <em>freelist</em> for reuse, it does not shrink the file on disk. Only
+    <code>etcdctl defrag</code> rebuilds the file to actually return space to the filesystem, and
+    running it live blocks reads/writes on that member while it works — which is why operators
+    defrag one member at a time, in a rolling fashion, never the whole cluster at once. Skip both
+    long enough on a busy cluster and you'll eventually see <code>mvcc: database space exceeded</code>.
+  </div>
+
+  <h2>Watch: how controllers subscribe to change without polling</h2>
+  <p>
+    Recall from the Kubernetes deep-dive that every controller registers interest in a resource type
+    and gets pushed deltas instead of polling. That mechanism is etcd's <span class="term" title="A persistent gRPC stream: the client sends a starting revision once, and the server pushes ordered change events as they commit — no re-querying.">watch</span>,
+    and it exists <em>because</em> of the MVCC revision model above. A client opens a long-lived gRPC
+    <code>Watch</code> stream, specifies a key or range and a starting revision, and etcd streams back
+    ordered <code>PUT</code>/<code>DELETE</code> events from that revision forward as Raft commits
+    them — genuinely pushed, not polled. Because every historical revision is (until compacted)
+    still indexed, a client that reconnects can resume exactly where it left off by watching from its
+    last known revision; if that revision has already been compacted away, etcd returns an error and
+    the client has to re-list to resync — the same shape as Kubernetes' "410 Gone: resourceVersion too
+    old" response to a stale watch.
+  </p>
+  <p>
+    Kubernetes doesn't have each controller open its own etcd watch, though — the API server runs one
+    internal watch cache per resource type (a single long-lived List+Watch against etcd, fanned out
+    in-memory to every client's own watch), which is exactly the layer that turns one etcd stream into
+    thousands of concurrent <code>kubectl get -w</code> sessions without multiplying load on etcd.
+  </p>
+
+  <h2>Leases: a TTL primitive for heartbeats and leader election</h2>
+  <p>
+    A <span class="term" title="A server-side handle with a time-to-live; any key attached to it is deleted automatically, in one Raft-replicated operation, when the lease expires without renewal.">lease</span>
+    is a first-class etcd object: a client calls <code>Grant(ttl)</code> to get a lease ID, attaches
+    it to any number of keys, and keeps it alive with a bidirectional <code>LeaseKeepAlive</code> gRPC
+    stream. Stop renewing, and every key on that lease is deleted atomically when the TTL runs out —
+    turning "is this thing still alive" into a property etcd itself enforces, rather than something a
+    client has to poll for.
+  </p>
+  <p>
+    Kubernetes' <code>coordination.k8s.io/v1</code> <code>Lease</code> objects are a thin layer over
+    exactly this: kubelets renew a per-node lease on a fast interval so node-death detection doesn't
+    require diffing full <code>Node</code> objects, and HA control-plane components (the
+    scheduler, controller-manager) use a lease the same way a distributed lock works — whichever
+    replica holds and renews it is active; if it stops renewing, another replica's attempt to acquire
+    it succeeds and it becomes active instead.
+  </p>
+
+  <h2>Operating etcd: the fsync tax</h2>
+  <p>
+    The property that makes etcd's guarantees real — a write isn't acknowledged until it's durably on
+    a quorum of disks — is also its sharpest operational edge. Every write requires an
+    <span class="term" title="A system call that forces buffered writes out of the OS page cache and onto physical storage before returning — the durability guarantee underneath 'the write succeeded.'">fsync</span>
+    to the leader's write-ahead log, then replication and an fsync on a quorum of followers, before
+    the client gets an acknowledgment. That means etcd's write latency is bounded below by disk fsync
+    latency — not network, not CPU. The commonly cited operating target is keeping
+    <code>etcd_disk_wal_fsync_duration_seconds</code> p99 under 10ms; well above that, followers start
+    missing heartbeats and triggering elections that have nothing to do with an actual failure.
+  </p>
+  <div class="callout danger">
+    <span class="callout-title">The classic production footgun</span>
+    Network-attached storage (NAS, SAN, network block storage like some Ceph RBD configurations) adds
+    an extra, less predictable network hop to what should be a local fsync — exactly the kind of
+    latency spike Raft's heartbeat and election timers are sensitive to. The standard guidance is
+    blunt: dedicated local SSD/NVMe for etcd's data directory, not shared with other heavy I/O, and
+    sized generously (3, 5, or 7 members — 5 is the common production sweet spot for surviving 2
+    failures without paying too much extra write-latency tax for a larger quorum). Regular
+    <code>etcdctl snapshot save</code> backups (commonly every 6–12 hours) round out the operational
+    checklist, since Raft's replication protects against node loss, not against an operator deleting
+    the wrong key.
+  </div>
+
+  <h2>Why it graduated, and where you see it</h2>
+  <p>
+    etcd graduated CNCF in November 2020 on the strength of exactly this track record: it had become
+    the de facto canonical strongly-consistent store underneath cloud-native infrastructure generally,
+    not just Kubernetes. <strong>CoreDNS</strong> has a native etcd plugin for serving DNS records out
+    of an etcd keyspace independent of any cluster; Cloud Foundry's Diego scheduler used it as its
+    coordination store; and the <code>etcd-io/raft</code> library underneath it all was factored out
+    and is reused directly by CockroachDB, TiDB, Project Calico, and Flannel. When you see "Raft" named
+    in an unrelated project's architecture doc, there's a decent chance it's this exact library.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    ZooKeeper and Consul solve the same class of problem (distributed coordination/consensus) and
+    predate or parallel etcd — the meaningful difference for a Kubernetes engineer isn't "which is
+    more correct," it's that etcd's gRPC API, MVCC revision model, and watch semantics are what
+    Kubernetes' entire API machinery (<code>resourceVersion</code>, watches, leases) was built to
+    match. Also worth separating: etcd is not a general-purpose database — no secondary indexes, no
+    complex queries, deliberately small feature surface — because its one job is being the
+    consistent source of truth a control plane can trust completely.
+  </div>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. A 5-member etcd cluster loses 2 members to a network partition, leaving 3 reachable. Can the remaining 3 still elect a leader and accept writes?</p>
+      <button class="quiz-option" data-val="a">No — any partition makes the whole cluster unavailable until it heals.</button>
+      <button class="quiz-option" data-val="b">Yes — 3 is exactly quorum for a 5-member cluster (floor(5/2)+1), so the majority side keeps operating normally.</button>
+      <button class="quiz-option" data-val="c">Only reads work; writes are impossible until all 5 nodes are reachable again.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">2. Why does a Kubernetes watch that's been disconnected too long come back as "410 Gone: resourceVersion too old" instead of just resuming?</p>
+      <button class="quiz-option" data-val="a">The etcd revision it wanted to resume from has already been compacted away, so there's no history left to replay from that point — the client must re-list to get a fresh baseline.</button>
+      <button class="quiz-option" data-val="b">etcd only allows one watch connection per client at a time.</button>
+      <button class="quiz-option" data-val="c">It's a Kubernetes-only rate limit unrelated to etcd's internals.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">3. Why is running etcd's data directory on network-attached storage a well-known production footgun?</p>
+      <button class="quiz-option" data-val="a">etcd refuses to start if it detects non-local storage.</button>
+      <button class="quiz-option" data-val="b">Network storage can't be formatted with the filesystem bbolt requires.</button>
+      <button class="quiz-option" data-val="c">Every write needs a low-latency fsync to a quorum of disks before it's acknowledged; the extra, less predictable latency of a network hop causes missed heartbeats and spurious leader elections.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var svgNS = "http://www.w3.org/2000/svg";
+  var LABELS = ["A", "B", "C", "D", "E", "F", "G"];
+  var MAX_LOG_SQ = 6;
+
+  var state = {
+    n: 5,
+    nodes: [],       // {id, x, y, alive, role, term, log:[{committed}]}
+    leaderId: null,
+    term: 0,
+    flashLines: [],  // [{to, kind}]
+    replicateBusy: false
+  };
+
+  var clusterSizeSel = document.getElementById("clusterSize");
+  var quorumBadge = document.getElementById("quorumBadge");
+  var connLayer = document.getElementById("raftConnLayer");
+  var nodeLayer = document.getElementById("raftNodeLayer");
+  var infoTitle = document.getElementById("raftInfoTitle");
+  var infoBody = document.getElementById("raftInfoBody");
+  var btnElect = document.getElementById("raftElect");
+  var btnReplicate = document.getElementById("raftReplicate");
+  var btnKill = document.getElementById("raftKill");
+  var btnRevive = document.getElementById("raftRevive");
+  var btnReset = document.getElementById("raftReset");
+
+  function quorum(n) { return Math.floor(n / 2) + 1; }
+  function aliveNodes() { return state.nodes.filter(function (nd) { return nd.alive; }); }
+  function deadNodes() { return state.nodes.filter(function (nd) { return !nd.alive; }); }
+  function getLeader() { return state.leaderId != null ? findNode(state.leaderId) : null; }
+  function findNode(id) { return state.nodes.filter(function (nd) { return nd.id === id; })[0]; }
+
+  function buildCluster(n) {
+    state.n = n;
+    state.leaderId = null;
+    state.term = 0;
+    state.replicateBusy = false;
+    var cx = 350, cy = 190, r = 140;
+    state.nodes = [];
+    for (var i = 0; i < n; i++) {
+      var angle = -Math.PI / 2 + (2 * Math.PI * i / n);
+      state.nodes.push({
+        id: LABELS[i],
+        x: cx + r * Math.cos(angle),
+        y: cy + r * Math.sin(angle),
+        alive: true,
+        role: "follower",
+        term: 0,
+        log: []
+      });
+    }
+    quorumBadge.textContent = "quorum: " + quorum(n) + " of " + n;
+    setInfo("Cluster idle", "Every member starts as a follower with no leader. Click “Start election” to trigger the cluster's first vote.");
+    updateButtons();
+    render();
+  }
+
+  function setInfo(title, body) {
+    infoTitle.textContent = title;
+    infoBody.innerHTML = body;
+  }
+
+  function updateButtons() {
+    var leader = getLeader();
+    btnReplicate.disabled = !leader || state.replicateBusy;
+    btnKill.disabled = !leader;
+    btnRevive.disabled = deadNodes().length === 0;
+    btnElect.disabled = !!leader;
+  }
+
+  function render() {
+    connLayer.innerHTML = "";
+    nodeLayer.innerHTML = "";
+
+    // Connections: only drawn from a leader, if one exists.
+    var leader = getLeader();
+    if (leader) {
+      aliveNodes().forEach(function (nd) {
+        if (nd.id === leader.id) return;
+        var flash = state.flashLines.filter(function (f) { return f.to === nd.id; })[0];
+        var line = document.createElementNS(svgNS, "line");
+        var cls = "raft-line leader";
+        if (flash) cls = "raft-line " + flash.kind;
+        line.setAttribute("class", cls);
+        line.setAttribute("x1", leader.x); line.setAttribute("y1", leader.y);
+        line.setAttribute("x2", nd.x); line.setAttribute("y2", nd.y);
+        connLayer.appendChild(line);
+      });
+    } else if (state.flashLines.length) {
+      // election in progress, no leader yet: flash lines originate from the candidate
+      var candidate = state.nodes.filter(function (nd) { return nd.role === "candidate"; })[0];
+      if (candidate) {
+        state.flashLines.forEach(function (f) {
+          var target = findNode(f.to);
+          if (!target) return;
+          var line = document.createElementNS(svgNS, "line");
+          line.setAttribute("class", "raft-line " + f.kind);
+          line.setAttribute("x1", candidate.x); line.setAttribute("y1", candidate.y);
+          line.setAttribute("x2", target.x); line.setAttribute("y2", target.y);
+          connLayer.appendChild(line);
+        });
+      }
+    }
+
+    state.nodes.forEach(function (nd) {
+      var g = document.createElementNS(svgNS, "g");
+      g.setAttribute("class", "raft-node " + (nd.alive ? nd.role : "dead"));
+
+      var circle = document.createElementNS(svgNS, "circle");
+      circle.setAttribute("class", "raft-node-circle");
+      circle.setAttribute("cx", nd.x); circle.setAttribute("cy", nd.y); circle.setAttribute("r", 34);
+      g.appendChild(circle);
+
+      var label = document.createElementNS(svgNS, "text");
+      label.setAttribute("class", "raft-node-label");
+      label.setAttribute("x", nd.x); label.setAttribute("y", nd.y - 3);
+      label.setAttribute("text-anchor", "middle");
+      label.textContent = nd.id;
+      g.appendChild(label);
+
+      var role = document.createElementNS(svgNS, "text");
+      role.setAttribute("class", "raft-node-role");
+      role.setAttribute("x", nd.x); role.setAttribute("y", nd.y + 13);
+      role.setAttribute("text-anchor", "middle");
+      role.textContent = nd.alive ? nd.role : "dead";
+      g.appendChild(role);
+
+      var term = document.createElementNS(svgNS, "text");
+      term.setAttribute("class", "raft-node-term");
+      term.setAttribute("x", nd.x); term.setAttribute("y", nd.y + 50);
+      term.setAttribute("text-anchor", "middle");
+      term.textContent = "term " + nd.term;
+      g.appendChild(term);
+
+      var shown = nd.log.slice(-MAX_LOG_SQ);
+      var sqSize = 12, gap = 4;
+      var totalW = shown.length * sqSize + Math.max(0, shown.length - 1) * gap;
+      var startX = nd.x - totalW / 2;
+      var sqY = nd.y + 60;
+      for (var i = 0; i < shown.length; i++) {
+        var rect = document.createElementNS(svgNS, "rect");
+        var kind = shown[i].committed ? "committed" : "uncommitted";
+        rect.setAttribute("class", "raft-log-sq " + kind);
+        rect.setAttribute("x", startX + i * (sqSize + gap));
+        rect.setAttribute("y", sqY);
+        rect.setAttribute("width", sqSize);
+        rect.setAttribute("height", sqSize);
+        var title = document.createElementNS(svgNS, "title");
+        title.textContent = "entry " + (nd.log.length - shown.length + i + 1) + ": " + kind;
+        rect.appendChild(title);
+        g.appendChild(rect);
+      }
+
+      nodeLayer.appendChild(g);
+    });
+  }
+
+  function attemptElection() {
+    if (getLeader()) return;
+    var alive = aliveNodes();
+    if (alive.length === 0) return;
+    state.term += 1;
+    var candidate = alive[Math.floor(Math.random() * alive.length)];
+    candidate.role = "candidate";
+    candidate.term = state.term;
+    render();
+    setInfo(
+      "Term " + state.term + " — election in progress",
+      "Node <strong>" + candidate.id + "</strong> timed out waiting for a leader's heartbeat, incremented its term to " + state.term + ", and is requesting votes from the rest of the cluster."
+    );
+
+    var others = alive.filter(function (nd) { return nd.id !== candidate.id; });
+    state.flashLines = [];
+    others.forEach(function (nd, i) {
+      setTimeout(function () {
+        state.flashLines.push({ to: nd.id, kind: "vote" });
+        render();
+      }, 200 * (i + 1));
+    });
+
+    setTimeout(function () {
+      state.flashLines = [];
+      var votes = alive.length; // simplified: every reachable node grants the single candidate's vote
+      if (votes >= quorum(state.n)) {
+        state.nodes.forEach(function (nd) {
+          nd.role = (nd.id === candidate.id) ? "leader" : "follower";
+          if (nd.alive) nd.term = state.term;
+        });
+        state.leaderId = candidate.id;
+        setInfo(
+          "Node " + candidate.id + " elected leader — term " + state.term,
+          "Received " + votes + " of " + state.n + " votes (quorum: " + quorum(state.n) + "). It will now send periodic heartbeats to every follower and is the only node that accepts writes."
+        );
+      } else {
+        candidate.role = "follower";
+        setInfo(
+          "Election failed — no quorum",
+          "Only " + votes + " of " + state.n + " nodes are reachable, below the quorum of " + quorum(state.n) + ". The cluster cannot elect a leader or accept reads/writes until enough nodes return."
+        );
+      }
+      updateButtons();
+      render();
+    }, 200 * (others.length + 1) + 300);
+  }
+
+  function replicateEntry() {
+    var leader = getLeader();
+    if (!leader || state.replicateBusy) return;
+    state.replicateBusy = true;
+    updateButtons();
+
+    var entryIndex = leader.log.length;
+    leader.log.push({ committed: false });
+    var followers = aliveNodes().filter(function (nd) { return nd.id !== leader.id; });
+    var ackCount = 1; // leader counts itself
+    var committed = false;
+
+    setInfo(
+      "Replicating entry " + (entryIndex + 1),
+      "Leader <strong>" + leader.id + "</strong> appended the entry to its own log and is sending <code>AppendEntries</code> to each follower."
+    );
+    render();
+
+    if (followers.length === 0) {
+      finishIfCommitted();
+    }
+
+    followers.forEach(function (nd, i) {
+      var delay = 350 * (i + 1) + Math.floor(Math.random() * 150);
+      setTimeout(function () {
+        state.flashLines = [{ to: nd.id, kind: "replicate" }];
+        render();
+        setTimeout(function () {
+          state.flashLines = [];
+          nd.log.push({ committed: false });
+          ackCount++;
+          if (!committed && ackCount >= quorum(state.n)) {
+            committed = true;
+            state.nodes.forEach(function (n2) {
+              if (n2.log.length > entryIndex) n2.log[entryIndex].committed = true;
+            });
+            setInfo(
+              "Entry " + (entryIndex + 1) + " committed — term " + state.term,
+              "Durably stored on " + ackCount + " of " + state.n + " members (quorum: " + quorum(state.n) + "). The leader applies it to its state machine and the commit index advances; remaining followers will catch up on their next heartbeat."
+            );
+          }
+          render();
+          finishIfCommitted();
+        }, 300);
+      }, delay);
+    });
+
+    function finishIfCommitted() {
+      var totalContacted = followers.length;
+      var doneCheck = setInterval(function () {
+        if (ackCount >= quorum(state.n) || ackCount >= (1 + totalContacted)) {
+          clearInterval(doneCheck);
+          if (!committed && ackCount < quorum(state.n)) {
+            setInfo(
+              "Entry " + (entryIndex + 1) + " replicated but not committed",
+              "Only " + ackCount + " of " + state.n + " members have it — short of the quorum of " + quorum(state.n) + ". It stays uncommitted until enough followers catch up."
+            );
+            render();
+          }
+          state.replicateBusy = false;
+          updateButtons();
+        }
+      }, 150);
+    }
+  }
+
+  function killLeader() {
+    var leader = getLeader();
+    if (!leader) return;
+    leader.alive = false;
+    state.leaderId = null;
+    updateButtons();
+    setInfo(
+      "Leader " + leader.id + " failed",
+      "Its heartbeats stop arriving. Every remaining follower is now counting down its own randomized election timeout."
+    );
+    render();
+
+    var alive = aliveNodes();
+    if (alive.length >= quorum(state.n)) {
+      setTimeout(function () { attemptElection(); }, 1300);
+    } else {
+      setTimeout(function () {
+        setInfo(
+          "Cluster unavailable — below quorum",
+          "Only " + alive.length + " of " + state.n + " members are alive, short of the quorum of " + quorum(state.n) + ". No new leader can be elected and no writes can commit until a dead node is revived."
+        );
+      }, 300);
+    }
+  }
+
+  function reviveNode() {
+    var dead = deadNodes();
+    if (dead.length === 0) return;
+    var nd = dead[0];
+    nd.alive = true;
+    nd.role = "follower";
+    nd.term = state.term;
+    var leader = getLeader();
+    var sourceLog = leader ? leader.log : (aliveNodes()[0] ? aliveNodes()[0].log : []);
+    nd.log = sourceLog.map(function (e) { return { committed: e.committed }; });
+    setInfo(
+      "Node " + nd.id + " revived",
+      "Rejoins as a follower, catches up its log from the current leader, and starts counting an election timeout of its own."
+    );
+    updateButtons();
+    render();
+
+    if (!getLeader() && aliveNodes().length >= quorum(state.n)) {
+      setTimeout(function () { attemptElection(); }, 900);
+    }
+  }
+
+  clusterSizeSel.addEventListener("change", function () {
+    buildCluster(parseInt(clusterSizeSel.value, 10));
+  });
+  btnElect.addEventListener("click", attemptElection);
+  btnReplicate.addEventListener("click", replicateEntry);
+  btnKill.addEventListener("click", killLeader);
+  btnRevive.addEventListener("click", reviveNode);
+  btnReset.addEventListener("click", function () { buildCluster(state.n); });
+
+  buildCluster(5);
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
