@@ -30,7 +30,7 @@
       "summary": "The strongly-consistent key-value store that holds all cluster state (via Raft).",
       "prerequisites": [],
       "file": "etcd.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "containerd",
