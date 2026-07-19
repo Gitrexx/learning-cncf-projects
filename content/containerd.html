@@ -1,0 +1,502 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>containerd — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the container lifecycle stepper. ---- */
+  .ctr-controls { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-4); }
+
+  .ctr-stage-grid {
+    display: grid;
+    grid-template-columns: 1.15fr 1fr 0.9fr;
+    gap: var(--sp-4);
+  }
+  @media (max-width: 760px) { .ctr-stage-grid { grid-template-columns: 1fr; } }
+
+  .ctr-col { min-height: 280px; display: flex; flex-direction: column; }
+  .ctr-col-title {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-3);
+  }
+
+  .ctr-blob-list { display: flex; flex-direction: column; gap: var(--sp-2); }
+  .ctr-blob {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: var(--sp-2) var(--sp-3);
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity .35s ease, transform .35s ease;
+  }
+  .ctr-blob.in { opacity: 1; transform: translateY(0); }
+  .ctr-blob .k { color: var(--text-faint); }
+  .ctr-blob .v { color: var(--accent-strong); font-weight: 700; }
+
+  .ctr-layer-stack {
+    flex: 1;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 6px;
+    justify-content: flex-start;
+  }
+  .ctr-layer {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-sm);
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--surface-2);
+    color: var(--text-muted);
+    opacity: 0;
+    transform: scaleY(0.4);
+    transform-origin: bottom;
+    transition: opacity .3s ease, transform .3s ease, background .3s ease, border-color .3s ease;
+  }
+  .ctr-layer.in { opacity: 1; transform: scaleY(1); }
+  .ctr-layer.readonly { border-color: var(--k8s-blue); color: var(--text); }
+  .ctr-layer.writable {
+    border-color: var(--signal-amber);
+    background: color-mix(in srgb, var(--signal-amber) 12%, var(--surface));
+    color: var(--text);
+  }
+  .ctr-layer.merged {
+    border-color: var(--cloud-cyan);
+    background: color-mix(in srgb, var(--cloud-cyan) 10%, var(--surface));
+    color: var(--text);
+    font-weight: 700;
+  }
+
+  .ctr-runtime-box {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-3);
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
+    text-align: center;
+  }
+  .ctr-runtime-proc {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-sm);
+    padding: var(--sp-2) var(--sp-4);
+    background: var(--surface-2);
+    color: var(--text-faint);
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity .35s ease, transform .35s ease, background .35s ease, color .35s ease, border-color .35s ease;
+  }
+  .ctr-runtime-proc.in { opacity: 1; transform: translateY(0); color: var(--text); }
+  .ctr-runtime-proc.running { border-color: var(--signal-green); background: color-mix(in srgb, var(--signal-green) 14%, var(--surface)); color: var(--signal-green); }
+
+  .ctr-info-panel { min-height: 5.5rem; margin-top: var(--sp-4); }
+  .ctr-info-title { font-family: var(--font-mono); font-size: var(--fs-sm); font-weight: 700; color: var(--accent-strong); margin-bottom: var(--sp-2); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Foundations &amp; Orchestration · Sub-topic 3 / 36</p>
+  <h1>containerd</h1>
+  <p class="lead">
+    The Kubernetes deep-dive drew a firm line at the kubelet: it schedules Pods, it enforces
+    probes, it reports node status — but it never actually creates a Linux process, mounts a root
+    filesystem, or pulls an image byte. Something below the kubelet has to do that literal work,
+    on every node, for every container. That something is containerd: the daemon that turns "run
+    this image" into a running process, and does it the same way whether the caller is
+    <code>kubectl</code>-driven Kubernetes, plain Docker, or a CI pipeline building images.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    containerd graduated CNCF in February 2019. It's the industry-standard, daemon-based
+    container runtime: it manages image transfer and storage, container execution and
+    supervision, low-level storage, and network attachments on a single host. Docker has run on
+    top of containerd since 2017 (Docker donated it to CNCF); Kubernetes' kubelet talks to it
+    directly via containerd's built-in <span class="term" title="Container Runtime Interface — the gRPC API the kubelet uses to tell any compliant runtime to run pods and containers, replacing the old runtime-specific integrations.">CRI</span>
+    plugin; and tools like <code>nerdctl</code>, BuildKit, and Firecracker-containerd all build on
+    the same client API. If you've ever run <code>crictl</code> or seen
+    <code>/run/containerd/containerd.sock</code> in a node's process list, you were looking at
+    this project.
+  </div>
+
+  <h2>The problem: one runtime, many callers, no duplicated work</h2>
+  <p>
+    Before 2017, "Docker" meant one monolithic daemon (<code>dockerd</code>) that handled the CLI,
+    image builds, networking, volumes, <em>and</em> low-level container execution all in one
+    process — convenient for a single-user workstation, but awkward for anything else that wanted
+    just the "run a container" part without dragging in the rest. Meanwhile the
+    <span class="term" title="A specification, maintained by the Open Container Initiative, defining a standard container image format and a standard way to run one — so any OCI-compliant image runs on any OCI-compliant runtime.">OCI</span>
+    (Open Container Initiative) had standardized what a container image and a container runtime
+    actually are, so that standard could be implemented once and reused everywhere instead of
+    every tool inventing its own container execution logic.
+  </p>
+  <p>
+    containerd is the result of pulling that "run a container" core out of <code>dockerd</code>
+    into its own daemon, hardening it, and exposing it over a stable gRPC API so any client —
+    Docker, Kubernetes, a CI system — can drive the same execution engine. It deliberately does
+    <em>not</em> do the things a developer-facing tool needs: no image building, no CLI UX, no
+    compose files. It focuses on being <em>embedded into a larger system</em>, which is exactly
+    what both Docker and the kubelet do to it.
+  </p>
+
+  <h2>Architecture: a plugin daemon behind one gRPC API</h2>
+  <p>
+    containerd runs as a single long-lived daemon on each node, exposing a gRPC API over a Unix
+    socket (<code>/run/containerd/containerd.sock</code>). Internally, almost everything —
+    the content store, every snapshotter, the runtime, the CRI service itself — is a
+    <strong>plugin</strong>, registered under an ID like <code>io.containerd.grpc.v1.cri</code> or
+    <code>io.containerd.snapshotter.v1.overlayfs</code> and independently configured in
+    <code>/etc/containerd/config.toml</code>. That plugin boundary is what let the CRI
+    implementation move from an out-of-tree adapter into containerd's own process without
+    touching the storage or runtime layers underneath it.
+  </p>
+  <p>
+    Multiple, mutually distrusting clients can share one containerd daemon because every gRPC
+    call carries a <strong>namespace</strong> — not a Linux kernel namespace, but a
+    containerd-specific tenancy label. Docker uses the <code>moby</code> namespace; Kubernetes
+    uses <code>k8s.io</code>. Objects (images, containers, snapshots) in one namespace are
+    invisible to another, so Docker and the kubelet can run against the very same containerd
+    process on a node without ever seeing each other's containers.
+  </p>
+
+  <h2>Content store and images: everything is a content-addressed blob</h2>
+  <p>
+    An OCI image is not one file — it's a tree of blobs addressed purely by the
+    <span class="term" title="An identifier derived by hashing a blob's bytes (e.g. sha256:abcd...). Two blobs with the same digest are guaranteed byte-identical, and a client can verify a downloaded blob just by re-hashing it.">digest</span>
+    of their content: a top-level <strong>manifest</strong> listing a config blob and an ordered
+    list of filesystem layer blobs, each one a gzipped tarball diff. containerd's
+    <strong>content store</strong> is nothing more than these blobs on disk, keyed by digest, plus
+    a small metadata database (a boltdb file) recording what refers to what. Pulling an image is
+    just: resolve a tag to a manifest digest, then fetch every blob the manifest references that
+    isn't already present locally — which is exactly why two images sharing a base layer only ever
+    store that layer once.
+  </p>
+
+  <h2>Snapshotters: layers become a real filesystem</h2>
+  <p>
+    A downloaded layer is an inert tarball; a running container needs an actual mounted root
+    filesystem. That translation is the job of a <strong>snapshotter</strong> — containerd's
+    pluggable abstraction over "stack these layers into a filesystem a process can chroot into."
+    The default on Linux is <code>overlayfs</code>, mirroring Docker's <code>overlay2</code>
+    storage driver, though devmapper, btrfs, zfs, and others exist as plugins for hosts where
+    overlayfs isn't available or desirable.
+  </p>
+  <p>
+    Unpacking works layer by layer, bottom to top: for each layer, the snapshotter opens a new
+    <strong>active</strong> snapshot on top of the previous one, containerd's differ applies that
+    layer's tarball diff into it, and the snapshotter <strong>commits</strong> it into a read-only
+    snapshot that the next layer builds on. The result is a chain of read-only
+    <code>lowerdir</code>s. Starting a <em>container</em> from that image adds one more active
+    snapshot on top — a writable <code>upperdir</code> — and overlayfs presents the whole stack
+    merged as a single mount. Every byte the container writes lands only in that top writable
+    layer; the image layers underneath stay untouched and shareable across every other container
+    started from the same image.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Container lifecycle stepper — pull an image, unpack its layers, then create and start the container</div>
+    <div class="ctr-controls">
+      <button class="btn" id="ctrNext">Pull image (nginx:latest)</button>
+      <button class="btn ghost" id="ctrReset">Reset</button>
+      <span class="badge" id="ctrStepBadge">Step 0 / 4</span>
+    </div>
+    <div class="ctr-stage-grid">
+      <div class="card ctr-col">
+        <div class="ctr-col-title">Content store (content-addressed blobs)</div>
+        <div class="ctr-blob-list" id="ctrBlobList"></div>
+      </div>
+      <div class="card ctr-col">
+        <div class="ctr-col-title">Snapshotter (overlayfs)</div>
+        <div class="ctr-layer-stack" id="ctrLayerStack"></div>
+      </div>
+      <div class="card ctr-col">
+        <div class="ctr-col-title">Runtime (shim + runc)</div>
+        <div class="ctr-runtime-box" id="ctrRuntimeBox">
+          <span class="mono muted" id="ctrRuntimeIdle">no task</span>
+        </div>
+      </div>
+    </div>
+    <div class="card ctr-info-panel" id="ctrInfoPanel">
+      <div class="ctr-info-title" id="ctrInfoTitle">Idle</div>
+      <p id="ctrInfoBody" class="muted" style="margin-bottom:0;">
+        Click the button to resolve and pull <code>nginx:latest</code> from a registry.
+      </p>
+    </div>
+  </div>
+  <p class="diagram-hint" style="font-size: var(--fs-xs); color: var(--text-faint); margin-top: var(--sp-2);">
+    Four calls, four API layers: <code>Pull</code> fills the content store; unpacking drives the
+    snapshotter's <code>Prepare</code>/<code>Commit</code> calls, one per layer; <code>Create</code>
+    adds the container's own writable layer and a container object; <code>Task.Start</code> hands
+    the merged rootfs to a shim, which execs <code>runc</code>.
+  </p>
+
+  <h2>Tasks, shims, and runc: what actually calls <code>clone()</code></h2>
+  <p>
+    containerd itself never becomes the parent process of a container — that would mean every
+    running container dies if containerd crashes or gets upgraded. Instead, a <strong>container</strong>
+    object (image reference, OCI runtime spec, rootfs mount) is a separate thing from a
+    <strong>task</strong>, the live, running instance of it. Starting a task spawns a small,
+    per-container supervisor process called a <strong>shim</strong> — <code>containerd-shim-runc-v2</code>
+    by default — which is reparented to be its own process group leader and which in turn execs
+    <span class="term" title="The reference implementation of the OCI runtime spec: a CLI that does the actual namespace/cgroup/pivot_root work to turn a rootfs + config into a running process, then exits.">runc</span>
+    to do the actual namespace, cgroup, and <code>pivot_root</code> work of creating the container
+    process, per the OCI runtime spec. runc exits once the container is running; the shim stays
+    behind as the long-lived parent, reaping the container's exit status and exposing task
+    control (pause, exec, kill, wait) over a lightweight <code>ttrpc</code> protocol back to
+    containerd.
+  </p>
+  <div class="callout note">
+    <span class="callout-title">Why a shim per container, not one shim for everything</span>
+    Because the shim — not containerd — is the container's real parent process, restarting or
+    upgrading the containerd daemon doesn't touch any already-running container: each shim just
+    keeps supervising its one container and reconnects to the daemon when it comes back. This is
+    the same "control plane restart shouldn't kill running work" property Kubernetes gives you at
+    the Pod level, reproduced one layer down at the process level.
+  </div>
+  <p>
+    The shim v2 API is also how containerd supports runtimes other than runc without touching its
+    own code: a <strong>runtime handler</strong> just names a different shim binary. Kata
+    Containers' shim starts a lightweight VM instead of a plain process; gVisor's <code>runsc</code>
+    intercepts syscalls in a user-space kernel instead of relying on the host kernel's namespaces
+    directly. From containerd's point of view both are still "some shim implementing the Task API"
+    — the isolation model underneath is the handler's problem, not containerd's.
+  </p>
+
+  <h2>The CRI plugin: how the kubelet actually talks to containerd</h2>
+  <p>
+    Since containerd 1.1, the CRI implementation has shipped <em>inside</em> containerd itself as
+    a built-in plugin (<code>io.containerd.grpc.v1.cri</code>, reorganized as
+    <code>io.containerd.cri.v1.*</code> plugins in containerd 2.x) rather than as a separate
+    process — this is what let Kubernetes drop <code>dockershim</code> entirely (removed in
+    Kubernetes 1.24) with containerd as a fully first-class, no-adapter-needed CRI runtime. The
+    kubelet talks CRI gRPC straight to <code>containerd.sock</code>: <code>RunPodSandbox</code> to
+    stand up a Pod's shared network namespace (backed by a minimal "pause"-style sandbox
+    container), then <code>CreateContainer</code>/<code>StartContainer</code> for each container in
+    that Pod, each one landing on the exact pull → unpack → create → start path above. The CRI
+    plugin's own config lives under <code>[plugins.'io.containerd.cri.v1.images']</code> and
+    <code>[plugins.'io.containerd.cri.v1.runtime']</code> in <code>config.toml</code> — including
+    the <code>runtimes</code> table that maps a Kubernetes <code>RuntimeClass</code> name to a
+    concrete shim, which is exactly how one node can run ordinary Pods on runc and sensitive Pods
+    on Kata or gVisor side by side.
+  </p>
+  <div class="callout warn">
+    <span class="callout-title">Config versions matter</span>
+    containerd's CRI plugin config format has evolved (version 2 became the default in 1.x;
+    version 1 was removed, and version 3 became the only supported format in containerd 2.0).
+    Upgrading a node's containerd major version without checking <code>config.toml</code>'s
+    <code>version</code> field is a common way to end up with a kubelet that can't create pods
+    after an upgrade.
+  </div>
+
+  <h2>Garbage collection: leases keep content alive</h2>
+  <p>
+    Content blobs and snapshots are only useful as long as something references them, and
+    containerd runs a mark-and-sweep <strong>garbage collector</strong> to reclaim anything that
+    isn't. A <strong>lease</strong> is the mechanism that keeps a blob or snapshot alive across
+    that sweep even while no container currently uses it — the same "explicit keep-alive object"
+    shape as an etcd lease, just guarding disk content instead of keys. Delete an image and every
+    layer only it referenced becomes collectible on the next GC pass; delete it while another
+    image shares that layer, and the shared blob survives untouched.
+  </p>
+
+  <h2>Why it graduated, and where you see it</h2>
+  <p>
+    containerd graduated CNCF in February 2019, having already become the runtime underneath
+    Docker itself (since the 2017 split) and the default, most widely deployed CRI runtime across
+    managed Kubernetes offerings. Beyond running containers directly, its client library and
+    content/snapshot model get reused as infrastructure by other tools: BuildKit builds images on
+    top of it, <code>nerdctl</code> is a Docker-CLI-compatible frontend for it, and
+    Firecracker-containerd swaps in a microVM-backed shim to run containers as Firecracker VMs.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>Docker</strong> is not a competitor to containerd anymore — Docker Engine runs
+    <em>on top of</em> containerd today, adding the CLI, image build, networking, and compose UX
+    that containerd deliberately leaves out. <strong>CRI-O</strong> (the next deep-dive) is a
+    different runtime that also implements CRI, but was built to do nothing except what
+    Kubernetes' CRI needs, whereas containerd is a general-purpose runtime that Kubernetes is one
+    of several consumers of. And <strong>runc</strong> isn't a competitor to either — it's the OCI
+    runtime executor that both containerd's shims and CRI-O actually shell out to underneath.
+  </div>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. Why does starting a container spawn a separate shim process instead of containerd itself becoming the container's parent process?</p>
+      <button class="quiz-option" data-val="a">Shims are required by the OCI image spec.</button>
+      <button class="quiz-option" data-val="b">If containerd were the parent, restarting or upgrading the containerd daemon would kill every running container; a per-container shim keeps supervising its container independently and just reconnects when containerd comes back.</button>
+      <button class="quiz-option" data-val="c">Shims exist purely to translate gRPC into ttrpc for performance reasons.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">2. Two images share an identical base layer. After unpacking both, how many copies of that layer's data exist in the snapshotter?</p>
+      <button class="quiz-option" data-val="a">One — the same committed, read-only snapshot is reused as a lowerdir by both images' overlay stacks.</button>
+      <button class="quiz-option" data-val="b">Two — each image gets its own independent unpack of every layer it references.</button>
+      <button class="quiz-option" data-val="c">Zero — shared layers are only unpacked lazily on first container start, never stored.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">3. What let Kubernetes remove dockershim entirely in 1.24 when using containerd?</p>
+      <button class="quiz-option" data-val="a">containerd added Docker-compatible image names.</button>
+      <button class="quiz-option" data-val="b">The kubelet was rewritten to no longer need any runtime interface.</button>
+      <button class="quiz-option" data-val="c">containerd ships its own built-in CRI plugin (since 1.1), so the kubelet can speak CRI gRPC straight to containerd.sock with no separate shim/adapter process needed.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var STEPS = [
+    { label: "Pull image (nginx:latest)" },
+    { label: "Unpack layers" },
+    { label: "Create container" },
+    { label: "Start task" },
+    { label: "Done" }
+  ];
+
+  var LAYERS = [
+    { id: "l1", text: "layer sha256:2a4c… (12.4 MB) — base OS" },
+    { id: "l2", text: "layer sha256:9f10… (3.1 MB) — nginx + deps" },
+    { id: "l3", text: "layer sha256:6b7e… (0.4 MB) — config" }
+  ];
+
+  var step = 0;
+  var blobList = document.getElementById("ctrBlobList");
+  var layerStack = document.getElementById("ctrLayerStack");
+  var runtimeBox = document.getElementById("ctrRuntimeBox");
+  var stepBadge = document.getElementById("ctrStepBadge");
+  var nextBtn = document.getElementById("ctrNext");
+  var resetBtn = document.getElementById("ctrReset");
+  var infoTitle = document.getElementById("ctrInfoTitle");
+  var infoBody = document.getElementById("ctrInfoBody");
+
+  function setInfo(title, body) {
+    infoTitle.textContent = title;
+    infoBody.innerHTML = body;
+  }
+
+  function addBlob(k, v) {
+    var el = document.createElement("div");
+    el.className = "ctr-blob";
+    el.innerHTML = '<span class="k">' + k + ":</span> " + '<span class="v">' + v + "</span>";
+    blobList.appendChild(el);
+    requestAnimationFrame(function () { el.classList.add("in"); });
+  }
+
+  function addLayer(text, cls) {
+    var el = document.createElement("div");
+    el.className = "ctr-layer " + cls;
+    el.textContent = text;
+    layerStack.appendChild(el);
+    requestAnimationFrame(function () { el.classList.add("in"); });
+    return el;
+  }
+
+  function addRuntimeLine(text, cls) {
+    var el = document.createElement("div");
+    el.className = "ctr-runtime-proc" + (cls ? " " + cls : "");
+    el.textContent = text;
+    runtimeBox.appendChild(el);
+    requestAnimationFrame(function () { el.classList.add("in"); });
+    return el;
+  }
+
+  function reset() {
+    step = 0;
+    blobList.innerHTML = "";
+    layerStack.innerHTML = "";
+    runtimeBox.innerHTML = '<span class="mono muted" id="ctrRuntimeIdle">no task</span>';
+    stepBadge.textContent = "Step 0 / 4";
+    nextBtn.textContent = STEPS[0].label;
+    nextBtn.disabled = false;
+    setInfo("Idle", "Click the button to resolve and pull <code>nginx:latest</code> from a registry.");
+  }
+
+  function advance() {
+    step += 1;
+    stepBadge.textContent = "Step " + step + " / 4";
+
+    if (step === 1) {
+      addBlob("manifest", "sha256:0f3d…");
+      addBlob("config", "sha256:aa19…");
+      LAYERS.forEach(function (l, i) {
+        setTimeout(function () { addBlob("layer[" + i + "]", l.id + " sha256…"); }, 220 * (i + 1));
+      });
+      setInfo(
+        "Pulled — manifest, config, and 3 layer blobs in the content store",
+        "containerd resolved the tag to a manifest digest, then fetched every blob the manifest references by digest. Nothing has touched a filesystem yet — this is all inert, content-addressed data."
+      );
+    } else if (step === 2) {
+      LAYERS.forEach(function (l, i) {
+        setTimeout(function () { addLayer("lowerdir[" + i + "] — " + l.text.split(" — ")[1], "readonly"); }, 260 * (i + 1));
+      });
+      setInfo(
+        "Unpacking — snapshotter builds the read-only layer chain",
+        "For each layer, the snapshotter opens an active snapshot on the previous one, containerd's differ applies that layer's tarball diff into it, then it's committed read-only. Bottom to top, that's the overlayfs <code>lowerdir</code> chain."
+      );
+    } else if (step === 3) {
+      addLayer("upperdir — container's writable layer", "writable");
+      setTimeout(function () { addLayer("merged view (what the container sees as /)", "merged"); }, 300);
+      setInfo(
+        "Container created — a new writable layer on top",
+        "A container object now exists: image reference, OCI runtime spec, and a new active snapshot as the writable top layer. Overlayfs presents lowerdir(s) + upperdir merged as one root filesystem. No process is running yet."
+      );
+    } else if (step === 4) {
+      addRuntimeLine("containerd-shim-runc-v2 (spawned)");
+      setTimeout(function () { addRuntimeLine("runc create → start"); }, 260);
+      setTimeout(function () { addRuntimeLine("task: RUNNING (pid assigned)", "running"); }, 560);
+      setInfo(
+        "Task started — a real process is running",
+        "Task.Start spawned a shim, which exec'd runc to do the namespace/cgroup/pivot_root work per the OCI runtime spec. runc exits once the container process is running; the shim stays behind as its parent, exposing task control back to containerd over ttrpc."
+      );
+    }
+
+    if (step >= STEPS.length - 1) {
+      nextBtn.disabled = true;
+      nextBtn.textContent = "Done";
+    } else {
+      nextBtn.textContent = STEPS[step].label;
+    }
+  }
+
+  nextBtn.addEventListener("click", advance);
+  resetBtn.addEventListener("click", reset);
+  reset();
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
