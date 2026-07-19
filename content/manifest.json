@@ -40,7 +40,7 @@
       "summary": "The industry-standard container runtime beneath Kubernetes (OCI images & runc).",
       "prerequisites": [],
       "file": "containerd.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "cri-o",
