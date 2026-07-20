@@ -1,0 +1,396 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CRI-O — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the side-by-side CRI-O vs containerd flow. ---- */
+  .cf-controls { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-4); }
+
+  .cf-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--sp-4);
+  }
+  @media (max-width: 720px) { .cf-grid { grid-template-columns: 1fr; } }
+
+  .cf-col { min-height: 340px; display: flex; flex-direction: column; }
+  .cf-col-title {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-3);
+    display: flex;
+    justify-content: space-between;
+  }
+  .cf-col-title .n { color: var(--accent-strong); font-weight: 700; }
+
+  .cf-chain { display: flex; flex-direction: column; gap: var(--sp-2); flex: 1; }
+  .cf-node {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: var(--sp-2) var(--sp-3);
+    opacity: 0.35;
+    transform: translateY(4px);
+    transition: opacity .3s ease, transform .3s ease, background .3s ease, border-color .3s ease, color .3s ease;
+    color: var(--text-faint);
+  }
+  .cf-node .desc { display: block; font-family: var(--font-sans); font-size: 0.82em; color: var(--text-faint); margin-top: 2px; }
+  .cf-node.active {
+    opacity: 1;
+    transform: translateY(0);
+    border-color: var(--k8s-blue);
+    color: var(--text);
+    background: color-mix(in srgb, var(--k8s-blue) 10%, var(--surface));
+  }
+  .cf-node.active .desc { color: var(--text-muted); }
+  .cf-node.spawned {
+    opacity: 1;
+    transform: translateY(0);
+    border-color: var(--cloud-cyan);
+    color: var(--text);
+    background: color-mix(in srgb, var(--cloud-cyan) 10%, var(--surface));
+  }
+  .cf-node.spawned .desc { color: var(--text-muted); }
+  .cf-node.running {
+    opacity: 1;
+    border-color: var(--signal-green);
+    background: color-mix(in srgb, var(--signal-green) 14%, var(--surface));
+    color: var(--signal-green);
+    font-weight: 700;
+  }
+  .cf-node.running .desc { color: var(--text-muted); font-weight: 400; }
+
+  .cf-arrow { text-align: center; color: var(--text-faint); font-size: var(--fs-xs); }
+
+  .cf-info-panel { min-height: 5.5rem; margin-top: var(--sp-4); }
+  .cf-info-title { font-family: var(--font-mono); font-size: var(--fs-sm); font-weight: 700; color: var(--accent-strong); margin-bottom: var(--sp-2); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Foundations &amp; Orchestration · Sub-topic 4 / 36</p>
+  <h1>CRI-O</h1>
+  <p class="lead">
+    The containerd deep-dive showed a general-purpose runtime daemon that Kubernetes happens to be
+    one client of, alongside Docker, BuildKit, and nerdctl. CRI-O flips that premise: it exists
+    for exactly one caller. There's no CLI to build images, no plugin ecosystem for
+    non-Kubernetes clients, no API beyond the one the kubelet already speaks. If containerd is a
+    general-purpose runtime that happens to serve Kubernetes well, CRI-O is what you get when you
+    start from the CRI spec and add nothing else.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    CRI-O graduated CNCF in July 2023, joining containerd and Kubernetes itself at the top
+    maturity tier. It's a
+    <span class="term" title="Container Runtime Interface — the gRPC API the kubelet uses to tell any compliant runtime to run pods and containers.">CRI</span>
+    implementation only: the kubelet talks to it over
+    <code>/var/run/crio/crio.sock</code> exactly the way it talks to containerd, and CRI-O turns
+    those calls into running containers via an
+    <span class="term" title="A specification, maintained by the Open Container Initiative, defining a standard container image format and a standard way to run one.">OCI</span>-compliant
+    runtime underneath. It's the default runtime for Red Hat OpenShift and a common choice
+    anywhere an operator wants the smallest, most tightly-scoped runtime surface a Kubernetes node
+    can run.
+  </div>
+
+  <h2>The problem: why build a second CRI runtime at all</h2>
+  <p>
+    CRI-O's origin predates containerd's CRI plugin. It started life in 2016 inside Red Hat as
+    <strong>OCID</strong>, then moved under the <code>kubernetes-incubator</code> GitHub
+    organization and was renamed <strong>CRI-O</strong> — "CRI" plus "O" for OCI, spelling out its
+    entire scope in the name. At the time, Docker's monolithic <code>dockerd</code> was the only
+    mainstream way to run containers, and Kubernetes talked to it through an out-of-tree adapter
+    called <code>dockershim</code> that translated CRI calls into Docker Engine's own API — an
+    extra hop, extra surface area, and extra failure modes for functionality (image building,
+    Docker networking, the Docker CLI) that a kubelet never uses.
+  </p>
+  <p>
+    CRI-O's premise: if the kubelet only ever needs to run Pods and containers via a fixed,
+    versioned gRPC interface, build a runtime that implements <em>exactly</em> that interface and
+    stops. No image builder, no non-CRI API, no ambition to be a general-purpose developer tool.
+    Every dependency it does carry — image handling, storage, container execution — is a shared
+    library also used by <strong>Podman</strong> and <strong>Buildah</strong>, rather than code
+    invented just for CRI-O. The result is a much smaller codebase than containerd's, a small
+    idle memory footprint (tens of megabytes for the daemon itself), and a correspondingly smaller
+    attack surface: fewer features means fewer things that can go wrong or be exploited.
+  </p>
+
+  <h2>Architecture: one daemon, one job, a monitor per container</h2>
+  <p>
+    Like containerd, CRI-O runs as a single daemon per node (<code>crio</code>) that the kubelet
+    reaches over a Unix socket. But where containerd is built as a plugin host with a
+    general-purpose client API and CRI as one plugin among several, CRI-O <em>is</em> the CRI
+    service — there's no broader API surface underneath it that CRI happens to sit on top of.
+  </p>
+  <p>
+    CRI-O composes a small set of shared libraries rather than reinventing them:
+  </p>
+  <ul>
+    <li>
+      <strong>containers/image</strong> resolves and pulls image manifests and layer blobs from a
+      registry — the same library Podman and Buildah use to pull images.
+    </li>
+    <li>
+      <strong>containers/storage</strong> is CRI-O's equivalent of containerd's content store plus
+      snapshotter combined: content-addressed layer storage with pluggable drivers, defaulting to
+      <code>overlayfs</code> on Linux, that turns a stack of image layers into a mounted root
+      filesystem plus one writable layer per container — the same layered, copy-on-write model
+      containerd uses, implemented by a library shared across the Podman/Buildah/CRI-O family
+      instead of built specifically for this one project.
+    </li>
+    <li>
+      <strong>CNI</strong> (Container Network Interface) plugins configure each Pod's network
+      namespace — the same CNI plugin chain a cluster already has installed for its CNI-based
+      networking, just invoked by CRI-O instead of by containerd's CNI integration.
+    </li>
+  </ul>
+
+  <h2>conmon: a supervisor process per container, not a shim</h2>
+  <p>
+    containerd's answer to "who out-lives runc and stays the container's real parent process" is
+    the shim (<code>containerd-shim-runc-v2</code>), talking back to containerd over
+    <code>ttrpc</code>. CRI-O's answer is a lighter-weight, purpose-built C binary called
+    <strong>conmon</strong> — "container monitor." CRI-O launches one conmon process per container;
+    conmon then execs the OCI runtime (<code>runc</code> or <code>crun</code>) to actually create
+    the container process per the OCI runtime spec, and once that runtime exits, conmon stays
+    behind as the container's parent.
+  </p>
+  <p>
+    conmon's job is narrower than a containerd shim's: hold the container's stdio pipes and write
+    its logs to disk (so <code>crio</code> restarting doesn't sever log capture), serve
+    <code>exec</code>/<code>attach</code> connections, detect an OOM kill, and record the exit code
+    to a file when the container dies — all without needing a full task-control RPC protocol,
+    because CRI-O only needs conmon to answer to CRI-O, not to arbitrary other clients the way a
+    containerd shim needs to answer over a stable, general-purpose Task API. Same
+    "don't let the container die with the daemon" property as containerd's shim, deliberately
+    built with a smaller surface.
+  </p>
+  <div class="callout note">
+    <span class="callout-title">runc vs. crun</span>
+    CRI-O's default OCI runtime shipped as <code>runc</code> (Go) for years, matching containerd,
+    but recent CRI-O releases (1.35+) default to <strong>crun</strong> — a much smaller runtime
+    written in C by the containers/ community, benchmarked at tens of milliseconds faster
+    container start than runc with a lower memory footprint. Either one, or a VM-backed runtime
+    like Kata Containers, can be configured per <code>RuntimeClass</code>: CRI-O reads
+    <code>runtime_handler</code> off the CRI request and maps it to a configured runtime binary in
+    <code>crio.conf</code>, the same "different Pods, different isolation, one node" trick
+    containerd does via its own runtime-handler-to-shim table.
+  </div>
+
+  <h2>CRI request flow: same calls, different internals</h2>
+  <p>
+    Because both runtimes implement the identical CRI gRPC surface, the kubelet's call sequence
+    looks the same either way: <code>RunPodSandbox</code> stands up the Pod's shared network
+    namespace via a minimal sandbox, then <code>CreateContainer</code> and
+    <code>StartContainer</code> land each container in it. What differs is everything below that
+    RPC boundary — which is exactly what the widget below traces, side by side.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">CRI request-flow — trace one call sequence through both runtimes</div>
+    <div class="cf-controls">
+      <button class="btn" id="cfNext">kubelet → RunPodSandbox</button>
+      <button class="btn ghost" id="cfReset">Reset</button>
+      <span class="badge" id="cfStepBadge">Step 0 / 4</span>
+    </div>
+    <div class="cf-grid">
+      <div class="card cf-col">
+        <div class="cf-col-title">CRI-O <span class="n">crio.sock</span></div>
+        <div class="cf-chain" id="cfChainCrio"></div>
+      </div>
+      <div class="card cf-col">
+        <div class="cf-col-title">containerd <span class="n">containerd.sock</span></div>
+        <div class="cf-chain" id="cfChainContainerd"></div>
+      </div>
+    </div>
+    <div class="card cf-info-panel" id="cfInfoPanel">
+      <div class="cf-info-title" id="cfInfoTitle">Idle</div>
+      <p id="cfInfoBody" class="muted" style="margin-bottom:0;">
+        Click the button — both daemons receive the exact same CRI call from the same kubelet.
+      </p>
+    </div>
+  </div>
+
+  <h2>Why it graduated, and where you see it</h2>
+  <p>
+    CRI-O graduated CNCF in July 2023. Its clearest production home is
+    <strong>Red Hat OpenShift</strong>, which has shipped CRI-O as its only supported container
+    runtime since OpenShift 4.0 — a large part of why CRI-O gets the hardening and real-world
+    mileage a niche project wouldn't. Its release numbering still tracks Kubernetes minor versions
+    (a CRI-O 1.31.x pairs with Kubernetes 1.31) and it follows the same n-2 version-skew policy
+    Kubernetes itself uses for feature graduation, even though patch releases are cut
+    independently and features can be backported off that cadence. Anywhere an operator wants the
+    minimum runtime attack surface a node can run — security-conscious platforms, regulated
+    environments, anyone who'd rather not carry code paths a kubelet never exercises — CRI-O is
+    the default answer.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>containerd</strong> is the other production-grade CRI runtime, not a predecessor or
+    successor to CRI-O — both are CNCF-graduated, both are common default choices on managed
+    Kubernetes, and the difference is scope (general-purpose daemon vs. CRI-only) rather than
+    maturity. <strong>Docker</strong> isn't a runtime choice for the kubelet at all anymore;
+    <code>dockershim</code> was removed in Kubernetes 1.24, and Docker Engine itself just runs on
+    containerd underneath. <strong>runc</strong> and <strong>crun</strong> aren't competitors to
+    CRI-O — they're the OCI runtime executables that CRI-O's conmon (and containerd's shim) exec
+    to do the actual namespace/cgroup work.
+  </div>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. What's the core design difference between CRI-O and containerd?</p>
+      <button class="quiz-option" data-val="a">CRI-O is older and less stable than containerd.</button>
+      <button class="quiz-option" data-val="b">containerd is a general-purpose runtime daemon with CRI as one plugin among several; CRI-O was built from the start to implement only the CRI surface the kubelet needs, with no broader API underneath it.</button>
+      <button class="quiz-option" data-val="c">CRI-O doesn't support the OCI image format, only Docker-formatted images.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. What does conmon do that keeps a container running if the crio daemon restarts?</p>
+      <button class="quiz-option" data-val="a">It re-pulls the image and recreates the container from scratch.</button>
+      <button class="quiz-option" data-val="b">It has nothing to do with process supervision — that's entirely the kernel's job.</button>
+      <button class="quiz-option" data-val="c">conmon execs the OCI runtime to start the container, then stays behind as its actual parent process — independent of crio — holding stdio, logs, and exit-code capture.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. Which shared libraries does CRI-O reuse that are also used by Podman and Buildah?</p>
+      <button class="quiz-option" data-val="a">containers/image (registry &amp; manifest handling) and containers/storage (layered, content-addressed filesystem storage).</button>
+      <button class="quiz-option" data-val="b">containerd's content store and snapshotter packages, imported directly.</button>
+      <button class="quiz-option" data-val="c">Docker Engine's internal image and volume management APIs.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var STEPS = [
+    { label: "kubelet → RunPodSandbox" },
+    { label: "kubelet → CreateContainer" },
+    { label: "kubelet → StartContainer" },
+    { label: "Done" }
+  ];
+
+  var CRIO_NODES = [
+    { key: "sandbox", text: "crio: create pod sandbox (pause) via containers/storage + CNI", cls: "active" },
+    { key: "pull",    text: "crio: pull image via containers/image → containers/storage layers", cls: "active" },
+    { key: "conmon",  text: "conmon spawned, execs runc/crun", cls: "spawned" },
+    { key: "running", text: "container process RUNNING — conmon is its parent", cls: "running" }
+  ];
+
+  var CTRD_NODES = [
+    { key: "sandbox", text: "containerd: create pod sandbox (pause) via CRI plugin + CNI", cls: "active" },
+    { key: "pull",    text: "containerd: pull image → content store, unpack via snapshotter", cls: "active" },
+    { key: "shim",    text: "containerd-shim-runc-v2 spawned, execs runc", cls: "spawned" },
+    { key: "running", text: "container process RUNNING — shim is its parent, talks ttrpc back", cls: "running" }
+  ];
+
+  var step = 0;
+  var chainCrio = document.getElementById("cfChainCrio");
+  var chainCtrd = document.getElementById("cfChainContainerd");
+  var stepBadge = document.getElementById("cfStepBadge");
+  var nextBtn = document.getElementById("cfNext");
+  var resetBtn = document.getElementById("cfReset");
+  var infoTitle = document.getElementById("cfInfoTitle");
+  var infoBody = document.getElementById("cfInfoBody");
+
+  function setInfo(title, body) {
+    infoTitle.textContent = title;
+    infoBody.innerHTML = body;
+  }
+
+  function addNode(container, node) {
+    var el = document.createElement("div");
+    el.className = "cf-node";
+    el.innerHTML = node.text;
+    container.appendChild(el);
+    requestAnimationFrame(function () { el.classList.add(node.cls); });
+  }
+
+  function reset() {
+    step = 0;
+    chainCrio.innerHTML = "";
+    chainCtrd.innerHTML = "";
+    stepBadge.textContent = "Step 0 / 4";
+    nextBtn.textContent = STEPS[0].label;
+    nextBtn.disabled = false;
+    setInfo("Idle", "Click the button — both daemons receive the exact same CRI call from the same kubelet.");
+  }
+
+  function advance() {
+    step += 1;
+    stepBadge.textContent = "Step " + step + " / 4";
+
+    if (step === 1) {
+      addNode(chainCrio, CRIO_NODES[0]);
+      addNode(chainCtrd, CTRD_NODES[0]);
+      setInfo(
+        "RunPodSandbox — both runtimes stand up the Pod's shared network namespace",
+        "Same CRI call, same CNI plugin chain underneath either daemon. CRI-O's containers/storage and containerd's snapshotter both prepare a minimal sandbox (pause-style) root filesystem for the shared namespaces."
+      );
+    } else if (step === 2) {
+      addNode(chainCrio, CRIO_NODES[1]);
+      addNode(chainCtrd, CTRD_NODES[1]);
+      setInfo(
+        "CreateContainer — image pull and layer unpack, via different libraries with the same shape",
+        "CRI-O calls into containers/image + containers/storage (shared with Podman/Buildah). containerd calls its own content store + snapshotter. Both land on a content-addressed, layered, copy-on-write filesystem — the implementation differs, the model doesn't."
+      );
+    } else if (step === 3) {
+      addNode(chainCrio, CRIO_NODES[2]);
+      addNode(chainCtrd, CTRD_NODES[2]);
+      setInfo(
+        "StartContainer — a supervisor process is spawned to exec the OCI runtime",
+        "CRI-O spawns conmon, a small purpose-built C monitor; containerd spawns containerd-shim-runc-v2, a full Task-API server. Both exec runc (or crun/other) to do the actual namespace/cgroup/pivot_root work, per the OCI runtime spec."
+      );
+      setTimeout(function () {
+        addNode(chainCrio, CRIO_NODES[3]);
+        addNode(chainCtrd, CTRD_NODES[3]);
+        setInfo(
+          "Running — two different parents, same guarantee",
+          "runc/crun exits once the container process is running. conmon and the containerd shim both stay behind as the real parent process, so restarting crio or containerd doesn't kill anything already running."
+        );
+      }, 500);
+    }
+
+    if (step >= STEPS.length - 1) {
+      nextBtn.disabled = true;
+      nextBtn.textContent = "Done";
+    } else {
+      nextBtn.textContent = STEPS[step].label;
+    }
+  }
+
+  nextBtn.addEventListener("click", advance);
+  resetBtn.addEventListener("click", reset);
+  reset();
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>

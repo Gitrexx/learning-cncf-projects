@@ -50,7 +50,7 @@
       "summary": "A lightweight container runtime built purpose-only for the Kubernetes CRI.",
       "prerequisites": ["containerd"],
       "file": "cri-o.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "helm",
