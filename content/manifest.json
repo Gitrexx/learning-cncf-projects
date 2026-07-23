@@ -60,7 +60,7 @@
       "summary": "The package manager for Kubernetes: charts, templates, values, releases.",
       "prerequisites": ["kubernetes"],
       "file": "helm.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "envoy",
