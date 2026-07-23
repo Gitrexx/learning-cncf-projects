@@ -1,0 +1,532 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Helm — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the live template playground. ---- */
+  .tpl-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--sp-4);
+  }
+  @media (max-width: 820px) { .tpl-grid { grid-template-columns: 1fr; } }
+
+  .tpl-col-title {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-2);
+  }
+  .tpl-editor {
+    width: 100%;
+    min-height: 360px;
+    resize: vertical;
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    line-height: 1.5;
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-3);
+    color: var(--text);
+  }
+  .tpl-output {
+    min-height: 360px;
+    max-height: 480px;
+    overflow: auto;
+    margin: 0;
+  }
+  .tpl-output code { white-space: pre; }
+  .tpl-controls { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-4); }
+  .tpl-controls label { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); }
+  .tpl-controls input[type="text"] { width: 10rem; }
+  .tpl-err {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--signal-red);
+    min-height: 1.2em;
+    margin-top: var(--sp-2);
+  }
+  .tpl-resources { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-top: var(--sp-3); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Foundations &amp; Orchestration · Sub-topic 5 / 36</p>
+  <h1>Helm</h1>
+  <p class="lead">
+    Every deep-dive so far has been about running one container correctly. Helm is about a
+    different problem: a real application is never one Deployment. It's a Deployment, a Service,
+    a ConfigMap, maybe an Ingress and a couple of Secrets and an HPA — a dozen-plus YAML files that
+    all have to agree with each other (the same labels, the same name prefix, the same image tag)
+    and that need to move together as one versioned, installable, upgradeable, rollback-able unit.
+    Helm is the tool that turns that pile of YAML into a single package you can install, upgrade,
+    and undo with one command.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Helm graduated CNCF in April 2020 and is, by a wide margin, the most widely used way to
+    package and ship applications onto Kubernetes — it's often called
+    "<span class="term" title="A common shorthand: apt/yum/npm manage packages for an OS or language; Helm manages packages of Kubernetes manifests for a cluster.">the package manager for Kubernetes</span>."
+    Helm doesn't replace <code>kubectl apply</code> — under the hood it still ends up calling the
+    Kubernetes API the same way — it replaces hand-managing the *set* of manifests an application
+    needs, their variable substitution, and their lifecycle as a single named unit.
+  </div>
+
+  <h2>The problem: raw manifests don't compose or version</h2>
+  <p>
+    Plain <code>kubectl apply -f</code> works fine for one file. It stops working well once an
+    application is more than a couple of resources deployed to more than one environment. Three
+    things get painful fast:
+  </p>
+  <ul>
+    <li>
+      <strong>Parameterization.</strong> Staging and production need different replica counts,
+      image tags, and resource limits from the <em>same</em> manifests. Without a templating
+      layer, that means maintaining near-duplicate YAML per environment, or a pile of
+      <code>sed</code>/CI string substitution around it.
+    </li>
+    <li>
+      <strong>Grouping.</strong> Kubernetes has no native concept of "these twelve objects are one
+      application." <code>kubectl</code> applies and deletes objects individually; nothing tracks
+      that a Deployment, a Service, and a ConfigMap were installed together and should be
+      upgraded, rolled back, or removed together.
+    </li>
+    <li>
+      <strong>History.</strong> If an upgrade goes bad, <code>kubectl apply</code> has no built-in
+      "what was running two versions ago, and can I get back to exactly that" — you'd need to have
+      kept your own copies of every previous manifest set.
+    </li>
+  </ul>
+  <p>
+    Helm's answer is a <span class="term" title="A versioned, distributable bundle of Kubernetes manifest templates plus metadata and default configuration.">chart</span>
+    — a directory (or packaged <code>.tgz</code>) containing templated manifests and default
+    configuration — and a <span class="term" title="A named, versioned instance of a chart installed into a cluster with a specific set of configuration values.">release</span>
+    — what you get when you install a chart with a specific set of values into a specific cluster.
+    One <code>helm install</code> creates every resource in the chart as one release; one
+    <code>helm upgrade</code> changes them together; one <code>helm rollback</code> reverts all of
+    them to a prior revision in one shot.
+  </p>
+
+  <h2>Architecture: a client talking straight to the Kubernetes API</h2>
+  <p>
+    This is the single most important thing to know about Helm's architecture, because it's the
+    one thing that changed between major versions in a way people still bring up: <strong>Helm 2
+    ran an in-cluster server component called Tiller</strong> that held broad RBAC permissions and
+    did the actual create/update/delete work on the client's behalf. Tiller was a real security
+    problem — a single component with cluster-wide write access that every Helm user talked to —
+    and it made per-user, per-namespace permission scoping awkward.
+  </p>
+  <p>
+    <strong>Helm 3 removed Tiller entirely.</strong> Helm today is <em>just a client</em> — a CLI
+    binary (or the equivalent Go SDK) that renders templates locally and then talks directly to
+    the Kubernetes API server, authenticated as whatever identity your kubeconfig already
+    represents. There's nothing else to install in the cluster and nothing extra to secure: Helm's
+    access is exactly your <code>kubectl</code> access, enforced by the same RBAC rules Kubernetes
+    already applies to everyone else.
+  </p>
+  <div class="callout note">
+    <span class="callout-title">So what tracks releases, if there's no server?</span>
+    State has to live somewhere so <code>helm upgrade</code> and <code>helm rollback</code> know
+    what's currently installed and what came before. Helm 3 stores each release revision as a
+    Kubernetes <strong>Secret</strong> in the release's namespace (Helm 2 used ConfigMaps; Secrets
+    became the default once Kubernetes added encryption-at-rest for them), named
+    <code>sh.helm.release.v1.&lt;release-name&gt;.v&lt;revision&gt;</code>. Each Secret holds the
+    fully rendered manifest, the values used, and metadata, gzip-compressed and base64-encoded to
+    stay well under etcd's per-object size limit. <code>helm history</code> just lists these
+    Secrets; <code>helm rollback</code> reads an older one and re-applies it.
+  </div>
+
+  <h2>Anatomy of a chart</h2>
+  <p>
+    A chart is a directory with a fixed, conventional layout. Helm doesn't require every file, but
+    this is the shape almost every real chart takes:
+  </p>
+  <pre><code>mychart/
+  Chart.yaml          # name, version, appVersion, dependencies metadata
+  values.yaml          # default configuration, overridable at install time
+  charts/               # vendored subcharts (dependencies), each a chart itself
+  templates/
+    deployment.yaml     # Go-template manifests, rendered against values
+    service.yaml
+    ingress.yaml
+    _helpers.tpl         # named template snippets (helpers), no manifest of its own
+    NOTES.txt             # post-install usage text, also templated
+  .helmignore            # patterns excluded when packaging</code></pre>
+  <p>
+    <code>Chart.yaml</code> carries the chart's own identity — <code>version</code> is the chart's
+    version (SemVer, bumped every time templates or defaults change), separate from
+    <code>appVersion</code>, which just documents the version of the software the chart deploys.
+    A chart for nginx might be at chart <code>version: 4.2.0</code> while still deploying
+    <code>appVersion: 1.25</code> — chart iteration and app releases move on independent clocks.
+  </p>
+
+  <h2>Templating: Go templates plus Sprig, resolved against layered values</h2>
+  <p>
+    Every file under <code>templates/</code> is rendered as a
+    <span class="term" title="Go's text/template package, the same templating engine the language's standard library uses — {{ }} actions, pipelines, and control structures like if/range/with.">Go template</span>,
+    extended with the <span class="term" title="A library of 100+ template helper functions (string manipulation, math, date formatting, type conversion) commonly bundled with Go templating engines; Helm includes it by default.">Sprig</span>
+    function library for things Go templates don't do natively — string manipulation, default
+    values, type conversion, even cryptographic helpers for generating TLS certs inline. A
+    template references configuration through a fixed set of built-in objects:
+  </p>
+  <ul>
+    <li><code>.Values</code> — the merged configuration (see precedence below).</li>
+    <li><code>.Release</code> — <code>.Release.Name</code>, <code>.Release.Namespace</code>, <code>.Release.Revision</code> — facts about this specific install.</li>
+    <li><code>.Chart</code> — the contents of <code>Chart.yaml</code> (<code>.Chart.Name</code>, <code>.Chart.Version</code>...).</li>
+    <li><code>.Files</code>, <code>.Capabilities</code> — access to non-template files in the chart, and to what the target cluster supports (API versions, Kubernetes version).</li>
+  </ul>
+  <p>
+    <code>.Values</code> is a merge, not a single source, resolved in increasing precedence:
+    the chart's own <code>values.yaml</code> defaults, then a parent chart's values for any
+    subchart, then <code>-f</code>/<code>--values</code> files passed on the command line (later
+    files win over earlier ones), then individual <code>--set key=value</code> overrides, which win
+    over everything. This is exactly why a chart works out of the box with zero configuration
+    (sane defaults in <code>values.yaml</code>) but is fully overridable per environment without
+    ever editing the chart itself.
+  </p>
+
+  <h2>Try it: live template playground</h2>
+  <p>
+    This is a simplified stand-in for <code>helm template</code> — edit the values on the left,
+    see the rendered manifests update on the right. It implements just enough of Go-template
+    syntax (<code>{{ .Values.x.y }}</code> interpolation and a single-level
+    <code>{{- if }}...{{- end }}</code>) to show the mechanism; real charts nest these far deeper
+    and add <code>range</code>, <code>with</code>, named templates, and Sprig functions.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">helm template — values in, manifests out</div>
+    <div class="tpl-controls">
+      <label for="tplRelease">Release name</label>
+      <input type="text" id="tplRelease" value="myapp" />
+      <button class="btn ghost" id="tplResetBtn">Reset to defaults</button>
+    </div>
+    <div class="tpl-grid">
+      <div>
+        <div class="tpl-col-title">values.yaml</div>
+        <textarea class="tpl-editor mono" id="tplValuesInput" spellcheck="false"></textarea>
+        <div class="tpl-err" id="tplErr"></div>
+      </div>
+      <div>
+        <div class="tpl-col-title">rendered manifest</div>
+        <pre class="tpl-output"><code id="tplOutput"></code></pre>
+        <div class="tpl-resources" id="tplResources"></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>The release lifecycle</h2>
+  <p>
+    Helm's core verbs all operate on a release as a whole, not on individual objects:
+  </p>
+  <ul>
+    <li><code>helm install &lt;release&gt; &lt;chart&gt;</code> — render templates against values, create every resulting object, save revision 1.</li>
+    <li><code>helm upgrade &lt;release&gt; &lt;chart&gt;</code> — re-render with new values and/or a new chart version, diff against what's live, apply the changes, save the next revision. Deleted resources (removed between chart versions) are cleaned up too.</li>
+    <li><code>helm rollback &lt;release&gt; &lt;revision&gt;</code> — re-apply a previously stored revision's rendered manifests as a new revision (rollback is itself a new upgrade, not a time-travel delete).</li>
+    <li><code>helm uninstall &lt;release&gt;</code> — delete every object the release owns and, by default, its revision history.</li>
+  </ul>
+  <p>
+    Because every revision is a snapshot, <code>helm history &lt;release&gt;</code> shows the full
+    chain, and <code>helm diff</code> (a popular plugin, not built in) can show exactly what an
+    upgrade would change before you run it.
+  </p>
+
+  <h2>Dependencies and the chart ecosystem</h2>
+  <p>
+    Charts can depend on other charts — a web app chart might declare a dependency on a Redis or
+    PostgreSQL chart rather than reinventing that YAML. Dependencies are declared in
+    <code>Chart.yaml</code>:
+  </p>
+  <pre><code>dependencies:
+  - name: redis
+    version: "18.x.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: redis.enabled</code></pre>
+  <p>
+    <code>helm dependency update</code> resolves and vendors matching chart versions into
+    <code>charts/</code>. <code>condition</code>/<code>tags</code> let a parent chart toggle a
+    subchart on or off through its own <code>values.yaml</code> (exactly what
+    <code>redis.enabled: false</code> in a parent's values would do), and <code>alias</code> lets
+    the same dependency be included more than once under different names.
+  </p>
+  <p>
+    Charts are distributed two ways. The original mechanism is a <strong>chart repository</strong>:
+    a plain HTTP server hosting packaged <code>.tgz</code> charts plus an <code>index.yaml</code>
+    listing them, added locally with <code>helm repo add</code>. Since Helm 3.8, charts can also be
+    pushed to and pulled from any <strong>OCI-compliant registry</strong> — the same registries
+    that store container images — as a first-class artifact type, addressed like
+    <code>oci://registry.example.com/charts/mychart</code>. OCI distribution is increasingly the
+    default: it reuses registry infrastructure teams already run and secure (auth, replication,
+    signing) instead of a Helm-specific HTTP server, and several major chart publishers have moved
+    or are moving their catalogs to OCI registries as classic index-based repos see less
+    investment.
+  </p>
+
+  <h2>Why it graduated, and where you see it</h2>
+  <p>
+    Helm graduated CNCF in April 2020, the same class as CoreDNS. Its ubiquity comes from being
+    the default answer to "how do I install this open-source thing onto my cluster" —
+    <code>helm install prometheus prometheus-community/kube-prometheus-stack</code> or
+    <code>helm install argocd argo/argo-cd</code> is how most people first bring up major
+    CNCF projects, including several others on this list. Vendors and open-source projects ship a
+    Helm chart as their primary Kubernetes install path essentially by convention now, and Helm
+    charts are frequently the packaging format platform teams standardize internal application
+    templates on top of.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>Kustomize</strong> solves an overlapping but distinct problem: it takes plain,
+    valid YAML and layers <em>patches</em> on top per environment — no templating language, no
+    values file, nothing to render, which fits GitOps workflows that want to diff plain manifests.
+    Helm templates generate YAML from a non-YAML templating language and a values file; Kustomize
+    only ever patches YAML that was already valid YAML. Many teams use both — Helm to package an
+    upstream chart, Kustomize (or Helm's own <code>post-renderer</code> hook) to patch its output.
+    <strong>Operators</strong> (built with the Operator SDK / Kubebuilder, often distributed via
+    OLM) are a different mechanism again: an Operator is running code, a controller reconciling a
+    CRD continuously, versus Helm's one-shot template-and-apply with no ongoing controller of its
+    own. A chart can install an Operator; the Operator then does its own ongoing reconciliation
+    independent of Helm.
+  </div>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. What changed between Helm 2 and Helm 3 that people most often bring up?</p>
+      <button class="quiz-option" data-val="a">Helm 3 added support for YAML manifests; Helm 2 only supported JSON.</button>
+      <button class="quiz-option" data-val="b">Helm 3 removed Tiller, the in-cluster server component with broad RBAC access; Helm is now just a client that talks to the Kubernetes API using the caller's own credentials.</button>
+      <button class="quiz-option" data-val="c">Helm 3 introduced charts; Helm 2 only supported single-file manifests.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. Where does Helm 3 store a release's revision history, by default?</p>
+      <button class="quiz-option" data-val="a">In a local SQLite file on the machine running the Helm CLI.</button>
+      <button class="quiz-option" data-val="b">Nowhere — Helm 3 is stateless and re-derives history from the cluster's current objects.</button>
+      <button class="quiz-option" data-val="c">As Kubernetes Secrets in the release's namespace, one per revision, named sh.helm.release.v1.&lt;release&gt;.v&lt;revision&gt;, gzip-compressed and base64-encoded.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. How does Helm's chart precedence work when the same value is set in values.yaml, a -f file, and --set?</p>
+      <button class="quiz-option" data-val="a">values.yaml is the base default; a -f/--values file overrides it; --set on the command line wins over both.</button>
+      <button class="quiz-option" data-val="b">Whichever was specified first on the command line wins, regardless of source.</button>
+      <button class="quiz-option" data-val="c">--set is only for debugging and is ignored unless --force is also passed.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var DEFAULT_VALUES = [
+    "replicaCount: 2",
+    "image:",
+    "  repository: nginx",
+    "  tag: \"1.25\"",
+    "  pullPolicy: IfNotPresent",
+    "service:",
+    "  type: ClusterIP",
+    "  port: 80",
+    "resources:",
+    "  limits:",
+    "    cpu: 200m",
+    "    memory: 256Mi",
+    "ingress:",
+    "  enabled: false",
+    "  host: chart-example.local"
+  ].join("\n");
+
+  var TEMPLATE =
+    "apiVersion: apps/v1\n" +
+    "kind: Deployment\n" +
+    "metadata:\n" +
+    "  name: {{ .Release.Name }}-app\n" +
+    "  labels:\n" +
+    "    app: {{ .Release.Name }}\n" +
+    "spec:\n" +
+    "  replicas: {{ .Values.replicaCount }}\n" +
+    "  selector:\n" +
+    "    matchLabels:\n" +
+    "      app: {{ .Release.Name }}\n" +
+    "  template:\n" +
+    "    metadata:\n" +
+    "      labels:\n" +
+    "        app: {{ .Release.Name }}\n" +
+    "    spec:\n" +
+    "      containers:\n" +
+    "        - name: app\n" +
+    "          image: \"{{ .Values.image.repository }}:{{ .Values.image.tag }}\"\n" +
+    "          imagePullPolicy: {{ .Values.image.pullPolicy }}\n" +
+    "          ports:\n" +
+    "            - containerPort: {{ .Values.service.port }}\n" +
+    "          resources:\n" +
+    "            limits:\n" +
+    "              cpu: {{ .Values.resources.limits.cpu }}\n" +
+    "              memory: {{ .Values.resources.limits.memory }}\n" +
+    "---\n" +
+    "apiVersion: v1\n" +
+    "kind: Service\n" +
+    "metadata:\n" +
+    "  name: {{ .Release.Name }}-svc\n" +
+    "spec:\n" +
+    "  type: {{ .Values.service.type }}\n" +
+    "  ports:\n" +
+    "    - port: {{ .Values.service.port }}\n" +
+    "      targetPort: {{ .Values.service.port }}\n" +
+    "  selector:\n" +
+    "    app: {{ .Release.Name }}\n" +
+    "{{- if .Values.ingress.enabled }}\n" +
+    "---\n" +
+    "apiVersion: networking.k8s.io/v1\n" +
+    "kind: Ingress\n" +
+    "metadata:\n" +
+    "  name: {{ .Release.Name }}-ingress\n" +
+    "spec:\n" +
+    "  rules:\n" +
+    "    - host: {{ .Values.ingress.host }}\n" +
+    "      http:\n" +
+    "        paths:\n" +
+    "          - path: /\n" +
+    "            pathType: Prefix\n" +
+    "            backend:\n" +
+    "              service:\n" +
+    "                name: {{ .Release.Name }}-svc\n" +
+    "                port:\n" +
+    "                  number: {{ .Values.service.port }}\n" +
+    "{{- end }}";
+
+  function coerce(raw) {
+    var val = raw.trim();
+    if (/^".*"$/.test(val) || /^'.*'$/.test(val)) return val.slice(1, -1);
+    if (val === "true") return true;
+    if (val === "false") return false;
+    if (val !== "" && !isNaN(val)) return Number(val);
+    return val;
+  }
+
+  // Minimal indentation-based YAML subset: nested maps + scalar values only.
+  function parseValues(text) {
+    var root = {};
+    var stack = [{ indent: -1, obj: root }];
+    text.split("\n").forEach(function (rawLine) {
+      var line = rawLine.replace(/#.*$/, "");
+      if (!line.trim()) return;
+      var indent = line.match(/^(\s*)/)[1].length;
+      var content = line.trim();
+      var m = content.match(/^([^:]+):\s*(.*)$/);
+      if (!m) throw new Error("Can't parse line: " + content);
+      var key = m[1].trim();
+      var val = m[2].trim();
+      while (stack.length > 1 && indent <= stack[stack.length - 1].indent) stack.pop();
+      var parent = stack[stack.length - 1].obj;
+      if (val === "") {
+        var obj = {};
+        parent[key] = obj;
+        stack.push({ indent: indent, obj: obj });
+      } else {
+        parent[key] = coerce(val);
+      }
+    });
+    return root;
+  }
+
+  function getPath(ctx, expr) {
+    var parts = expr.replace(/^\./, "").split(".");
+    var cur = ctx;
+    for (var i = 0; i < parts.length; i++) {
+      if (cur == null) return undefined;
+      cur = cur[parts[i]];
+    }
+    return cur;
+  }
+
+  function renderTemplate(tpl, ctx) {
+    // Resolve {{- if EXPR }} ... {{- end }} blocks (single level, as used above).
+    tpl = tpl.replace(
+      /\n?\{\{-?\s*if\s+(\.[\w.]+)\s*-?\}\}([\s\S]*?)\{\{-?\s*end\s*-?\}\}/g,
+      function (m, cond, body) {
+        var val = getPath(ctx, cond);
+        return val ? body : "";
+      }
+    );
+    // Resolve remaining {{ EXPR }} interpolation.
+    tpl = tpl.replace(/\{\{-?\s*(\.[\w.]+)\s*-?\}\}/g, function (m, expr) {
+      var val = getPath(ctx, expr);
+      return val === undefined ? "<no value>" : String(val);
+    });
+    return tpl;
+  }
+
+  var valuesInput = document.getElementById("tplValuesInput");
+  var releaseInput = document.getElementById("tplRelease");
+  var output = document.getElementById("tplOutput");
+  var errBox = document.getElementById("tplErr");
+  var resourcesBox = document.getElementById("tplResources");
+  var resetBtn = document.getElementById("tplResetBtn");
+
+  function render() {
+    var releaseName = releaseInput.value.trim() || "release";
+    try {
+      var values = parseValues(valuesInput.value);
+      var ctx = {
+        Release: { Name: releaseName },
+        Values: values
+      };
+      var rendered = renderTemplate(TEMPLATE, ctx);
+      output.textContent = rendered;
+      errBox.textContent = "";
+
+      var kinds = [];
+      rendered.split("---").forEach(function (doc) {
+        var m = doc.match(/kind:\s*(\S+)/);
+        if (m) kinds.push(m[1]);
+      });
+      resourcesBox.innerHTML = "";
+      kinds.forEach(function (k) {
+        var span = document.createElement("span");
+        span.className = "badge done";
+        span.textContent = k;
+        resourcesBox.appendChild(span);
+      });
+    } catch (e) {
+      errBox.textContent = e.message;
+    }
+  }
+
+  valuesInput.value = DEFAULT_VALUES;
+  valuesInput.addEventListener("input", render);
+  releaseInput.addEventListener("input", render);
+  resetBtn.addEventListener("click", function () {
+    valuesInput.value = DEFAULT_VALUES;
+    releaseInput.value = "myapp";
+    render();
+  });
+  render();
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
