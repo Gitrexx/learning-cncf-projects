@@ -70,7 +70,7 @@
       "summary": "The universal L4/L7 proxy dataplane behind most meshes and gateways.",
       "prerequisites": [],
       "file": "envoy.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "istio",

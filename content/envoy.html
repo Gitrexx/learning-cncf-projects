@@ -1,0 +1,500 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Envoy — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the request-routing simulator. ---- */
+  .rt-grid {
+    display: grid;
+    grid-template-columns: 1fr 1.15fr;
+    gap: var(--sp-5);
+  }
+  @media (max-width: 900px) { .rt-grid { grid-template-columns: 1fr; } }
+
+  .rt-col-title {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-2);
+  }
+  .rt-editor {
+    width: 100%;
+    min-height: 110px;
+    resize: vertical;
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    line-height: 1.5;
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-3);
+    color: var(--text);
+  }
+  .rt-controls { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin: var(--sp-4) 0; }
+  .rt-controls label { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); }
+  .rt-controls input[type="text"] { width: 14rem; }
+  .rt-err {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--signal-red);
+    min-height: 1.2em;
+    margin-top: var(--sp-2);
+  }
+
+  /* Pipeline of stages */
+  .rt-pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .rt-stage {
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--border-strong);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    padding: var(--sp-3) var(--sp-4);
+    margin-bottom: var(--sp-2);
+    opacity: 0.45;
+    transition: opacity .25s ease, border-left-color .25s ease, background .25s ease, transform .2s ease;
+    font-size: var(--fs-sm);
+  }
+  .rt-stage-title {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: var(--fs-xs);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: 0.2em;
+  }
+  .rt-stage.active {
+    opacity: 1;
+    border-left-color: var(--accent-2);
+    background: color-mix(in srgb, var(--accent-2) 9%, var(--surface));
+    transform: translateX(2px);
+  }
+  .rt-stage.active .rt-stage-title { color: var(--accent-strong); }
+  .rt-connector {
+    width: 2px;
+    height: var(--sp-3);
+    background: var(--border-strong);
+    margin-left: calc(var(--sp-4) + 1px);
+  }
+  .rt-trace {
+    margin-top: var(--sp-4);
+    min-height: 3em;
+  }
+  .rt-trace code { white-space: pre-wrap; }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Networking &amp; Service Mesh · Sub-topic 6 / 36</p>
+  <h1>Envoy</h1>
+  <p class="lead">
+    Every project so far in this landscape has been about running or packaging containers. Envoy is
+    about a different layer entirely: the network hop between one service and the next. It's a
+    high-performance proxy written in C++ that sits next to (or in front of) an application and
+    handles everything about talking over the network on that application's behalf — routing,
+    load balancing, retries, timeouts, TLS, and observability — without the application knowing any
+    of it is happening. It's the piece of infrastructure most other projects in this landscape's
+    Networking section are actually built <em>on top of</em>.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Envoy started at Lyft in 2015-2016 to solve Lyft's own microservices networking mess, joined
+    CNCF as an incubating project in September 2017, and graduated in November 2018 — the third
+    project ever to graduate, right after Kubernetes and Prometheus. It's not a service mesh itself;
+    it's the <span class="term" title="Envoy's own framing: one dataplane implementation, configured through one standard API (xDS), that many different control planes can drive — a mesh, a gateway, an edge proxy — instead of every tool inventing its own proxy.">universal data plane</span>
+    that Istio, Envoy Gateway, Contour, Gloo Edge, and several other CNCF and commercial products are
+    all built around. Learning Envoy is learning the mechanism underneath most of the "service mesh"
+    and "API gateway" conversations you'll run into.
+  </div>
+
+  <h2>The problem: every language was reinventing the network stack</h2>
+  <p>
+    Before Envoy, a company running microservices in multiple languages faced an awkward choice.
+    Networking concerns that sound simple — retry a failed call, time out a slow one, load-balance
+    across healthy instances, collect latency stats, encrypt the connection — all have to be
+    <em>implemented</em> somewhere. The common answer was a per-language client library: Java shops
+    used Netflix's Hystrix and Ribbon, Go shops wrote their own, and so on. That meant the same
+    logic got built and debugged N times, behaved slightly differently in each language, and was
+    invisible to operators unless every team instrumented it the same way.
+  </p>
+  <p>
+    Lyft's answer was to pull all of that out of the application entirely and run it as a separate
+    <span class="term" title="A proxy process deployed alongside every application instance (one per Pod, typically), rather than a centralized proxy all traffic passes through.">sidecar</span>
+    process next to every service instance. The application talks to <code>localhost</code>; Envoy
+    does the actual dialing, retrying, balancing, and encrypting to the real destination. Because
+    Envoy is a separate out-of-process binary, it works identically no matter what language the
+    application is written in — polyglot for free, and one place to add a feature, fix a bug, or
+    collect a metric for every service in the fleet.
+  </p>
+
+  <h2>Process model: one process, worker threads, non-blocking I/O</h2>
+  <p>
+    Envoy is a single multi-threaded process. A small main thread handles configuration processing,
+    stats aggregation, and admin duties. The actual traffic is handled by a configurable number of
+    <strong>worker threads</strong>, each running its own non-blocking event loop (built on
+    <code>libevent</code>) and each capable of independently accepting connections, running filters,
+    and proxying bytes. There's no locking between workers on the hot path — each owns its
+    connections outright — which is what lets Envoy push very high connection counts and low tail
+    latencies out of a single process. Configuration changes and stats are reconciled centrally but
+    applied to each worker's thread-local state, so a config update doesn't stall traffic already
+    in flight.
+  </p>
+  <div class="callout note">
+    <span class="callout-title">Hot restart</span>
+    Because upgrading the Envoy binary or reloading certain configuration would otherwise mean
+    dropping every open connection, Envoy supports <strong>hot restart</strong>: a new child process
+    starts up, takes over listening sockets from the old process via shared memory and passed file
+    descriptors, and the old process drains its existing connections before exiting. In practice
+    most modern deployments instead just replace the Pod (rolling update) and let the mesh's
+    connection draining handle it — but hot restart is why Envoy could be safely upgraded in place
+    even in Lyft's original bare-VM deployments.
+  </div>
+
+  <h2>The request path: listener → filter chain → route → cluster → endpoint</h2>
+  <p>
+    This is the core mental model, and it's exactly what today's widget below lets you drive by
+    hand. Every request Envoy proxies moves through the same five stages:
+  </p>
+  <ol>
+    <li>
+      <strong>Listener</strong> — a named network address (an IP and port) where Envoy accepts
+      incoming connections. A single Envoy typically runs several listeners: one for inbound
+      (:443/:8080), one for the app's own outbound calls, one for the admin interface.
+    </li>
+    <li>
+      <strong>Filter chain</strong> — an ordered pipeline of pluggable
+      <span class="term" title="Small, composable units of logic that inspect or transform a connection or request — TLS termination, rate limiting, JWT auth, CORS, buffering — chained together in a configured order.">filters</span>
+      each connection runs through. L3/L4 (network) filters see raw bytes/TCP; for HTTP traffic the
+      chain typically hands off to the <strong>HTTP Connection Manager</strong>, an L7 filter that
+      parses HTTP/1.1, HTTP/2, or HTTP/3 and runs its own nested chain of HTTP filters — auth,
+      rate limiting, CORS, compression, whatever's configured — ending in the special
+      <strong>router filter</strong>.
+    </li>
+    <li>
+      <strong>Route match</strong> — the router filter looks up the request (by path, headers,
+      authority, method — most commonly path prefix or exact match) against an ordered route table
+      and picks the <em>first</em> rule that matches. Route order matters: a catch-all
+      <code>/</code> rule placed first would shadow every more specific rule after it.
+    </li>
+    <li>
+      <strong>Cluster</strong> — the matched route names a cluster: a logical group of upstream
+      hosts that are functionally interchangeable (e.g. all healthy replicas of one backend
+      service), along with its load balancing policy (round robin, least request, ring hash, and
+      others), health checking, circuit breaking, and outlier detection settings.
+    </li>
+    <li>
+      <strong>Endpoint</strong> — the cluster's load balancer picks one concrete healthy upstream
+      host — an IP:port — and Envoy proxies the request there, applying any configured retries and
+      timeouts along the way.
+    </li>
+  </ol>
+
+  <h2>Try it: request-routing simulator</h2>
+  <p>
+    Edit the route table (one rule per line: <code>prefix -&gt; cluster</code>, checked top to
+    bottom, first match wins) and the request path, then send a request and watch it move through
+    Envoy's actual decision stages — including which endpoint the cluster's round-robin load
+    balancer picks next.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">listener → filter chain → route → cluster → endpoint</div>
+    <div class="rt-grid">
+      <div>
+        <div class="rt-col-title">route table (checked top → bottom)</div>
+        <textarea class="rt-editor mono" id="rtRoutes" spellcheck="false"></textarea>
+        <div class="rt-controls">
+          <label for="rtPath">Request path</label>
+          <input type="text" id="rtPath" value="/api/users/42" />
+          <button class="btn" id="rtSendBtn">Send request</button>
+          <button class="btn ghost" id="rtResetBtn">Reset</button>
+        </div>
+        <div class="rt-err" id="rtErr"></div>
+      </div>
+      <div>
+        <div class="rt-col-title">envoy request path</div>
+        <div class="rt-pipeline" id="rtPipeline"></div>
+        <pre class="rt-trace"><code id="rtTrace">Send a request to see the trace.</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <h2>Dynamic configuration: xDS, the "universal data plane API"</h2>
+  <p>
+    Everything above — listeners, routes, clusters, endpoints — can be hardcoded in a static config
+    file, but that's not how Envoy is used in practice at any real scale. Instead, a separate
+    <span class="term" title="Software that decides what configuration Envoy should run (routes, endpoints, TLS certs) and pushes it down — as opposed to the 'data plane', which is Envoy actually proxying bytes according to that configuration.">control plane</span>
+    computes the desired configuration and streams it to every Envoy over a family of gRPC APIs
+    collectively called <strong>xDS</strong> ("x" Discovery Service — x stands in for whichever
+    resource type):
+  </p>
+  <table>
+    <thead><tr><th>API</th><th>Discovers</th></tr></thead>
+    <tbody>
+      <tr><td><strong>LDS</strong> — Listener Discovery Service</td><td>which listeners and filter chains to run</td></tr>
+      <tr><td><strong>RDS</strong> — Route Discovery Service</td><td>the route table a listener's HTTP Connection Manager should use</td></tr>
+      <tr><td><strong>CDS</strong> — Cluster Discovery Service</td><td>which upstream clusters exist and their policy</td></tr>
+      <tr><td><strong>EDS</strong> — Endpoint Discovery Service</td><td>the live, healthy member list of each cluster</td></tr>
+      <tr><td><strong>SDS</strong> — Secret Discovery Service</td><td>TLS certificates and keys, rotated without a restart</td></tr>
+    </tbody>
+  </table>
+  <p>
+    In practice these are usually all multiplexed over one stream as
+    <strong>ADS</strong> (Aggregated Discovery Service), so ordering between resource types stays
+    consistent. Envoy calls xDS the "universal data plane API" deliberately: because it's a
+    standard, wire-level protocol rather than an Envoy-internal implementation detail, <em>any</em>
+    control plane can drive <em>any</em> Envoy. That's the whole reason Istio's <code>istiod</code>,
+    Envoy Gateway, Contour, Gloo Edge, and Kuma can all exist as separate projects with different
+    opinions about <em>what</em> configuration to compute, while all of them reuse the exact same
+    Envoy binary as the thing that actually moves bytes. It's also why xDS has grown beyond Envoy
+    itself — other proxies and even "proxyless" gRPC clients now speak xDS directly.
+  </p>
+
+  <h2>Observability is not bolted on</h2>
+  <p>
+    Because every byte already flows through Envoy, it's a natural place to generate telemetry
+    without any application code changes:
+  </p>
+  <ul>
+    <li><strong>Stats</strong> — deep, per-cluster, per-listener counters and histograms (request counts, upstream/downstream latency, connection pool state, circuit breaker trips) exposed on the admin interface and scraped by Prometheus.</li>
+    <li><strong>Distributed tracing</strong> — Envoy generates and propagates trace headers (compatible with OpenTelemetry, Zipkin, and others) so a request's hop through the mesh shows up as spans, even though the application itself never wrote tracing code.</li>
+    <li><strong>Access logs</strong> — structured, configurable per-request logs, useful independent of a full tracing backend.</li>
+  </ul>
+  <p>
+    This is a big part of why "adopt a service mesh" and "get uniform golden-signal metrics for
+    free" tend to be the same conversation — the mesh is just many Envoys, and the metrics come from
+    Envoy, not from instrumenting every service by hand.
+  </p>
+
+  <h2>Why it graduated, and where you'll run into it</h2>
+  <p>
+    Envoy graduated CNCF in November 2018 on the strength of production adoption well beyond Lyft —
+    it was already running at scale inside companies building their own infrastructure around it.
+    Today you'll meet Envoy in three overlapping shapes:
+  </p>
+  <ul>
+    <li><strong>As a sidecar</strong> in a service mesh — Istio's data plane is literally an Envoy container injected into every meshed Pod.</li>
+    <li><strong>As an edge/ingress gateway</strong> — Envoy Gateway, Contour, and Gloo Edge all use Envoy as the actual proxy behind a Kubernetes-friendly control plane (Envoy Gateway specifically implements the Kubernetes Gateway API).</li>
+    <li><strong>Embedded directly</strong> — some platforms and API gateways use the Envoy binary or its filter framework directly rather than through one of the above.</li>
+  </ul>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>Istio</strong> is not a competitor to Envoy — it's a control plane <em>for</em> Envoy;
+    Istio's data plane <em>is</em> Envoy. <strong>NGINX and HAProxy</strong> are older, well-proven
+    proxies, but they were designed around static or file-reloaded configuration and don't have
+    xDS-style dynamic, incremental, streamed config as a first-class citizen — that gap is exactly
+    what made Envoy the default choice for environments where the fleet of upstream endpoints
+    changes constantly (i.e. Kubernetes). <strong>Envoy Gateway</strong> is not a fork of Envoy or a
+    different proxy — it's a Kubernetes-native control plane, packaged as its own CNCF project,
+    that generates xDS config and runs the standard Envoy binary underneath.
+  </div>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. What is Envoy's relationship to a service mesh like Istio?</p>
+      <button class="quiz-option" data-val="a">Envoy and Istio are two competing, mutually exclusive service meshes.</button>
+      <button class="quiz-option" data-val="b">Envoy is the data-plane proxy; Istio is a control plane that computes configuration and pushes it to Envoy via xDS. Istio's sidecars are Envoy.</button>
+      <button class="quiz-option" data-val="c">Istio is a load-testing tool used to benchmark Envoy's performance before a release.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">2. In Envoy's route table, if two rules could both match a request, which one is used?</p>
+      <button class="quiz-option" data-val="a">The first matching rule in the configured order — later rules are never considered once one matches.</button>
+      <button class="quiz-option" data-val="b">The most specific rule always wins automatically, regardless of order.</button>
+      <button class="quiz-option" data-val="c">Envoy sends the request to both matching clusters and returns whichever responds first.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">3. Why does Envoy call xDS the "universal data plane API"?</p>
+      <button class="quiz-option" data-val="a">Because it lets one Envoy proxy traffic for every programming language at once.</button>
+      <button class="quiz-option" data-val="b">Because it replaced the need for TLS certificates in service-to-service traffic.</button>
+      <button class="quiz-option" data-val="c">Because xDS is a standard, wire-level protocol — any control plane (Istio, Envoy Gateway, Contour, and others) can drive any Envoy through the same API, decoupling "what configuration to run" from "the proxy that runs it."</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var DEFAULT_ROUTES = [
+    "/api/    -> api-service",
+    "/static/ -> static-assets",
+    "/        -> web-frontend"
+  ].join("\n");
+
+  var CLUSTERS = {
+    "api-service":   ["10.0.1.5:8080", "10.0.1.6:8080", "10.0.1.7:8080"],
+    "static-assets": ["10.0.2.10:9090", "10.0.2.11:9090"],
+    "web-frontend":  ["10.0.3.20:8000", "10.0.3.21:8000"]
+  };
+  var rrIndex = { "api-service": 0, "static-assets": 0, "web-frontend": 0 };
+
+  var STAGES = [
+    { key: "listener", title: "1 · Listener :443" },
+    { key: "filter",   title: "2 · Filter chain (TLS + HTTP Connection Manager)" },
+    { key: "route",    title: "3 · Route match" },
+    { key: "cluster",  title: "4 · Cluster" },
+    { key: "endpoint", title: "5 · Endpoint (load balanced)" }
+  ];
+
+  var routesInput = document.getElementById("rtRoutes");
+  var pathInput = document.getElementById("rtPath");
+  var errBox = document.getElementById("rtErr");
+  var pipeline = document.getElementById("rtPipeline");
+  var trace = document.getElementById("rtTrace");
+  var sendBtn = document.getElementById("rtSendBtn");
+  var resetBtn = document.getElementById("rtResetBtn");
+
+  function buildPipeline() {
+    pipeline.innerHTML = "";
+    STAGES.forEach(function (s, i) {
+      var el = document.createElement("div");
+      el.className = "rt-stage";
+      el.id = "rtStage-" + s.key;
+      el.innerHTML = '<div class="rt-stage-title">' + s.title + '</div><div class="rt-stage-body"></div>';
+      pipeline.appendChild(el);
+      if (i < STAGES.length - 1) {
+        var conn = document.createElement("div");
+        conn.className = "rt-connector";
+        pipeline.appendChild(conn);
+      }
+    });
+  }
+
+  function parseRoutes(text) {
+    var rules = [];
+    text.split("\n").forEach(function (line) {
+      var t = line.trim();
+      if (!t) return;
+      var m = t.match(/^(\S+)\s*->\s*(\S+)$/);
+      if (!m) throw new Error("Can't parse route line: " + t + " (expected 'prefix -> cluster')");
+      var cluster = m[2];
+      if (!CLUSTERS[cluster]) throw new Error("Unknown cluster '" + cluster + "' (known: " + Object.keys(CLUSTERS).join(", ") + ")");
+      rules.push({ prefix: m[1], cluster: cluster });
+    });
+    if (!rules.length) throw new Error("Route table is empty.");
+    return rules;
+  }
+
+  function resetStages() {
+    STAGES.forEach(function (s) {
+      var el = document.getElementById("rtStage-" + s.key);
+      el.classList.remove("active");
+      el.querySelector(".rt-stage-body").textContent = "";
+    });
+  }
+
+  function activateStage(key, text) {
+    var el = document.getElementById("rtStage-" + key);
+    el.classList.add("active");
+    el.querySelector(".rt-stage-body").textContent = text;
+  }
+
+  function send() {
+    errBox.textContent = "";
+    var lines = [];
+    var rules;
+    try {
+      rules = parseRoutes(routesInput.value);
+    } catch (e) {
+      errBox.textContent = e.message;
+      return;
+    }
+
+    var path = pathInput.value.trim() || "/";
+    resetStages();
+    trace.textContent = "";
+
+    var matched = null;
+    for (var i = 0; i < rules.length; i++) {
+      if (path.indexOf(rules[i].prefix) === 0) { matched = rules[i]; break; }
+    }
+
+    var steps = [];
+    steps.push(function () {
+      activateStage("listener", "TCP connection accepted on :443, SNI/TLS handled");
+      lines.push("[listener :443] accepted connection, request path = " + path);
+      trace.textContent = lines.join("\n");
+    });
+    steps.push(function () {
+      activateStage("filter", "HTTP Connection Manager parses request, runs HTTP filter chain");
+      lines.push("[filter chain] TLS terminated -> HTTP Connection Manager -> HTTP filters run -> router filter");
+      trace.textContent = lines.join("\n");
+    });
+    steps.push(function () {
+      if (matched) {
+        activateStage("route", "matched prefix \"" + matched.prefix + "\" (first match wins) -> cluster \"" + matched.cluster + "\"");
+        lines.push("[route match] \"" + path + "\" matches prefix \"" + matched.prefix + "\" -> cluster " + matched.cluster);
+      } else {
+        activateStage("route", "no route matched -> 404");
+        lines.push("[route match] no configured prefix matches \"" + path + "\" -> Envoy returns 404");
+      }
+      trace.textContent = lines.join("\n");
+    });
+    steps.push(function () {
+      if (!matched) return;
+      var members = CLUSTERS[matched.cluster];
+      activateStage("cluster", matched.cluster + " — " + members.length + " healthy endpoints, policy = ROUND_ROBIN");
+      lines.push("[cluster] " + matched.cluster + ": healthy endpoints = [" + members.join(", ") + "]");
+      trace.textContent = lines.join("\n");
+    });
+    steps.push(function () {
+      if (!matched) return;
+      var members = CLUSTERS[matched.cluster];
+      var idx = rrIndex[matched.cluster] % members.length;
+      rrIndex[matched.cluster]++;
+      activateStage("endpoint", "selected " + members[idx] + " (round-robin " + (idx + 1) + "/" + members.length + ")");
+      lines.push("[endpoint] round-robin picks " + members[idx] + " -> request proxied upstream");
+      trace.textContent = lines.join("\n");
+    });
+
+    steps.forEach(function (fn, i) {
+      setTimeout(fn, i * 420);
+    });
+  }
+
+  routesInput.value = DEFAULT_ROUTES;
+  buildPipeline();
+  sendBtn.addEventListener("click", send);
+  resetBtn.addEventListener("click", function () {
+    routesInput.value = DEFAULT_ROUTES;
+    pathInput.value = "/api/users/42";
+    rrIndex = { "api-service": 0, "static-assets": 0, "web-frontend": 0 };
+    errBox.textContent = "";
+    resetStages();
+    trace.textContent = "Send a request to see the trace.";
+  });
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
