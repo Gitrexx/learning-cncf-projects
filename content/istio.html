@@ -1,0 +1,429 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Istio — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the canary traffic-splitting widget. ---- */
+  .cv-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-4);
+    flex-wrap: wrap;
+    margin-bottom: var(--sp-5);
+  }
+  .cv-slider-wrap { flex: 1 1 20rem; min-width: 16rem; }
+  .cv-slider-label {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-faint);
+    margin-bottom: var(--sp-2);
+  }
+  .cv-slider-label strong { color: var(--text); }
+
+  .cv-topology {
+    display: grid;
+    grid-template-columns: 1fr 1.4fr;
+    gap: var(--sp-5);
+    align-items: stretch;
+  }
+  @media (max-width: 820px) { .cv-topology { grid-template-columns: 1fr; } }
+
+  .cv-vs-box {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    padding: var(--sp-4);
+    font-size: var(--fs-sm);
+  }
+  .cv-vs-box .cv-vs-title {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-2);
+  }
+  .cv-vs-box pre { margin: 0; box-shadow: none; }
+
+  .cv-dests { display: flex; flex-direction: column; gap: var(--sp-3); }
+  .cv-dest {
+    position: relative;
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--border-strong);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    padding: var(--sp-3) var(--sp-4);
+    overflow: hidden;
+  }
+  .cv-dest.v1 { border-left-color: var(--k8s-blue); }
+  .cv-dest.v2 { border-left-color: var(--cloud-cyan); }
+  .cv-dest-head {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    font-weight: 700;
+  }
+  .cv-dest-count { color: var(--text-faint); font-weight: 400; }
+  .cv-dest-bar-track {
+    height: 8px;
+    border-radius: var(--r-pill);
+    background: var(--surface-3);
+    margin-top: var(--sp-2);
+    overflow: hidden;
+  }
+  .cv-dest-bar-fill { height: 100%; border-radius: var(--r-pill); transition: width .3s ease; }
+  .cv-dest.v1 .cv-dest-bar-fill { background: var(--k8s-blue); }
+  .cv-dest.v2 .cv-dest-bar-fill { background: var(--cloud-cyan); }
+  .cv-dest-flash {
+    position: absolute;
+    inset: 0;
+    background: color-mix(in srgb, var(--accent-2) 22%, transparent);
+    opacity: 0;
+  }
+  .cv-dest-flash.hit { animation: cv-flash .5s ease; }
+  @keyframes cv-flash { from { opacity: 1; } to { opacity: 0; } }
+
+  .cv-log {
+    margin-top: var(--sp-4);
+    max-height: 8rem;
+    overflow-y: auto;
+  }
+  .cv-log code { white-space: pre-wrap; }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Networking &amp; Service Mesh · Sub-topic 7 / 36</p>
+  <h1>Istio</h1>
+  <p class="lead">
+    Envoy gives every service a capable proxy sitting next to it. But a fleet of a thousand
+    identical Envoys still needs someone to decide, consistently, what routing rules, mTLS
+    policy, and retry budgets each one should run — and to keep pushing updates as Pods come and
+    go. Istio is that someone: a control plane that turns a pile of independent Envoy proxies into
+    one coherently-managed <span class="term" title="A dedicated infrastructure layer for service-to-service traffic, added transparently alongside the application, that handles routing, security, and observability without app code changes.">service mesh</span>.
+    It's the most feature-complete mesh in the CNCF landscape, and the one most people mean by
+    default when they say "service mesh."
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Istio started as a joint project between Google, IBM, and Lyft in 2017 (Lyft contributed
+    Envoy as the dataplane). It joined CNCF as an incubating project on September 30, 2022, and
+    graduated on July 12, 2023 — less than a year later, the fastest graduation in CNCF history at
+    the time, reflecting how long and widely it had already been running in production before it
+    even joined the foundation. If Envoy is the proxy, Istio is the opinionated system that decides
+    what every Envoy in the mesh should be doing right now.
+  </div>
+
+  <h2>The problem: consistent policy across hundreds of independent proxies</h2>
+  <p>
+    A single Envoy sidecar is only as useful as its configuration. Someone still has to answer,
+    cluster-wide and continuously: which service versions exist right now, which of them should
+    get canary traffic, which calls require mutual TLS, which callers are allowed to reach which
+    services, and how to turn all of that into the listeners/routes/clusters/endpoints Envoy
+    actually understands. Doing this by hand — writing static Envoy config per Pod — falls apart
+    the moment you have more than a handful of services, because Kubernetes is constantly
+    reshaping the fleet (rollouts, autoscaling, rescheduling) faster than a human could keep
+    per-proxy config in sync.
+  </p>
+  <p>
+    Istio's job is to watch the actual state of the cluster and the mesh's declared policy, and
+    continuously compute and stream the right Envoy configuration to the right proxies — the xDS
+    control plane role described in the Envoy deep-dive, filled in with an opinionated,
+    Kubernetes-native way to declare that policy as CRDs.
+  </p>
+
+  <h2>Control plane: istiod</h2>
+  <p>
+    Everything Istio does centrally today runs in a single binary and Deployment called
+    <strong>istiod</strong>. Earlier Istio versions split this into separate services — Pilot
+    (configuration/discovery), Citadel (certificate authority), Galley (config validation/
+    distribution), and a webhook injector — but those were consolidated into istiod years ago to
+    cut inter-process hops and operational surface. istiod now handles three jobs at once:
+  </p>
+  <ul>
+    <li><strong>Service discovery &amp; config translation</strong> — watches the Kubernetes API for Services, Endpoints, and Istio's own CRDs (<code>VirtualService</code>, <code>DestinationRule</code>, and others), turns them into xDS resources, and streams them to every proxy over the same LDS/RDS/CDS/EDS/SDS protocol family Envoy speaks natively.</li>
+    <li><strong>Certificate authority</strong> — issues a short-lived X.509 identity certificate to every workload (encoding its Kubernetes service account as a SPIFFE-style identity), and rotates them automatically. This is what makes mesh-wide mTLS possible without anyone hand-managing certs.</li>
+    <li><strong>Configuration validation</strong> — an admission webhook that rejects malformed or conflicting Istio CRDs before they ever reach the mesh.</li>
+  </ul>
+
+  <h2>Data plane: sidecar mode, and now ambient mode</h2>
+  <p>
+    For most of Istio's history there was one way to get traffic into the mesh: <strong>sidecar
+    mode</strong>. A mutating admission webhook injects an Envoy container into every meshed Pod,
+    and <code>iptables</code> rules (set up by an init container, or by the newer
+    <span class="term" title="Runs as a DaemonSet and reprograms traffic redirection at the node level instead of via a per-Pod init container — removes the need for NET_ADMIN privileges on application Pods.">CNI plugin</span>
+    approach) transparently redirect the Pod's inbound and outbound traffic through its own
+    sidecar. The application never changes a line of code; every packet in or out just happens to
+    pass through Envoy first.
+  </p>
+  <p>
+    Sidecar mode is thorough — full L7 (HTTP-aware) capability on every hop — but it means one
+    extra container per Pod, and upgrading Envoy means restarting every workload Pod to get a new
+    sidecar. <strong>Ambient mode</strong>, which reached general availability in Istio 1.24
+    (November 2024), removes the sidecar entirely:
+  </p>
+  <ul>
+    <li><strong>ztunnel</strong> — a lightweight, purpose-built proxy written in Rust, run once per node as a DaemonSet (not per Pod). It handles L4 only: mTLS encryption, TCP-level authorization, and basic telemetry for every Pod on that node.</li>
+    <li><strong>Waypoint proxies</strong> — a full Envoy instance, but scoped per namespace or service account rather than per Pod, that's only deployed when a workload actually needs L7 features (HTTP routing, retries, header-based rules). Most traffic never needs one.</li>
+  </ul>
+  <p>
+    istiod drives both: it pushes L4-only xDS config (identities, endpoints, mTLS policy) to
+    ztunnel, and full Envoy xDS config (HTTP routes, <code>VirtualService</code>/<code>DestinationRule</code>
+    rules, L7 authorization) to whichever waypoints exist. The mesh gets mTLS and L4 policy
+    everywhere for near-zero resource cost, and pays the heavier Envoy cost only where L7 behavior
+    is actually used — a direct answer to sidecar mode's "one Envoy per Pod, whether it needs one
+    or not" overhead.
+  </p>
+
+  <h2>Zero-trust by default: identity and mTLS</h2>
+  <p>
+    Because istiod issues every workload a certificate tied to its Kubernetes service account,
+    every mesh connection can be mutually authenticated — each side proves who it is
+    cryptographically, not just that the packet arrived on the right port. Two CRDs control this:
+  </p>
+  <ul>
+    <li><strong><code>PeerAuthentication</code></strong> — sets the mTLS mode (<code>STRICT</code>, <code>PERMISSIVE</code>, or <code>DISABLE</code>) mesh-wide, per namespace, or per workload. <code>PERMISSIVE</code> accepts both plaintext and mTLS, which is what makes rolling mTLS out to an existing cluster non-disruptive.</li>
+    <li><strong><code>AuthorizationPolicy</code></strong> — allow/deny rules keyed on that verified identity ("only <code>orders-service</code>'s service account may call <code>payments</code>'s <code>/charge</code> endpoint"), enforced at L4 by ztunnel or at L7 by the sidecar/waypoint.</li>
+  </ul>
+  <p>
+    This is the "security" half of what a mesh buys you: encryption and authorization as mesh
+    policy, not something every service team has to implement themselves.
+  </p>
+
+  <h2>Traffic management: VirtualService and DestinationRule</h2>
+  <p>
+    The other half — traffic management — is where Istio earns its "most feature-complete"
+    reputation. Two CRDs work together:
+  </p>
+  <table>
+    <thead><tr><th>CRD</th><th>Answers</th></tr></thead>
+    <tbody>
+      <tr><td><strong>VirtualService</strong></td><td>How should a request to this host be routed? (path/header match, weighted split across subsets, retries, timeouts, fault injection)</td></tr>
+      <tr><td><strong>DestinationRule</strong></td><td>What subsets (versions) of this service exist, and what policy applies to traffic once it's routed there? (load balancing, connection pool limits, outlier detection / circuit breaking, per-subset TLS mode)</td></tr>
+    </tbody>
+  </table>
+  <p>
+    A canary rollout is the canonical example, and it's exactly what the widget below simulates:
+    a <code>DestinationRule</code> declares that the <code>reviews</code> service has subsets
+    <code>v1</code> and <code>v2</code> (selected by Pod labels), and a <code>VirtualService</code>
+    splits traffic to those subsets by weight. Nothing about the application changes — you're
+    purely reconfiguring the mesh — and shifting the weight from 100/0 toward 50/50 is a live,
+    gradual rollout with an instant rollback path (set the weight back to 100/0).
+  </p>
+
+  <h2>Try it: canary traffic-splitting</h2>
+  <p>
+    Drag the slider to change the weight split in a <code>VirtualService</code> between the
+    <code>v1</code> and <code>v2</code> subsets of a <code>reviews</code> service, then fire a
+    burst of requests and watch Istio's weighted routing decide, request by request, which subset
+    each one lands on.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">VirtualService weight → DestinationRule subset</div>
+
+    <div class="cv-controls">
+      <div class="cv-slider-wrap">
+        <div class="cv-slider-label">
+          <span>v1 weight: <strong id="cvW1Label">80</strong>%</span>
+          <span>v2 weight: <strong id="cvW2Label">20</strong>%</span>
+        </div>
+        <input type="range" id="cvWeight" min="0" max="100" step="5" value="80" />
+      </div>
+      <button class="btn" id="cvSendBtn">Send 20 requests</button>
+      <button class="btn ghost" id="cvResetBtn">Reset</button>
+    </div>
+
+    <div class="cv-topology">
+      <div class="cv-vs-box">
+        <div class="cv-vs-title">virtualservice: reviews</div>
+        <pre><code id="cvVsYaml" class="mono"></code></pre>
+      </div>
+      <div class="cv-dests">
+        <div class="cv-dest v1">
+          <div class="cv-dest-flash" id="cvFlashV1"></div>
+          <div class="cv-dest-head"><span>reviews — subset v1</span><span class="cv-dest-count" id="cvCountV1">0 requests</span></div>
+          <div class="cv-dest-bar-track"><div class="cv-dest-bar-fill" id="cvBarV1" style="width:0%"></div></div>
+        </div>
+        <div class="cv-dest v2">
+          <div class="cv-dest-flash" id="cvFlashV2"></div>
+          <div class="cv-dest-head"><span>reviews — subset v2</span><span class="cv-dest-count" id="cvCountV2">0 requests</span></div>
+          <div class="cv-dest-bar-track"><div class="cv-dest-bar-fill" id="cvBarV2" style="width:0%"></div></div>
+        </div>
+        <div class="cv-log">
+          <pre><code id="cvLog" class="mono">Send some requests to see them routed by weight.</code></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>Why it graduated, and where you'll run into it</h2>
+  <p>
+    Istio graduated on the strength of years of production use at large scale across very
+    different organizations (Google, IBM, Salesforce, and many others) well before it formally
+    joined CNCF, plus the breadth of what it covers — traffic management, security, and telemetry
+    in one project — and its role as the reference implementation many newer mesh ideas (including
+    ambient mode itself, and much of the Kubernetes Gateway API's mesh extensions) get prototyped
+    against. In production you'll meet it as: the mesh behind progressive-delivery pipelines
+    (canary/blue-green rollouts), the zero-trust mTLS layer inside a cluster, and increasingly as
+    an <code>istio</code> <code>GatewayClass</code> implementing the Kubernetes Gateway API for
+    ingress, not just mesh-internal traffic.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>Envoy</strong> is the data plane Istio drives, not a competing project — every sidecar
+    and waypoint <em>is</em> Envoy, configured by istiod over xDS. <strong>Linkerd</strong> is a
+    different service mesh entirely, built around its own minimal Rust "micro-proxy" instead of
+    Envoy, trading some of Istio's breadth for a much smaller footprint and simpler operational
+    model — see the next deep-dive for that comparison. The <strong>Kubernetes Gateway API</strong>
+    is a vendor-neutral spec for describing routing; Istio can <em>implement</em> it (alongside its
+    own longer-standing <code>VirtualService</code>/<code>DestinationRule</code> API), but the two
+    aren't competitors so much as Istio slowly growing a second, more portable configuration
+    surface next to its original one.
+  </div>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. What does istiod actually push down to a sidecar Envoy or a waypoint proxy?</p>
+      <button class="quiz-option" data-val="a">A copy of the application's source code, so Envoy can inspect its logic.</button>
+      <button class="quiz-option" data-val="b">xDS configuration — listeners, routes, clusters, endpoints, and certificates — computed from Kubernetes state and Istio CRDs like VirtualService and DestinationRule.</button>
+      <button class="quiz-option" data-val="c">A static config file that's manually edited per Pod.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. In ambient mode, what's the difference between ztunnel and a waypoint proxy?</p>
+      <button class="quiz-option" data-val="a">They're two names for the same component, used interchangeably.</button>
+      <button class="quiz-option" data-val="b">Waypoint proxies run on every node as a DaemonSet; ztunnel is deployed only when needed.</button>
+      <button class="quiz-option" data-val="c">ztunnel runs per node and handles only L4 (mTLS, TCP authorization); waypoint proxies are full Envoy instances deployed only where a workload needs L7 features like HTTP routing.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. In a canary rollout, what's the division of labor between VirtualService and DestinationRule?</p>
+      <button class="quiz-option" data-val="a">DestinationRule declares what subsets (versions) of a service exist and their policy; VirtualService decides how much traffic gets routed to each subset.</button>
+      <button class="quiz-option" data-val="b">VirtualService issues the mTLS certificates; DestinationRule handles retries and timeouts.</button>
+      <button class="quiz-option" data-val="c">They're redundant — either one alone is enough to run a canary rollout.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var weightInput = document.getElementById("cvWeight");
+  var w1Label = document.getElementById("cvW1Label");
+  var w2Label = document.getElementById("cvW2Label");
+  var vsYaml = document.getElementById("cvVsYaml");
+  var countV1 = document.getElementById("cvCountV1");
+  var countV2 = document.getElementById("cvCountV2");
+  var barV1 = document.getElementById("cvBarV1");
+  var barV2 = document.getElementById("cvBarV2");
+  var flashV1 = document.getElementById("cvFlashV1");
+  var flashV2 = document.getElementById("cvFlashV2");
+  var log = document.getElementById("cvLog");
+  var sendBtn = document.getElementById("cvSendBtn");
+  var resetBtn = document.getElementById("cvResetBtn");
+
+  var counts = { v1: 0, v2: 0 };
+  var logLines = [];
+
+  function renderYaml(w1, w2) {
+    vsYaml.textContent =
+      "spec:\n" +
+      "  hosts: [reviews]\n" +
+      "  http:\n" +
+      "  - route:\n" +
+      "    - destination:\n" +
+      "        host: reviews\n" +
+      "        subset: v1\n" +
+      "      weight: " + w1 + "\n" +
+      "    - destination:\n" +
+      "        host: reviews\n" +
+      "        subset: v2\n" +
+      "      weight: " + w2;
+  }
+
+  function renderBars() {
+    var total = counts.v1 + counts.v2;
+    countV1.textContent = counts.v1 + " requests";
+    countV2.textContent = counts.v2 + " requests";
+    barV1.style.width = (total ? (counts.v1 / total) * 100 : 0) + "%";
+    barV2.style.width = (total ? (counts.v2 / total) * 100 : 0) + "%";
+  }
+
+  function updateWeightLabels() {
+    var w1 = parseInt(weightInput.value, 10);
+    var w2 = 100 - w1;
+    w1Label.textContent = w1;
+    w2Label.textContent = w2;
+    renderYaml(w1, w2);
+    return { w1: w1, w2: w2 };
+  }
+
+  function flash(el) {
+    el.classList.remove("hit");
+    void el.offsetWidth; // restart animation
+    el.classList.add("hit");
+  }
+
+  function sendBurst() {
+    var w1 = parseInt(weightInput.value, 10);
+    for (var i = 0; i < 20; i++) {
+      (function (n) {
+        setTimeout(function () {
+          var roll = Math.random() * 100;
+          var subset = roll < w1 ? "v1" : "v2";
+          counts[subset]++;
+          renderBars();
+          flash(subset === "v1" ? flashV1 : flashV2);
+          logLines.push("request #" + (n + 1) + " — roll " + roll.toFixed(1) + " < " + w1 + "? -> routed to subset " + subset);
+          if (logLines.length > 8) logLines.shift();
+          log.textContent = logLines.join("\n");
+        }, n * 110);
+      })(i);
+    }
+  }
+
+  weightInput.addEventListener("input", updateWeightLabels);
+  sendBtn.addEventListener("click", sendBurst);
+  resetBtn.addEventListener("click", function () {
+    weightInput.value = 80;
+    updateWeightLabels();
+    counts = { v1: 0, v2: 0 };
+    logLines = [];
+    log.textContent = "Send some requests to see them routed by weight.";
+    renderBars();
+  });
+
+  updateWeightLabels();
+  renderBars();
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
