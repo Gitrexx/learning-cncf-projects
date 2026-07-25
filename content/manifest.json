@@ -80,7 +80,7 @@
       "summary": "The feature-rich service mesh: traffic management, mTLS, telemetry on Envoy.",
       "prerequisites": ["envoy"],
       "file": "istio.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "linkerd",
