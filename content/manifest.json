@@ -90,7 +90,7 @@
       "summary": "The minimal, security-first service mesh with its own ultralight Rust proxy.",
       "prerequisites": [],
       "file": "linkerd.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "cilium",

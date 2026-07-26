@@ -1,0 +1,430 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Linkerd — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the golden-metrics dashboard widget. ---- */
+  .lk-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    flex-wrap: wrap;
+    margin-bottom: var(--sp-5);
+  }
+  .lk-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-pill);
+    padding: var(--sp-2) var(--sp-4);
+    background: var(--surface-2);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background .15s, border-color .15s, color .15s;
+  }
+  .lk-toggle .dot {
+    width: 0.6em; height: 0.6em; border-radius: 50%;
+    background: var(--text-faint);
+    transition: background .15s;
+  }
+  .lk-toggle.on {
+    color: var(--signal-green);
+    border-color: color-mix(in srgb, var(--signal-green) 45%, var(--border));
+    background: color-mix(in srgb, var(--signal-green) 10%, var(--surface));
+  }
+  .lk-toggle.on .dot { background: var(--signal-green); }
+
+  .lk-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-4);
+  }
+  @media (max-width: 720px) { .lk-stats { grid-template-columns: repeat(2, 1fr); } }
+  .lk-stat {
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    padding: var(--sp-3) var(--sp-4);
+    text-align: center;
+  }
+  .lk-stat-label {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+  }
+  .lk-stat-value {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xl);
+    font-weight: 700;
+    color: var(--text);
+    margin-top: var(--sp-1);
+  }
+  .lk-stat-value.good { color: var(--signal-green); }
+  .lk-stat-value.bad  { color: var(--signal-red); }
+
+  .lk-log {
+    max-height: 11rem;
+    overflow-y: auto;
+  }
+  .lk-log pre { margin: 0; }
+  .lk-log code { white-space: pre-wrap; }
+  .lk-ok  { color: var(--signal-green); }
+  .lk-err { color: var(--signal-red); }
+  .lk-lock { color: var(--cloud-cyan); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Networking &amp; Service Mesh · Sub-topic 8 / 36</p>
+  <h1>Linkerd</h1>
+  <p class="lead">
+    Istio's pitch is breadth: one mesh, every traffic-management and security knob you could want.
+    Linkerd starts from the opposite premise — that most of that surface area is complexity most
+    teams never touch, and every feature you don't use is still a resource cost, an upgrade
+    hazard, and an attack surface you're carrying anyway. Linkerd is the mesh built around doing
+    the two things almost everyone actually wants — automatic <span class="term" title="Mutual TLS: both sides of a connection present and verify a certificate, so each end cryptographically proves its identity, not just that a packet arrived on the right port.">mTLS</span>
+    and reliable per-route metrics — as well and as cheaply as possible, and treating everything
+    else as optional.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Linkerd's original version (built at Twitter's spinoff Buoyant, on the JVM using Twitter's
+    Finagle RPC library) was the very first project the CNCF ever accepted, back in January 2017 —
+    before "service mesh" was even a common term, and before Istio's first public release. That
+    JVM-based Linkerd 1.x was heavy: slow startup, large memory footprint per sidecar. In 2018,
+    Buoyant scrapped it and rewrote the project from scratch as <strong>Linkerd2</strong>, merging
+    in a sister project called Conduit and switching the data plane to a purpose-built Rust proxy.
+    That rewrite is the Linkerd you meet today, and on July 28, 2021 it became the first service
+    mesh of any kind to reach CNCF graduation.
+  </div>
+
+  <h2>The problem: does a mesh have to be this heavy?</h2>
+  <p>
+    The Envoy and Istio deep-dives established the cost side of the sidecar model: an extra
+    container per Pod, extra memory and CPU, extra hops for every request. Istio's answer was
+    ambient mode — keep Envoy's full feature set, but only pay for it where you actually need L7.
+    Linkerd's answer predates ambient mode and takes a different angle entirely: replace the
+    general-purpose proxy with a much smaller one that was never trying to do everything Envoy
+    does in the first place, and ship only the mesh features the vast majority of users reach for
+    — mTLS and observability by default, traffic policy as an opt-in layer on top.
+  </p>
+
+  <h2>Control plane: three small, single-purpose services</h2>
+  <p>
+    Where istiod consolidated Istio's control plane into one do-everything binary, Linkerd keeps
+    three narrowly-scoped components, each running as its own Deployment in the <code>linkerd</code>
+    namespace:
+  </p>
+  <ul>
+    <li><strong>destination</strong> — the service discovery brain. Proxies query it over gRPC to resolve a logical name into concrete endpoints, and it enriches each endpoint with the metadata a proxy needs to act on: the mTLS identity expected on the other end, zone/locality, and which authorization policy applies.</li>
+    <li><strong>identity</strong> — a lightweight certificate authority. It issues short-lived TLS certificates to every meshed proxy, derived from the workload's Kubernetes <span class="term" title="A Kubernetes identity object automatically bound to every Pod, used here as the cryptographic root of trust for that workload's mesh certificate — no separate identity system to run.">ServiceAccount</span>, and rotates them automatically.</li>
+    <li><strong>proxy-injector</strong> — a mutating admission webhook, exactly like Istio's, that adds the proxy (and an init step to redirect traffic into it) to every Pod in a labeled namespace at creation time.</li>
+  </ul>
+  <p>
+    Notably, none of this requires a metrics backend to function. Golden-metrics collection lives
+    in a separate, optional add-on (<strong>linkerd-viz</strong>, its own small Prometheus plus a
+    dashboard) — the core control plane's only job is discovery, identity, and injection.
+  </p>
+
+  <h2>Data plane: linkerd2-proxy, a micro-proxy on purpose</h2>
+  <p>
+    Every meshed Pod gets a sidecar running <strong>linkerd2-proxy</strong>, written in Rust
+    specifically for this one job — it is not a trimmed-down Envoy, and it was never meant to be a
+    general-purpose proxy. It understands exactly what a mesh sidecar needs: transparent TCP
+    proxying, HTTP/1.1, HTTP/2, and gRPC framing, and the mTLS handshake — and nothing else. That
+    narrow scope is what keeps it small: typically single-digit megabytes of memory and negligible
+    idle CPU per Pod, versus Envoy's much larger and more general codebase. Traffic still reaches
+    it the same way it reaches an Envoy sidecar — <code>iptables</code> rules installed by an init
+    container (or, on newer clusters, a CNI plugin) transparently redirect the Pod's traffic
+    through the proxy with no application changes.
+  </p>
+
+  <h2>Automatic mTLS: no CRD required</h2>
+  <p>
+    This is Linkerd's signature difference from Istio. Istio ships mTLS as a policy you turn on —
+    a <code>PeerAuthentication</code> resource with a <code>STRICT</code>/<code>PERMISSIVE</code>
+    mode. Linkerd just does it: the moment two meshed proxies talk to each other, they
+    opportunistically upgrade the connection to mutual TLS automatically, using certificates the
+    <code>identity</code> service already issued at injection time. There's no CRD to write and no
+    mode to pick — it's a property of being in the mesh at all. That default-on posture is a big
+    part of why Linkerd shows up so often in security-conscious environments (finance, government,
+    regulated industries) that want encryption-in-transit without an explicit policy for every
+    namespace.
+  </p>
+
+  <h2>Golden metrics, retries, and the move to Gateway API</h2>
+  <p>
+    Because every request already flows through linkerd2-proxy, the proxy is a free vantage point
+    for the three <strong>golden metrics</strong> any operator wants for every route: success rate,
+    requests per second, and latency distribution (p50/p95/p99). linkerd-viz scrapes these
+    automatically for every meshed workload — no app instrumentation required. Traffic policy sits
+    on top as an opt-in layer: <code>ServiceProfile</code> was Linkerd's original way to declare
+    per-route retries, timeouts, and a
+    <span class="term" title="A cap on how many extra requests retries are allowed to generate, expressed as a percentage of original traffic — protects a struggling downstream from being hit even harder by retry storms.">retry budget</span>.
+    Newer Linkerd releases are shifting that configuration onto the standard Kubernetes
+    <strong>Gateway API</strong> (<code>HTTPRoute</code>) instead of Linkerd-specific CRDs, and the
+    older SMI <code>TrafficSplit</code> API for weighted canary routing is deprecated in favor of
+    weighted <code>HTTPRoute</code> backends — the same portable-API direction Istio is heading with
+    its <code>GatewayClass</code> support.
+  </p>
+  <p>
+    Retries are deliberately conservative by default: Linkerd only retries a request it knows is
+    safe to repeat, and only within the configured budget — otherwise a struggling downstream
+    would get hit with a multiplying flood of retried traffic on top of the load that's already
+    hurting it.
+  </p>
+
+  <h2>Try it: golden metrics under mTLS and retries</h2>
+  <p>
+    Toggle mTLS and retries on or off, then send bursts of requests against a flaky backend
+    (it fails about 28% of the time on a first attempt) and watch how each setting moves the
+    golden metrics differently.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">linkerd-viz — golden metrics</div>
+
+    <div class="lk-controls">
+      <button class="lk-toggle on" id="lkMtlsToggle" type="button"><span class="dot"></span> mTLS: on</button>
+      <button class="lk-toggle on" id="lkRetriesToggle" type="button"><span class="dot"></span> Retries: on</button>
+      <button class="btn" id="lkSendBtn">Send 20 requests</button>
+      <button class="btn ghost" id="lkResetBtn">Reset</button>
+    </div>
+
+    <div class="lk-stats">
+      <div class="lk-stat">
+        <div class="lk-stat-label">Success rate</div>
+        <div class="lk-stat-value" id="lkSuccessRate">—</div>
+      </div>
+      <div class="lk-stat">
+        <div class="lk-stat-label">RPS</div>
+        <div class="lk-stat-value" id="lkRps">—</div>
+      </div>
+      <div class="lk-stat">
+        <div class="lk-stat-label">P50 latency</div>
+        <div class="lk-stat-value" id="lkP50">—</div>
+      </div>
+      <div class="lk-stat">
+        <div class="lk-stat-label">P99 latency</div>
+        <div class="lk-stat-value" id="lkP99">—</div>
+      </div>
+    </div>
+
+    <div class="lk-log">
+      <pre><code id="lkLog" class="mono">Send some requests to see per-request outcomes.</code></pre>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">What to notice</span>
+    Toggling <strong>mTLS</strong> barely moves latency at all — that's the point of a Rust
+    micro-proxy purpose-built for this: encryption is nearly free. Toggling <strong>retries</strong>
+    tells a different story: success rate climbs because failed requests get a second chance, but
+    P99 latency climbs too, because only the failed slice of requests pays for a retry — and that
+    slice sits at the tail of the distribution, not the median.
+  </div>
+
+  <h2>Why it graduated, and where you'll run into it</h2>
+  <p>
+    Linkerd graduated on the strength of being the mesh category's pioneer (first CNCF project,
+    period) that also proved it could reinvent itself — the ground-up Linkerd2 rewrite is a rare
+    example of a CNCF project throwing away its original implementation and coming back leaner
+    instead of iterating on something structurally too heavy. In production you'll meet it where
+    operators want mesh security and observability without a large operational learning curve or
+    resource budget: security-sensitive platforms that want mTLS on by default, smaller platform
+    teams that don't want to own Istio's configuration surface, and clusters where sidecar
+    footprint (memory, CPU, startup time) is a real constraint at scale.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>Istio</strong> is the other major mesh, but the two aren't drop-in alternatives with
+    the same feature list — Istio trades footprint for breadth (fine-grained traffic shaping, its
+    own ambient dataplane options, deep Envoy extensibility), while Linkerd trades breadth for a
+    smaller, simpler, security-default posture. Linkerd is <strong>not</strong> built on
+    <strong>Envoy</strong> at all — that's the most common mix-up — it uses its own linkerd2-proxy,
+    which is why its resource footprint looks so different. And Linkerd's mTLS is automatic and
+    always-on for meshed traffic, whereas Istio's is a policy you configure via
+    <code>PeerAuthentication</code> — same outcome, opposite defaults.
+  </div>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. Why does Linkerd use linkerd2-proxy instead of Envoy?</p>
+      <button class="quiz-option" data-val="a">Envoy doesn't support gRPC, and Linkerd needed gRPC support.</button>
+      <button class="quiz-option" data-val="b">linkerd2-proxy is a purpose-built, minimal Rust proxy scoped to exactly what a mesh sidecar needs, giving it a much smaller resource footprint than a general-purpose proxy like Envoy.</button>
+      <button class="quiz-option" data-val="c">Envoy is a commercial product that requires a paid license.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">2. What are Linkerd's three control-plane components?</p>
+      <button class="quiz-option" data-val="a">destination (service discovery), identity (certificate authority), and proxy-injector (admission webhook).</button>
+      <button class="quiz-option" data-val="b">Pilot, Citadel, and Galley.</button>
+      <button class="quiz-option" data-val="c">ztunnel, waypoint, and istiod.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">3. In the widget, why does enabling retries raise P99 latency much more than it raises P50 latency?</p>
+      <button class="quiz-option" data-val="a">Retries are random and affect every request equally regardless of outcome.</button>
+      <button class="quiz-option" data-val="b">P99 latency is unrelated to retries — it only reflects mTLS overhead.</button>
+      <button class="quiz-option" data-val="c">Only the (smaller) slice of requests that failed on the first attempt get retried, and paying for a second attempt pushes exactly that slice further into the tail of the latency distribution, which is what high percentiles like P99 measure.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var mtlsToggle = document.getElementById("lkMtlsToggle");
+  var retriesToggle = document.getElementById("lkRetriesToggle");
+  var sendBtn = document.getElementById("lkSendBtn");
+  var resetBtn = document.getElementById("lkResetBtn");
+  var successRateEl = document.getElementById("lkSuccessRate");
+  var rpsEl = document.getElementById("lkRps");
+  var p50El = document.getElementById("lkP50");
+  var p99El = document.getElementById("lkP99");
+  var log = document.getElementById("lkLog");
+
+  var mtlsOn = true;
+  var retriesOn = true;
+  var results = []; // { latency, success, retried }
+  var reqCounter = 0;
+  var startTime = null;
+  var logLines = [];
+
+  function setToggle(btn, on, label) {
+    btn.classList.toggle("on", on);
+    btn.textContent = "";
+    var dot = document.createElement("span");
+    dot.className = "dot";
+    btn.appendChild(dot);
+    btn.appendChild(document.createTextNode(" " + label + ": " + (on ? "on" : "off")));
+  }
+
+  function percentile(sorted, p) {
+    if (sorted.length === 0) return null;
+    var idx = Math.min(sorted.length - 1, Math.floor(p * sorted.length));
+    return sorted[idx];
+  }
+
+  function renderStats() {
+    if (results.length === 0) {
+      successRateEl.textContent = "—";
+      successRateEl.className = "lk-stat-value";
+      rpsEl.textContent = "—";
+      p50El.textContent = "—";
+      p99El.textContent = "—";
+      return;
+    }
+    var successCount = results.filter(function (r) { return r.success; }).length;
+    var rate = (successCount / results.length) * 100;
+    successRateEl.textContent = rate.toFixed(1) + "%";
+    successRateEl.className = "lk-stat-value " + (rate >= 90 ? "good" : rate < 75 ? "bad" : "");
+
+    var elapsedSec = startTime ? Math.max(0.5, (Date.now() - startTime) / 1000) : 1;
+    rpsEl.textContent = (results.length / elapsedSec).toFixed(1);
+
+    var sorted = results.map(function (r) { return r.latency; }).sort(function (a, b) { return a - b; });
+    p50El.textContent = percentile(sorted, 0.50).toFixed(1) + "ms";
+    p99El.textContent = percentile(sorted, 0.99).toFixed(1) + "ms";
+  }
+
+  function simulateRequest(useMtls, useRetries) {
+    var baseLatency = 15 + Math.random() * 10;
+    var mtlsOverhead = useMtls ? 0.5 + Math.random() * 1.5 : 0;
+    var latency = baseLatency + mtlsOverhead;
+    var failed = Math.random() < 0.28;
+    var success = !failed;
+    var retried = false;
+    var attempts = 1;
+
+    if (failed && useRetries) {
+      retried = true;
+      attempts = 2;
+      latency += baseLatency * 0.85 + mtlsOverhead;
+      success = Math.random() < 0.88;
+    }
+
+    return { latency: latency, success: success, retried: retried, attempts: attempts, mtls: useMtls };
+  }
+
+  function appendLog(n, r) {
+    var line = "req#" + n + " · " + (r.mtls ? "mTLS" : "plaintext") +
+      " · attempt " + r.attempts + (r.retried ? " (retried)" : "") +
+      " · " + r.latency.toFixed(1) + "ms · " + (r.success ? "2xx" : "5xx");
+    logLines.push(line);
+    if (logLines.length > 10) logLines.shift();
+    log.innerHTML = logLines.map(function (l) {
+      var cls = l.indexOf("2xx") !== -1 ? "lk-ok" : "lk-err";
+      return "<span class=\"" + cls + "\">" + l + "</span>";
+    }).join("\n");
+  }
+
+  function sendBurst() {
+    if (!startTime) startTime = Date.now();
+    for (var i = 0; i < 20; i++) {
+      (function () {
+        setTimeout(function () {
+          reqCounter++;
+          var r = simulateRequest(mtlsOn, retriesOn);
+          results.push(r);
+          appendLog(reqCounter, r);
+          renderStats();
+        }, i * 120);
+      })();
+    }
+  }
+
+  mtlsToggle.addEventListener("click", function () {
+    mtlsOn = !mtlsOn;
+    setToggle(mtlsToggle, mtlsOn, "mTLS");
+  });
+  retriesToggle.addEventListener("click", function () {
+    retriesOn = !retriesOn;
+    setToggle(retriesToggle, retriesOn, "Retries");
+  });
+  sendBtn.addEventListener("click", sendBurst);
+  resetBtn.addEventListener("click", function () {
+    results = [];
+    reqCounter = 0;
+    startTime = null;
+    logLines = [];
+    log.textContent = "Send some requests to see per-request outcomes.";
+    renderStats();
+  });
+
+  renderStats();
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
