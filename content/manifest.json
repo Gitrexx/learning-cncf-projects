@@ -100,7 +100,7 @@
       "summary": "eBPF-powered networking, security, and observability for Kubernetes.",
       "prerequisites": ["kubernetes"],
       "file": "cilium.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "coredns",
