@@ -1,0 +1,449 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cilium — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the network-policy simulator widget. ---- */
+  .cl-pods {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-5);
+  }
+  @media (max-width: 720px) { .cl-pods { grid-template-columns: 1fr; } }
+  .cl-pod {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    padding: var(--sp-3) var(--sp-4);
+  }
+  .cl-pod-name {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: var(--fs-sm);
+    color: var(--text);
+  }
+  .cl-pod-row {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    margin-top: var(--sp-1);
+    display: flex;
+    justify-content: space-between;
+    gap: var(--sp-2);
+  }
+  .cl-pod-row .v { color: var(--text); }
+  .cl-pod-row .id { color: var(--cloud-cyan-deep); font-weight: 700; }
+  .cl-restart {
+    margin-top: var(--sp-2);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    padding: var(--sp-1) var(--sp-3);
+  }
+
+  .cl-policies {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-5);
+  }
+  .cl-policy {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    padding: var(--sp-2) var(--sp-4);
+    cursor: pointer;
+  }
+  .cl-policy input { accent-color: var(--accent); }
+  .cl-policy .off-note { color: var(--text-faint); font-style: italic; }
+
+  .cl-flows {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-4);
+  }
+  .cl-flow-btn {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+  }
+
+  .cl-log {
+    max-height: 12rem;
+    overflow-y: auto;
+  }
+  .cl-log pre { margin: 0; }
+  .cl-log code { white-space: pre-wrap; }
+  .cl-allow { color: var(--signal-green); }
+  .cl-deny  { color: var(--signal-red); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Networking &amp; Service Mesh · Sub-topic 9 / 36</p>
+  <h1>Cilium</h1>
+  <p class="lead">
+    Envoy, Istio, and Linkerd all solve networking by putting a proxy in the request path — a
+    process the packet has to reach, be parsed by, and be forwarded from. Cilium takes a
+    different bet entirely: instead of adding a proxy, it moves networking, security, and
+    observability <em>into the Linux kernel itself</em>, using a kernel technology called
+    <span class="term" title="extended Berkeley Packet Filter: a way to load small, sandboxed, kernel-verified programs that run in response to kernel events (a packet arriving, a syscall firing) without writing a kernel module or recompiling the kernel.">eBPF</span>.
+    No sidecar, no separate process to hop through — the kernel that was already going to handle
+    the packet now also enforces policy and reports what happened, at the point the packet
+    actually arrives.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Cilium started in 2015 at a company called Isovalent, betting early on eBPF back when the
+    technology was mostly known for kernel-level packet filtering (its literal ancestor, BPF, is
+    what <code>tcpdump</code> is built on). Cilium joined the CNCF in October 2021 and reached
+    Graduated status on October 11, 2023. By 2026 it's the default or a first-class CNI option on
+    every major managed Kubernetes offering — GKE's Dataplane V2, EKS, and AKS's BYO-CNI path all
+    surface Cilium-style eBPF networking directly. It's also the parent project of
+    <strong>Hubble</strong> (observability) and <strong>Tetragon</strong> (runtime security via
+    eBPF, in the same family as Falco but kernel-native).
+  </div>
+
+  <h2>The problem: iptables doesn't scale, and IPs are a bad security anchor</h2>
+  <p>
+    Before Cilium, the standard Kubernetes dataplane relied on <code>iptables</code>: kube-proxy
+    watched Services and Endpoints and translated them into long chains of
+    <code>iptables</code> rules for NAT and load-balancing, and CNI plugins used more
+    <code>iptables</code> rules (or a userspace agent) for NetworkPolicy. Two problems compound
+    here. First, <code>iptables</code> rule chains are evaluated roughly linearly — every packet
+    walks the list until something matches — so as the number of Services and policies grows,
+    per-packet latency grows with it; large clusters could see real, measurable kube-proxy
+    overhead. Second, both kube-proxy and stock NetworkPolicy reason about <strong>IP
+    addresses</strong>: rules say "allow traffic from 10.1.2.3." But Pod IPs are ephemeral — a
+    Pod that restarts gets a new IP, and that IP can be immediately reassigned to a completely
+    different, unrelated Pod. An IP-based rule set is only ever a snapshot of identity that's
+    already stale by the time you read it.
+  </p>
+
+  <h2>eBPF: kernel programs without a kernel module</h2>
+  <p>
+    <span class="term" title="extended Berkeley Packet Filter">eBPF</span> lets you attach small
+    programs to kernel hooks — a network interface receiving a packet, a socket operation, a
+    system call — and have the kernel run them in-line, with no context switch out to a userspace
+    process. The kernel doesn't just trust these programs blindly: before loading one, an in-kernel
+    <strong>verifier</strong> statically proves it terminates, never reads out-of-bounds memory,
+    and can't crash the kernel, then a <strong>JIT compiler</strong> turns it into native machine
+    code. Cilium's <code>cilium-agent</code> compiles and loads eBPF programs onto hooks at several
+    points in the packet's journey: <strong>XDP</strong> (the earliest possible point, right at
+    the network driver, before the kernel has even allocated a full packet buffer — ideal for
+    dropping unwanted traffic as cheaply as possible), the <strong>tc</strong> (traffic control)
+    layer for most policy and routing decisions, and <strong>socket-level</strong> hooks that let
+    Cilium redirect a connection at the socket layer itself, skipping the rest of the network
+    stack entirely for pod-to-pod traffic on the same node.
+  </p>
+
+  <h2>Architecture: agent, operator, and per-node eBPF maps</h2>
+  <p>
+    Cilium runs as a DaemonSet plus a small control component, not a per-Pod sidecar:
+  </p>
+  <ul>
+    <li><strong>cilium-agent</strong> — one per node. It watches the Kubernetes API for Pods,
+      Services, Endpoints, and Cilium's own CRDs, and translates that state into eBPF programs
+      and maps (kernel-resident hash tables) loaded into that node's kernel. It also runs the CNI
+      plugin invoked by the kubelet when a Pod is created, wiring up its virtual interface and
+      attaching the eBPF programs to it.</li>
+    <li><strong>cilium-operator</strong> — one (logical) instance cluster-wide, handling jobs that
+      shouldn't run redundantly on every node: cluster-wide IP address management (allocating pod
+      CIDR ranges per node), garbage-collecting stale identities, and talking to cloud-provider
+      APIs for native-routing setups.</li>
+    <li><strong>Envoy</strong> (optional, per node — not a sidecar) — when a
+      <code>CiliumNetworkPolicy</code> needs L7 awareness (an HTTP method or path, a gRPC service),
+      Cilium runs one shared Envoy instance per node and redirects just the matching traffic to it.
+      This is the one place Cilium and the service-mesh world overlap: recent Cilium releases can
+      run an entire sidecar-free "service mesh" mode this way, contrasted with Istio and Linkerd's
+      per-Pod proxy model.</li>
+  </ul>
+
+  <h2>Identity-based security: policy that survives IP churn</h2>
+  <p>
+    This is Cilium's core idea. Every Pod's relevant Kubernetes labels are hashed into a
+    <strong>security identity</strong> — a small numeric ID (a 16-bit space, so up to 65,536
+    distinct identities per cluster) — and by default that identity is represented cluster-wide as
+    a <code>CiliumIdentity</code> custom resource. Every Pod with the same relevant labels shares
+    the same identity, regardless of which node it's on or what IP it was handed. The eBPF
+    datapath enforces policy by looking up the <em>identity</em> attached to a packet's source, not
+    its IP — so when a Pod restarts and gets a new IP, nothing about policy enforcement needs to
+    change, because the identity derived from its labels is unchanged. This is also what makes
+    Cilium's policy model reach further than the IP address it arrived on: a
+    <code>CiliumNetworkPolicy</code> (a superset of the standard Kubernetes
+    <code>NetworkPolicy</code>) can allow traffic by identity plus an HTTP method, or by DNS name
+    for egress to the outside world (an <span class="term" title="Fully Qualified Domain Name — Cilium can watch DNS responses and allow egress to a Pod based on the domain name it just resolved, then keep that allowance in sync as the IPs behind that name change.">FQDN</span>-based rule
+    like "allow egress to <code>api.example.com</code> on 443," which plain IP-based policy has no
+    way to express since the IP behind a hostname can change at any time).
+  </p>
+
+  <h2>Replacing kube-proxy</h2>
+  <p>
+    Because the eBPF datapath already sees every packet, Cilium can take over kube-proxy's job
+    entirely. Service-to-endpoint mappings are stored in eBPF hash maps rather than
+    <code>iptables</code> chains, turning lookup from a linear scan into a near-constant-time hash
+    lookup regardless of how many Services exist. For Pod-to-Pod traffic on the same node, Cilium
+    can go further and rewrite the destination at the <strong>socket layer</strong> the moment a
+    connection is opened — the packet never even needs a full trip through the IP stack to be
+    NAT'd, it's redirected once, up front.
+  </p>
+
+  <h2>Hubble: observability for free</h2>
+  <p>
+    Because the eBPF programs already see every packet and already know its identity, they're a
+    natural place to also emit an event. <strong>Hubble</strong> is Cilium's observability layer:
+    it turns that same eBPF vantage point into flow logs (who talked to whom, with which identity
+    labels, allowed or dropped and why), a live service dependency map, and per-flow metrics — all
+    without an instrumentation library in the app or a sidecar collecting data. It's the same
+    "the infrastructure already saw this, so surface it" idea Envoy sidecars give Istio and
+    Linkerd for L7 traffic, except Cilium gets it for all traffic, L3 through L7, because it sits
+    below the app entirely.
+  </p>
+
+  <div class="callout note">
+    <span class="callout-title">Cluster Mesh</span>
+    Cilium can also stitch multiple Kubernetes clusters into one flat network and one identity
+    domain (<strong>Cluster Mesh</strong>): Services in one cluster become reachable from another,
+    and a security identity computed from labels in cluster A is recognized and enforced the same
+    way in cluster B. It's the multi-cluster analogue of the same "policy follows identity, not
+    location" principle.
+  </div>
+
+  <h2>Try it: identity-based policy vs. IP churn</h2>
+  <p>
+    Three Pods, two policies. Toggle the policies on and off, send traffic between Pods, and
+    watch what's allowed. Then restart <code>frontend</code> to give it a brand-new IP address —
+    its <em>identity</em> (derived from labels) doesn't change, so nothing about the enforcement
+    outcome changes either.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Cilium — network policy simulator</div>
+
+    <div class="cl-pods" id="clPods"></div>
+
+    <div class="cl-policies" id="clPolicies"></div>
+
+    <div class="cl-flows" id="clFlows"></div>
+
+    <div class="cl-log">
+      <pre><code id="clLog" class="mono">Send a flow to see the allow/deny decision.</code></pre>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">What to notice</span>
+    <code>db → backend</code> and <code>db → frontend</code> stay denied the whole time — no
+    policy ever grants them, because the destination Pod became default-deny the moment any
+    policy selected it (the same semantics as standard Kubernetes <code>NetworkPolicy</code>).
+    And restarting <code>frontend</code> changes its IP in the log, but every decision that
+    depended on <code>app=frontend</code> keeps working exactly as before — the eBPF datapath
+    matched on identity, never on the IP that happened to carry it.
+  </div>
+
+  <h2>Why it graduated, and where you'll run into it</h2>
+  <p>
+    Cilium graduated on the strength of solving a problem every cluster has (the Service dataplane
+    and NetworkPolicy enforcement) with a structurally better mechanism than the incumbent, at a
+    moment when eBPF was maturing into a trusted, widely-adopted kernel technology. You'll meet it
+    as the CNI itself — often invisibly, as the default networking layer under a managed cluster —
+    and explicitly wherever a team cares about dense NetworkPolicy at scale, wants FQDN-aware
+    egress control, needs Hubble's flow visibility for incident response, or is chasing kube-proxy
+    overhead out of a very large cluster.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>Calico</strong> is the other major CNI and has grown its own eBPF dataplane option, but
+    its default and most common mode is still <code>iptables</code>/IPVS with BGP for routing —
+    Cilium was eBPF-native from the start and that's still its deepest investment.
+    <strong>Flannel</strong> is a much simpler overlay-only CNI with no built-in NetworkPolicy
+    enforcement at all — it solves basic Pod connectivity, not security or observability.
+    And Cilium is <strong>not a service mesh replacement for Istio/Linkerd</strong> by default —
+    its per-node, sidecar-free Envoy mode covers some of the same L7 ground, but Cilium's home
+    turf is the CNI layer (L3/L4, identity, kube-proxy replacement) that a mesh normally assumes
+    already exists underneath it.
+  </div>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. Why does Cilium enforce NetworkPolicy based on "security identity" instead of Pod IP address?</p>
+      <button class="quiz-option" data-val="a">IP-based rules are illegal in Kubernetes since v1.24.</button>
+      <button class="quiz-option" data-val="b">Pod IPs are ephemeral and get reassigned to unrelated Pods, so an IP-based rule set is a stale snapshot; identity is derived from labels and stays valid across restarts and IP churn.</button>
+      <button class="quiz-option" data-val="c">Security identities are faster to type in YAML than IP addresses.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. What lets eBPF programs run kernel-level packet processing safely, without writing a kernel module?</p>
+      <button class="quiz-option" data-val="a">They run as a privileged sidecar container next to the kernel.</button>
+      <button class="quiz-option" data-val="b">They're written in Rust, which the kernel trusts by default.</button>
+      <button class="quiz-option" data-val="c">A verifier statically checks the program terminates and stays in-bounds before loading it, then a JIT compiler turns it into native code the kernel runs in-line at a hook.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. In the widget, why does restarting the frontend Pod (giving it a new IP) not break the policy that allows it to reach the backend?</p>
+      <button class="quiz-option" data-val="a">The policy matches on the security identity derived from the Pod's labels, which is unchanged by an IP change.</button>
+      <button class="quiz-option" data-val="b">Cilium caches the old IP forever so the new one never takes effect.</button>
+      <button class="quiz-option" data-val="c">Restarting a Pod in Kubernetes never actually changes its IP address.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var pods = {
+    frontend: { name: "frontend", label: "app=frontend", identity: 24601, ip: "10.0.1.11" },
+    backend:  { name: "backend",  label: "app=backend",  identity: 8912,  ip: "10.0.2.23" },
+    db:       { name: "db",       label: "app=db",        identity: 3305,  ip: "10.0.3.7"  }
+  };
+
+  var policies = {
+    p1: { on: true,  from: "frontend", to: "backend", port: 8080, label: "Allow app=frontend → app=backend :8080" },
+    p2: { on: true,  from: "backend",  to: "db",       port: 5432, label: "Allow app=backend → app=db :5432" }
+  };
+
+  var flowPairs = [
+    ["frontend", "backend"],
+    ["backend", "db"],
+    ["frontend", "db"],
+    ["db", "backend"],
+    ["db", "frontend"]
+  ];
+
+  var podsEl = document.getElementById("clPods");
+  var policiesEl = document.getElementById("clPolicies");
+  var flowsEl = document.getElementById("clFlows");
+  var log = document.getElementById("clLog");
+  var logLines = [];
+
+  function randIp(base) {
+    return base.split(".").slice(0, 3).join(".") + "." + (10 + Math.floor(Math.random() * 240));
+  }
+
+  function renderPods() {
+    podsEl.innerHTML = "";
+    Object.keys(pods).forEach(function (key) {
+      var p = pods[key];
+      var card = document.createElement("div");
+      card.className = "cl-pod";
+      card.innerHTML =
+        "<div class=\"cl-pod-name\">" + p.name + "</div>" +
+        "<div class=\"cl-pod-row\"><span>labels</span><span class=\"v\">" + p.label + "</span></div>" +
+        "<div class=\"cl-pod-row\"><span>identity</span><span class=\"id\">" + p.identity + "</span></div>" +
+        "<div class=\"cl-pod-row\"><span>IP</span><span class=\"v\" id=\"clIp-" + key + "\">" + p.ip + "</span></div>";
+      var btn = document.createElement("button");
+      btn.className = "btn ghost cl-restart";
+      btn.type = "button";
+      btn.textContent = "Restart " + p.name + " (new IP)";
+      btn.addEventListener("click", function () {
+        var oldIp = p.ip;
+        p.ip = randIp(p.ip);
+        document.getElementById("clIp-" + key).textContent = p.ip;
+        appendLog(p.name + " restarted: IP " + oldIp + " → " + p.ip +
+          " — identity unchanged (" + p.identity + ")", "info");
+      });
+      card.appendChild(btn);
+      podsEl.appendChild(card);
+    });
+  }
+
+  function renderPolicies() {
+    policiesEl.innerHTML = "";
+    Object.keys(policies).forEach(function (key) {
+      var pol = policies[key];
+      var row = document.createElement("label");
+      row.className = "cl-policy";
+      var cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = pol.on;
+      cb.addEventListener("change", function () { pol.on = cb.checked; });
+      row.appendChild(cb);
+      var span = document.createElement("span");
+      span.textContent = pol.label;
+      row.appendChild(span);
+      policiesEl.appendChild(row);
+    });
+  }
+
+  function renderFlows() {
+    flowsEl.innerHTML = "";
+    flowPairs.forEach(function (pair) {
+      var btn = document.createElement("button");
+      btn.className = "btn cl-flow-btn";
+      btn.type = "button";
+      btn.textContent = pair[0] + " → " + pair[1];
+      btn.addEventListener("click", function () { sendFlow(pair[0], pair[1]); });
+      flowsEl.appendChild(btn);
+    });
+  }
+
+  function destinationHasPolicy(dest) {
+    return Object.keys(policies).some(function (k) { return policies[k].on && policies[k].to === dest; });
+  }
+
+  function isAllowed(from, to) {
+    if (!destinationHasPolicy(to)) return { allowed: true, reason: "no policy selects " + to + " — default allow" };
+    var match = Object.keys(policies).some(function (k) {
+      var pol = policies[k];
+      return pol.on && pol.from === from && pol.to === to;
+    });
+    return {
+      allowed: match,
+      reason: match
+        ? "identity " + pods[from].identity + " (" + pods[from].label + ") explicitly allowed"
+        : to + " is default-deny (a policy selects it) and no rule allows identity " + pods[from].identity
+    };
+  }
+
+  function sendFlow(from, to) {
+    var result = isAllowed(from, to);
+    var line = from + " → " + to + " (via " + pods[from].ip + " → " + pods[to].ip + "): " +
+      (result.allowed ? "ALLOWED" : "DENIED") + " — " + result.reason;
+    appendLog(line, result.allowed ? "allow" : "deny");
+  }
+
+  function appendLog(line, kind) {
+    logLines.push({ line: line, kind: kind });
+    if (logLines.length > 12) logLines.shift();
+    log.innerHTML = logLines.map(function (l) {
+      var cls = l.kind === "allow" ? "cl-allow" : l.kind === "deny" ? "cl-deny" : "";
+      return "<span class=\"" + cls + "\">" + l.line + "</span>";
+    }).join("\n");
+  }
+
+  renderPods();
+  renderPolicies();
+  renderFlows();
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
