@@ -110,7 +110,7 @@
       "summary": "The pluggable DNS server that powers service discovery inside clusters.",
       "prerequisites": [],
       "file": "coredns.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "prometheus",

@@ -1,0 +1,542 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CoreDNS — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the plugin-chain step-through widget. ---- */
+  .cd-queries {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-4);
+  }
+  .cd-query-btn {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+  }
+  .cd-query-btn.selected {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  }
+  .cd-cached-tag {
+    margin-left: var(--sp-2);
+    font-size: var(--fs-xs);
+    color: var(--cloud-cyan-deep);
+    font-weight: 700;
+  }
+
+  .cd-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-4);
+  }
+  .cd-controls .status {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+  }
+
+  .cd-chain {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-4);
+  }
+  .cd-plugin {
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    padding: var(--sp-2) var(--sp-4);
+    transition: border-color .15s, background .15s;
+  }
+  .cd-plugin-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--sp-3);
+    flex-wrap: wrap;
+  }
+  .cd-plugin-name {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: var(--fs-sm);
+    color: var(--text);
+  }
+  .cd-plugin-directive {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-faint);
+  }
+  .cd-plugin-note {
+    margin-top: var(--sp-1);
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    display: none;
+  }
+  .cd-plugin.active {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  }
+  .cd-plugin.st-pass .cd-plugin-name,
+  .cd-plugin.st-skip .cd-plugin-name { color: var(--text-muted); }
+  .cd-plugin.st-answer { border-color: var(--signal-green); background: color-mix(in srgb, var(--signal-green) 10%, var(--surface)); }
+  .cd-plugin.st-nxdomain { border-color: var(--signal-red); background: color-mix(in srgb, var(--signal-red) 10%, var(--surface)); }
+  .cd-plugin.st-notreached { opacity: .4; }
+  .cd-plugin.st-pass .cd-plugin-note,
+  .cd-plugin.st-skip .cd-plugin-note,
+  .cd-plugin.st-answer .cd-plugin-note,
+  .cd-plugin.st-nxdomain .cd-plugin-note { display: block; }
+
+  .cd-result {
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    margin-bottom: var(--sp-4);
+    display: none;
+  }
+  .cd-result.show { display: block; }
+  .cd-result.answer { background: color-mix(in srgb, var(--signal-green) 12%, var(--surface)); border: 1px solid var(--signal-green); }
+  .cd-result.nxdomain { background: color-mix(in srgb, var(--signal-red) 12%, var(--surface)); border: 1px solid var(--signal-red); }
+
+  .cd-order-compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--sp-4);
+    margin: var(--sp-4) 0;
+  }
+  @media (max-width: 720px) { .cd-order-compare { grid-template-columns: 1fr; } }
+  .cd-order-col h4 {
+    margin: 0 0 var(--sp-2);
+    font-size: var(--fs-xs);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--text-faint);
+  }
+  .cd-order-col ol {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    margin: 0;
+    padding-left: 1.4em;
+  }
+  .cd-order-col li { margin-bottom: var(--sp-1); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Networking &amp; Service Mesh · Sub-topic 10 / 36</p>
+  <h1>CoreDNS</h1>
+  <p class="lead">
+    Every time a Pod resolves <code>my-service.default.svc.cluster.local</code> to a ClusterIP,
+    CoreDNS answered it. It's the DNS server that ships inside every conformant Kubernetes cluster —
+    almost invisible until it breaks, at which point every Service lookup in the cluster starts
+    failing at once. What makes it interesting isn't just that it's "the cluster's DNS": it's built
+    as a single binary made entirely of small, chainable <strong>plugins</strong>, an architecture
+    borrowed from the Caddy web server (same original author), and that architecture has a genuinely
+    surprising rule about how those plugins actually run — which is the whole point of the widget
+    below.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    CoreDNS reached CNCF Graduated status on January 24, 2019 — the first project to graduate that
+    year, and still one of only a handful of graduated projects that almost nobody talks to
+    directly, yet every single workload depends on. It became Kubernetes's default cluster DNS
+    add-on with the 1.13 release (December 2018), replacing <strong>kube-dns</strong>. Look in the
+    <code>kube-system</code> namespace of any cluster and you'll find it: a <code>coredns</code>
+    Deployment, fronted by a Service still conventionally named <code>kube-dns</code> for backward
+    compatibility, configured by a <code>ConfigMap</code> called <code>coredns</code> holding its
+    <strong>Corefile</strong>.
+  </div>
+
+  <h2>The problem: kube-dns's fragile three-container pipeline</h2>
+  <p>
+    Before CoreDNS, cluster DNS was served by <strong>kube-dns</strong>, which needed three
+    cooperating containers in a single Pod to do one job: <code>kubedns</code> (a
+    <span class="term" title="An early, simple DNS server for service discovery in etcd-backed systems; kube-dns embedded it to watch the Kubernetes API and serve records from that state.">SkyDNS</span>-derived
+    process that watched the Kubernetes API and served DNS records from that state), a bundled
+    <code>dnsmasq</code> for caching and stub-domain support, and a <code>sidecar</code> container
+    just to expose health checks and metrics that <code>kubedns</code> and <code>dnsmasq</code>
+    didn't provide on their own. Three processes means three things that can disagree, and
+    <code>dnsmasq</code> in particular carried a history of CVEs serious enough to force
+    security-patch Kubernetes releases on its own. It also had a fairly rigid configuration surface:
+    extending it (say, to handle a custom stub domain cleanly) meant patching or wrapping the
+    binary, not editing a config file.
+  </p>
+
+  <h2>CoreDNS's model: a single binary, entirely made of plugins</h2>
+  <p>
+    CoreDNS collapses that into one process. Everything — serving Kubernetes-aware records, caching,
+    forwarding to an upstream resolver, exposing metrics, health endpoints, rewriting queries — is a
+    <strong>plugin</strong>, and a plugin chain works exactly like HTTP middleware: each plugin
+    implements a <code>ServeDNS</code> method that gets a chance to look at the incoming query and
+    can do one of three things — <strong>answer it directly</strong> and stop the chain,
+    <strong>decline it</strong> and hand it unmodified to the next plugin, or <strong>wrap</strong> it
+    (call the next plugin first, then inspect or modify the response on the way back before
+    returning it further up). You only compile in the plugins you actually need, which keeps the
+    binary and its attack surface small — a security-conscious improvement directly informed by
+    kube-dns's <code>dnsmasq</code> history.
+  </p>
+
+  <h2>How a name resolves inside the cluster</h2>
+  <p>
+    Kubernetes gives every Service a predictable DNS name:
+    <code>&lt;service&gt;.&lt;namespace&gt;.svc.cluster.local</code> resolves to an <strong>A
+    record</strong> for that Service's ClusterIP. For a <strong>headless Service</strong>
+    (<code>spec.clusterIP: None</code>) there's no single virtual IP to hand back, so CoreDNS instead
+    returns one A record per ready backing Pod — this is exactly the mechanism StatefulSets rely on
+    to give each replica a stable, individually addressable name. Pods can also get their own record,
+    <code>&lt;pod-ip-with-dashes&gt;.&lt;namespace&gt;.pod.cluster.local</code>, and a Service's named
+    ports get <strong>SRV records</strong> (<code>_&lt;port-name&gt;._&lt;protocol&gt;.&lt;service&gt;...</code>)
+    so a client can discover the port number, not just the address. Every Pod's
+    <code>/etc/resolv.conf</code> is configured with a search path of <code>svc.cluster.local</code>,
+    <code>cluster.local</code>, then the node's own domains — which is why a bare
+    <code>curl my-service</code> from inside a Pod in the same namespace works at all: the resolver
+    tries the search suffixes in order until one resolves.
+  </p>
+
+  <h2>The Corefile — and the part that surprises people</h2>
+  <p>
+    CoreDNS is configured with a <strong>Corefile</strong>: one or more server blocks (a zone plus a
+    port) containing a list of enabled plugin directives. This is the default kubeadm ships:
+  </p>
+  <pre><code>.:53 {
+    errors
+    health {
+       lameduck 5s
+    }
+    ready
+    kubernetes cluster.local in-addr.arpa ip6.arpa {
+       pods insecure
+       fallthrough in-addr.arpa ip6.arpa
+       ttl 30
+    }
+    prometheus :9153
+    forward . /etc/resolv.conf {
+       max_concurrent 1000
+    }
+    cache 30
+    loop
+    reload
+    loadbalance
+}</code></pre>
+  <p>
+    It's natural to read that top-to-bottom as "the order things happen in." <strong>That's not how
+    it works.</strong> The Corefile only controls which plugins are <em>enabled</em> and how they're
+    <em>configured</em> — the actual call order is fixed by the CoreDNS binary itself, compiled in
+    from an internal <code>plugin.cfg</code> file, completely independent of the order you wrote the
+    directives in. Rearranging the Corefile's lines changes nothing about execution order; only
+    disabling a directive (removing it) or reconfiguring one does anything.
+  </p>
+
+  <div class="cd-order-compare">
+    <div class="cd-order-col">
+      <h4>Written in the Corefile</h4>
+      <ol>
+        <li>errors</li><li>health</li><li>ready</li><li>kubernetes</li><li>prometheus</li>
+        <li>forward</li><li>cache</li><li>loop</li><li>reload</li><li>loadbalance</li>
+      </ol>
+    </div>
+    <div class="cd-order-col">
+      <h4>Actually executed (per plugin.cfg)</h4>
+      <ol>
+        <li>reload</li><li>ready</li><li>health</li><li>prometheus</li><li>errors</li>
+        <li>loadbalance</li><li>cache</li><li>kubernetes</li><li>loop</li><li>forward</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <span class="callout-title">The consequence that matters</span>
+    Notice where <code>cache</code> really sits: <strong>upstream of both <code>kubernetes</code> and
+    <code>forward</code></strong>, not tucked away near the bottom like the Corefile suggests. That
+    means a query that already has a live cache entry never reaches the <code>kubernetes</code>
+    plugin's API lookup or the <code>forward</code> plugin's upstream round-trip at all — it's
+    answered straight out of the cache, every time, until the entry's TTL (30s here) expires. Step
+    through the widget below twice with the same query to see it happen.
+  </div>
+
+  <h2>Try it: step through the real plugin chain</h2>
+  <p>
+    Pick a query, then click <strong>Step</strong> to advance one plugin at a time, in the binary's
+    actual execution order, and watch each one decide whether to answer, decline, or short-circuit
+    the rest of the chain.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">CoreDNS — plugin chain walk-through</div>
+
+    <div class="cd-queries" id="cdQueries"></div>
+
+    <div class="cd-controls">
+      <button class="btn" id="cdStep" type="button">Step ▶</button>
+      <button class="btn ghost" id="cdReset" type="button">Reset chain</button>
+      <button class="btn ghost" id="cdFlush" type="button">Flush cache (simulate TTL expiry)</button>
+      <span class="status" id="cdStatus"></span>
+    </div>
+
+    <div class="cd-result" id="cdResult"></div>
+
+    <div class="cd-chain" id="cdChain"></div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">What to notice</span>
+    Run <code>missing-svc.default.svc.cluster.local</code> once and watch <code>kubernetes</code>
+    return NXDOMAIN — the zone matches, but <code>fallthrough</code> is only configured for
+    <code>in-addr.arpa</code>/<code>ip6.arpa</code>, not <code>cluster.local</code>, so it answers
+    authoritatively instead of asking <code>forward</code>. Run <code>www.example.com</code> and
+    watch <code>kubernetes</code> decline outright (wrong zone) so <code>forward</code> gets a turn.
+    Then run either query a second time: <code>cache</code> now short-circuits the whole rest of the
+    chain and answers on its own.
+  </div>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    CoreDNS graduated on the strength of quietly replacing a fragile, security-troubled component
+    with a smaller, safer, and far more extensible one, at a moment where "extensible via plugins,
+    not forks" was becoming the expected shape for cloud-native infrastructure. You'll meet it as the
+    default DNS layer of essentially every Kubernetes cluster you touch, usually without thinking
+    about it — until DNS latency or NXDOMAIN errors show up in an incident, at which point
+    understanding its Corefile and real plugin order stops being trivia and starts being the fastest
+    path to a fix. It's also used well outside Kubernetes, as a general-purpose authoritative or
+    recursive DNS server (via plugins like <code>file</code>, <code>etcd</code>, or the cloud-provider
+    ones) wherever its plugin model is a better fit than a traditional DNS server.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>kube-dns</strong> is CoreDNS's retired predecessor, not an alternate name for the same
+    thing — different codebase, different (three-container) architecture, no longer maintained.
+    <strong>external-dns</strong> runs in the opposite direction: it watches Kubernetes Ingresses and
+    Services and <em>writes</em> matching records into an external provider (Route 53, Cloud DNS,
+    etc.) so the outside world can find your cluster — it never answers a DNS query itself and has
+    nothing to do with <code>svc.cluster.local</code>. <strong>NodeLocal DNSCache</strong> is an
+    optional DaemonSet that runs an additional CoreDNS instance (just the <code>cache</code> plugin,
+    mostly) on every node to sit in front of the cluster's real CoreDNS Deployment and avoid
+    conntrack/UDP contention at very large scale — it's an add-on layer, not a replacement for the
+    CoreDNS you've just learned about.
+  </div>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. If you move the "forward" line above "kubernetes" in the Corefile, what happens to execution order?</p>
+      <button class="quiz-option" data-val="a">Forward now runs before kubernetes for every query.</button>
+      <button class="quiz-option" data-val="b">Nothing changes — plugin execution order is fixed at compile time by plugin.cfg, independent of the order directives are written in the Corefile.</button>
+      <button class="quiz-option" data-val="c">CoreDNS fails to start because the directives are out of order.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">2. Why does a repeat query for the same cluster.local name, made within the cache's TTL, never re-invoke the kubernetes plugin?</p>
+      <button class="quiz-option" data-val="a">Because cache actually executes upstream of kubernetes in the real plugin order, so a live cache entry answers the query before kubernetes is ever reached.</button>
+      <button class="quiz-option" data-val="b">Because Kubernetes Services never change, so CoreDNS assumes the first answer is permanent.</button>
+      <button class="quiz-option" data-val="c">Because the kubernetes plugin can only be called once per CoreDNS process lifetime.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">3. Why did kube-dns need three containers (kubedns, dnsmasq, sidecar) per Pod, where CoreDNS needs just one?</p>
+      <button class="quiz-option" data-val="a">kube-dns ran on more powerful hardware and could afford the overhead.</button>
+      <button class="quiz-option" data-val="b">Kubernetes required exactly three containers for any cluster add-on at the time.</button>
+      <button class="quiz-option" data-val="c">CoreDNS folds the equivalent functionality — serving, caching, metrics, health — into one process via composable plugins, instead of separate cooperating processes each owning one job.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var chainOrder = ["reload", "ready", "health", "prometheus", "errors", "loadbalance", "cache", "kubernetes", "loop", "forward"];
+
+  var pluginMeta = {
+    reload:     { name: "reload",     directive: "reload" },
+    ready:      { name: "ready",      directive: "ready" },
+    health:     { name: "health",     directive: "health { lameduck 5s }" },
+    prometheus: { name: "prometheus", directive: "prometheus :9153" },
+    errors:     { name: "errors",     directive: "errors" },
+    loadbalance:{ name: "loadbalance",directive: "loadbalance" },
+    cache:      { name: "cache",      directive: "cache 30" },
+    kubernetes: { name: "kubernetes", directive: "kubernetes cluster.local in-addr.arpa ip6.arpa { pods insecure fallthrough in-addr.arpa ip6.arpa ttl 30 }" },
+    loop:       { name: "loop",       directive: "loop" },
+    forward:    { name: "forward",    directive: "forward . /etc/resolv.conf { max_concurrent 1000 }" }
+  };
+
+  var queries = {
+    q1: { key: "q1", name: "my-svc.default.svc.cluster.local", zone: "cluster.local", exists: true, ip: "10.96.12.34", cached: false },
+    q2: { key: "q2", name: "missing-svc.default.svc.cluster.local", zone: "cluster.local", exists: false, cached: false },
+    q3: { key: "q3", name: "www.example.com", zone: null, exists: null, ip: "93.184.216.34", cached: false }
+  };
+
+  var queriesEl = document.getElementById("cdQueries");
+  var chainEl = document.getElementById("cdChain");
+  var stepBtn = document.getElementById("cdStep");
+  var resetBtn = document.getElementById("cdReset");
+  var flushBtn = document.getElementById("cdFlush");
+  var statusEl = document.getElementById("cdStatus");
+  var resultEl = document.getElementById("cdResult");
+
+  var currentKey = "q1";
+  var stepIndex = 0;
+  var resolved = false;
+
+  function renderQueries() {
+    queriesEl.innerHTML = "";
+    Object.keys(queries).forEach(function (key) {
+      var q = queries[key];
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn ghost cd-query-btn" + (key === currentKey ? " selected" : "");
+      btn.innerHTML = q.name + (q.cached ? "<span class=\"cd-cached-tag\">cached</span>" : "");
+      btn.addEventListener("click", function () {
+        currentKey = key;
+        resetChain();
+      });
+      queriesEl.appendChild(btn);
+    });
+  }
+
+  function renderChain() {
+    chainEl.innerHTML = "";
+    chainOrder.forEach(function (key, idx) {
+      var meta = pluginMeta[key];
+      var card = document.createElement("div");
+      card.className = "cd-plugin";
+      card.id = "cdPlugin-" + key;
+      card.innerHTML =
+        "<div class=\"cd-plugin-head\">" +
+          "<span class=\"cd-plugin-name\">" + meta.name + "</span>" +
+          "<span class=\"cd-plugin-directive\">" + meta.directive + "</span>" +
+        "</div>" +
+        "<div class=\"cd-plugin-note\" id=\"cdNote-" + key + "\"></div>";
+      chainEl.appendChild(card);
+    });
+  }
+
+  function resetChain() {
+    stepIndex = 0;
+    resolved = false;
+    renderQueries();
+    renderChain();
+    resultEl.className = "cd-result";
+    resultEl.textContent = "";
+    stepBtn.disabled = false;
+    stepBtn.textContent = "Step ▶";
+    updateStatus();
+  }
+
+  function updateStatus() {
+    if (resolved) {
+      statusEl.textContent = "Query resolved.";
+    } else {
+      statusEl.textContent = "Next up: " + chainOrder[stepIndex] + " (" + (stepIndex + 1) + " / " + chainOrder.length + ")";
+    }
+  }
+
+  function decide(pluginKey, q) {
+    switch (pluginKey) {
+      case "reload":
+        return { status: "pass", note: "Not part of query handling at all — a background watcher that reloads the Corefile from disk if it changes. Calls the next plugin unchanged." };
+      case "ready":
+        return { status: "skip", note: "Only serves the kubelet's /ready HTTP endpoint, not DNS queries. Declines and passes this along untouched." };
+      case "health":
+        return { status: "skip", note: "Only serves the kubelet's /health HTTP endpoint. Declines and passes this along untouched." };
+      case "prometheus":
+        return { status: "pass", note: "Calls the next plugin first, then records a metric for this query's outcome on its own :9153 endpoint on the way back." };
+      case "errors":
+        return { status: "pass", note: "Calls the next plugin first, then logs to stdout only if the eventual answer was an error. No effect on the query itself." };
+      case "loadbalance":
+        return { status: "pass", note: "Calls the next plugin first; would shuffle the order of multiple A/AAAA records in the response, on the way back. No-op with a single record." };
+      case "cache":
+        if (q.cached) {
+          return { status: q.exists === false ? "nxdomain" : "answer", note: "Already holds a live entry for this exact query from an earlier run (TTL not yet expired) — answers immediately, without ever calling kubernetes or forward.", response: q.exists === false ? "NXDOMAIN (cached)" : "A " + q.ip + " (cached)", terminal: true };
+        }
+        return { status: "pass", note: "No cached entry yet for this query — calls the next plugin, then stores whatever comes back (positive or negative) for 30s before returning it." };
+      case "kubernetes":
+        if (q.zone === "cluster.local") {
+          if (q.exists) {
+            return { status: "answer", note: "Zone cluster.local matches. Looks up " + q.name + " against live Service/Endpoint state from the Kubernetes API and answers directly — does not call the next plugin.", response: "A " + q.ip, terminal: true };
+          }
+          return { status: "nxdomain", note: "Zone cluster.local matches, but no such Service or Pod exists. fallthrough is only configured for in-addr.arpa/ip6.arpa here, not cluster.local, so this answers authoritatively with NXDOMAIN instead of calling forward.", response: "NXDOMAIN", terminal: true };
+        }
+        return { status: "skip", note: "'" + q.name + "' isn't under any zone this plugin owns (cluster.local, in-addr.arpa, ip6.arpa) — declines outright and calls the next plugin." };
+      case "loop":
+        return { status: "pass", note: "Checks whether this query looks like a forwarding loop back to this same CoreDNS instance. Not the case here, so it calls the next plugin." };
+      case "forward":
+        return { status: "answer", note: "Nothing earlier in the chain claimed or answered this name, so it's forwarded verbatim to the resolver in /etc/resolv.conf and the reply is relayed back.", response: "A " + q.ip + " (from upstream)", terminal: true };
+      default:
+        return { status: "pass", note: "" };
+    }
+  }
+
+  function showResult(kind, text) {
+    resultEl.className = "cd-result show " + (kind === "nxdomain" ? "nxdomain" : "answer");
+    resultEl.textContent = text;
+  }
+
+  stepBtn.addEventListener("click", function () {
+    if (resolved || stepIndex >= chainOrder.length) return;
+    var q = queries[currentKey];
+    var key = chainOrder[stepIndex];
+    var card = document.getElementById("cdPlugin-" + key);
+    var note = document.getElementById("cdNote-" + key);
+    var outcome = decide(key, q);
+
+    card.classList.add("active");
+    note.textContent = outcome.note;
+
+    if (outcome.status === "answer" || outcome.status === "nxdomain") {
+      card.classList.remove("active");
+      card.classList.add(outcome.status === "answer" ? "st-answer" : "st-nxdomain");
+      resolved = true;
+      if (!q.cached) q.cached = true;
+      showResult(outcome.status, (outcome.status === "answer" ? "ANSWER: " : "") + outcome.response);
+      // Mark remaining plugins as not reached.
+      for (var i = stepIndex + 1; i < chainOrder.length; i++) {
+        document.getElementById("cdPlugin-" + chainOrder[i]).classList.add("st-notreached");
+      }
+      stepBtn.disabled = true;
+      stepBtn.textContent = "Query resolved";
+      renderQueries();
+    } else {
+      card.classList.remove("active");
+      card.classList.add(outcome.status === "skip" ? "st-skip" : "st-pass");
+      stepIndex++;
+    }
+    updateStatus();
+  });
+
+  resetBtn.addEventListener("click", resetChain);
+
+  flushBtn.addEventListener("click", function () {
+    Object.keys(queries).forEach(function (key) { queries[key].cached = false; });
+    resetChain();
+  });
+
+  resetChain();
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
