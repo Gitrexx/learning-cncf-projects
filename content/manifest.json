@@ -120,7 +120,7 @@
       "summary": "The de facto metrics & alerting system: pull scraping, labels, PromQL.",
       "prerequisites": [],
       "file": "prometheus.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "opentelemetry",

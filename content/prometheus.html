@@ -1,0 +1,581 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Prometheus — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the PromQL query-builder widget. ---- */
+  .pq-queries {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-4);
+  }
+  .pq-query-btn {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    text-align: left;
+    justify-content: flex-start;
+    white-space: normal;
+    line-height: 1.4;
+  }
+  .pq-query-btn.selected {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+    color: var(--text);
+  }
+  .pq-explain {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    margin-bottom: var(--sp-4);
+  }
+  .pq-chart-wrap {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: var(--sp-3);
+    margin-bottom: var(--sp-3);
+  }
+  .pq-chart-wrap svg { display: block; width: 100%; height: auto; }
+  .pq-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-4);
+    font-size: var(--fs-xs);
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    margin-bottom: var(--sp-4);
+  }
+  .pq-legend-item { display: flex; align-items: center; gap: 0.4em; }
+  .pq-swatch { width: 0.9em; height: 0.9em; border-radius: 2px; display: inline-block; }
+  .pq-calc {
+    background: color-mix(in srgb, var(--cloud-cyan) 8%, var(--surface));
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--cloud-cyan);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    line-height: 1.7;
+  }
+  .pq-calc .result {
+    color: var(--cloud-cyan-deep);
+    font-weight: 700;
+  }
+  .pq-bucket-hi rect { fill: color-mix(in srgb, var(--cloud-cyan) 55%, var(--surface)) !important; }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Observability · Sub-topic 11 / 36</p>
+  <h1>Prometheus</h1>
+  <p class="lead">
+    Prometheus is the reason "labels" and "PromQL" are now the default vocabulary for talking about
+    metrics in cloud-native systems. It's a metrics collection, storage, and alerting system built
+    around one contrarian idea for its era: instead of every service <em>pushing</em> its numbers
+    somewhere, Prometheus <em>pulls</em> — it walks over to each target on a schedule and scrapes a
+    plain-text HTTP endpoint. That single design choice, paired with a dimensional data model and its
+    own query language, is what makes Prometheus fit Kubernetes so naturally that it became the
+    de facto monitoring layer for the entire ecosystem.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Prometheus was the <strong>second project ever</strong> to reach CNCF Graduated status, in
+    August 2018 — right after Kubernetes itself. It was created at SoundCloud in 2012, inspired by
+    Google's internal <span class="term" title="Borgmon: Google's internal monitoring system for Borg, the predecessor to Kubernetes, which pioneered the pull-based, label-based approach Prometheus later popularized outside Google.">Borgmon</span>
+    system. Today it's less "a tool you install" and more "a data model and protocol" — the
+    <code>/metrics</code> text-exposition format and PromQL are implemented or ingested by most
+    observability vendors (Datadog, Grafana Cloud, AWS Managed Prometheus, and more), and the
+    Kubernetes API server, kubelet, etcd, CoreDNS, and Envoy all expose Prometheus-format metrics
+    out of the box.
+  </div>
+
+  <h2>The problem: push-based monitoring didn't fit a dynamic cluster</h2>
+  <p>
+    Before Prometheus, the common pattern (StatsD, Graphite) was <strong>push</strong>: each
+    application process actively sends its metrics to a central collector, usually over UDP, on its
+    own schedule. That works fine for a static fleet of long-lived hosts, but it breaks down as
+    infrastructure gets more dynamic. The collector has no way to tell "no data because the service
+    is idle" from "no data because the service crashed, or the network dropped the packets" —
+    UDP pushes are fire-and-forget. And every application needs to know, and keep up to date, the
+    address of wherever the collector currently lives.
+  </p>
+  <p>
+    Kubernetes made this worse: Pods are ephemeral, rescheduled, IP addresses churn constantly. A
+    pull-based system inverts the relationship — the monitoring system already needs to discover
+    what's running (via the Kubernetes API, exactly like <code>kube-proxy</code> or an Ingress
+    controller would), so it can use that same discovery to know what to scrape. And a failed scrape
+    is itself a first-class, unambiguous signal: <code>up == 0</code> tells you precisely that a
+    target didn't answer, at a precise timestamp — no guessing about whether "silence" means healthy
+    or dead.
+  </p>
+
+  <h2>The data model: a metric name plus a set of labels</h2>
+  <p>
+    Every time series in Prometheus is uniquely identified by a <strong>metric name</strong> plus a
+    set of key/value <strong>labels</strong> — for example
+    <code>http_requests_total{method="GET", path="/api/orders", status="200"}</code>. Each distinct
+    combination of label values is its own independent time series internally; this is the
+    <span class="term" title="A data model where a measurement is described by orthogonal key/value dimensions (labels) rather than by encoding everything into the metric name itself (e.g. Graphite's dotted-path style: api.orders.get.200).">dimensional data model</span>,
+    and it's what lets PromQL slice, filter, and re-aggregate along any of those dimensions later,
+    instead of committing to one hierarchy up front like Graphite's dotted metric names did.
+  </p>
+  <p>Prometheus has four metric types, and which one a metric is changes what queries make sense on it:</p>
+  <table>
+    <thead><tr><th>Type</th><th>Behavior</th><th>Typical query</th></tr></thead>
+    <tbody>
+      <tr><td><code>counter</code></td><td>Only ever increases, or resets to 0 on restart</td><td><code>rate()</code>, <code>increase()</code> — never the raw value</td></tr>
+      <tr><td><code>gauge</code></td><td>Goes up and down freely (memory used, queue depth)</td><td>Graph the raw value, or <code>avg_over_time()</code></td></tr>
+      <tr><td><code>histogram</code></td><td>Cumulative per-bucket counts of observed values, plus a <code>_sum</code>/<code>_count</code></td><td><code>histogram_quantile()</code> over <code>rate()</code> of the buckets</td></tr>
+      <tr><td><code>summary</code></td><td>Client-side pre-calculated quantiles (not aggregatable across instances)</td><td>Read the quantile directly; largely superseded by histograms</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Architecture: scrape, store, query, alert</h2>
+  <p>
+    The Prometheus <strong>server</strong> is a single binary with three main jobs. Its
+    <strong>retrieval</strong> component reads a scrape configuration, resolves target lists via a
+    <span class="term" title="A pluggable mechanism for finding scrape targets dynamically — Kubernetes SD watches the API server for Pods/Services/Endpoints; other integrations cover EC2, Consul, DNS, file-based SD, and more.">service discovery</span>
+    integration (for Kubernetes: the <code>kubernetes_sd_config</code>, which watches Pods, Services,
+    and Endpoints via the API server, the same watch mechanism a controller uses), applies
+    <strong>relabeling</strong> rules to keep or drop/rename targets and labels, then issues an HTTP
+    GET to each target's <code>/metrics</code> endpoint on a fixed interval (commonly 15–30s) and
+    parses the plain-text exposition format. Its <strong>storage</strong> component is a custom local
+    time-series database (the TSDB, below). Its <strong>HTTP server</strong> exposes the PromQL
+    query API (used by the built-in expression browser, Grafana, or anything else) and evaluates
+    configured recording and alerting rules on a schedule.
+  </p>
+  <p>
+    Two companion pieces round out the model. <strong>Exporters</strong> are small adapter processes
+    that translate a system's native stats into Prometheus format when the system itself doesn't
+    speak it — <code>node_exporter</code> for host/kernel metrics, <code>kube-state-metrics</code>
+    for the state of Kubernetes objects, and hundreds more for databases, queues, and hardware. The
+    <strong>Pushgateway</strong> is the deliberate escape hatch for the one case pull doesn't fit:
+    short-lived batch jobs that finish before a scrape would ever catch them — they push their final
+    metrics to the Pushgateway once, and Prometheus scrapes <em>that</em> on its normal schedule.
+    <strong>Alertmanager</strong> is a separate process the server forwards firing alerts to; it
+    owns grouping, deduplication, silencing, inhibition, and routing to Slack/PagerDuty/email — kept
+    deliberately out of the server so alert delivery survives a Prometheus restart.
+  </p>
+
+  <figure>
+    <div class="row" style="justify-content:center; gap: var(--sp-3); font-family: var(--font-mono); font-size: var(--fs-sm); flex-wrap: wrap;">
+      <span class="badge">Kubernetes API (SD)</span><span class="muted">→</span>
+      <span class="badge">Prometheus retrieval</span><span class="muted">⇄ scrape →</span>
+      <span class="badge">targets /metrics</span>
+    </div>
+    <div class="row" style="justify-content:center; gap: var(--sp-3); font-family: var(--font-mono); font-size: var(--fs-sm); flex-wrap: wrap; margin-top: var(--sp-3);">
+      <span class="badge">Prometheus retrieval</span><span class="muted">→</span>
+      <span class="badge">TSDB (WAL + blocks)</span><span class="muted">→</span>
+      <span class="badge">PromQL engine / HTTP API</span><span class="muted">→</span>
+      <span class="badge">Grafana / rules</span>
+    </div>
+    <div class="row" style="justify-content:center; gap: var(--sp-3); font-family: var(--font-mono); font-size: var(--fs-sm); flex-wrap: wrap; margin-top: var(--sp-3);">
+      <span class="badge">alerting rules</span><span class="muted">→ firing →</span>
+      <span class="badge">Alertmanager</span><span class="muted">→ routed →</span>
+      <span class="badge">Slack / PagerDuty / email</span>
+    </div>
+    <figcaption>Discovery feeds retrieval; retrieval feeds storage and rule evaluation; alerts hand off to a separate Alertmanager.</figcaption>
+  </figure>
+
+  <h2>Storage: an append-only local TSDB, not a general database</h2>
+  <p>
+    Prometheus's <span class="term" title="Time-Series Database — storage purpose-built for timestamped numeric samples with label sets as the primary key, as opposed to a general-purpose relational or document store.">TSDB</span>
+    is local to each server and optimized for one access pattern: many small samples, appended
+    in roughly time order, queried mostly by recent range. Incoming samples land first in the
+    <strong>head block</strong>, an in-memory structure (default 2-hour window) that also gets
+    written to a <strong>write-ahead log (WAL)</strong> on disk as a crash-recovery journal — if
+    Prometheus restarts, it replays the WAL to rebuild the head instead of losing the last two hours.
+    Once the head's window is exceeded, its data is <strong>compacted</strong> into an immutable
+    on-disk <strong>block</strong>: a directory containing compressed sample <strong>chunks</strong>
+    and an <strong>index</strong> mapping label combinations to the chunks that hold their samples.
+    Background compaction later merges adjacent small blocks into progressively larger ones (up to
+    ~10% of total retention), which is why old data takes less disk overhead per sample than fresh
+    data. This design is exactly why a single Prometheus server doesn't horizontally scale on its
+    own — it's <strong>why</strong> systems like Thanos, Cortex, and Mimir exist: they sit on top of
+    this same block format for durable, multi-cluster, long-term storage.
+  </p>
+
+  <h2>PromQL: selecting, ranging, and aggregating</h2>
+  <p>
+    A bare metric name like <code>http_requests_total</code> is an <strong>instant vector</strong> —
+    one current value per matching time series. Adding a duration in brackets,
+    <code>http_requests_total[1m]</code>, turns it into a <strong>range vector</strong> — the raw
+    samples from the last minute for each series, which most functions consume as input. The
+    single most important function is <code>rate(counter[range])</code>: the per-second average
+    increase of a counter over that range. Because counters reset to zero on a process restart,
+    <code>rate()</code> specifically watches for a value going <em>down</em> between samples and, on
+    detecting one, assumes the counter restarted from zero and adds the post-reset value back into
+    the increase — so a restart shows up as a brief, correct rate rather than an absurd negative
+    number. Aggregation operators like <code>sum(...) by (job)</code> collapse many series down to
+    fewer, keeping only the listed labels — the standard way to go from "rate per Pod instance" to
+    "rate per service." <code>histogram_quantile()</code> takes cumulative bucket counts (the
+    <code>le</code> — "less than or equal" — label on a histogram's <code>_bucket</code> series) and
+    linearly interpolates within the bucket that contains the target rank to estimate a percentile
+    like p90 latency.
+  </p>
+
+  <h2>Try it: build a PromQL query and watch the result</h2>
+  <p>
+    Below is a small synthetic dataset: a raw counter scraped every 15s from two instances of the
+    same job (instance <code>10.0.0.1</code> restarts partway through — watch what <code>rate()</code>
+    does with that), plus a separate histogram's bucket counts. Pick a query to see what it computes.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">PromQL query builder</div>
+
+    <div class="pq-queries" id="pqQueries"></div>
+    <p class="pq-explain" id="pqExplain"></p>
+
+    <div class="pq-chart-wrap">
+      <svg id="pqSvg" viewBox="0 0 640 260" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+    <div class="pq-legend" id="pqLegend"></div>
+    <div class="pq-calc" id="pqCalc" style="display:none;"></div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">What to notice</span>
+    Step 1: the raw counter view shows <code>10.0.0.1:9100</code> visibly drop mid-series — that's
+    a process restart. Step 2: switch to <code>rate()</code> and that same drop turns into a normal,
+    smooth per-second rate — no negative number, no gap. Step 3: <code>sum(...) by (job)</code>
+    collapses both instances into one line — you lose per-instance detail but gain "how fast is this
+    whole job serving requests." Step 4: the histogram view highlights exactly which bucket the 90th
+    percentile falls into and shows the interpolation math that turns bucket counts into a latency
+    estimate.
+  </div>
+
+  <h2>Alerting rules and Alertmanager</h2>
+  <p>
+    <strong>Recording rules</strong> precompute and save a frequently-needed or expensive PromQL
+    expression under a new metric name on a schedule, so dashboards query the cheap precomputed
+    series instead of recalculating it every time. <strong>Alerting rules</strong> are the same idea
+    aimed at a boolean condition (a query that returns any series at all means the alert is active);
+    when one has been true continuously for its configured <code>for</code> duration, Prometheus
+    marks it <strong>firing</strong> and pushes it to Alertmanager. Alertmanager then <strong>groups</strong>
+    related alerts into one notification (e.g. one Slack message for "23 Pods down" instead of 23
+    pages), applies <strong>inhibition</strong> (suppress "high latency" once "service down" is
+    already firing for the same service — the second is just a symptom of the first), honors any
+    active <strong>silences</strong> (a maintenance window someone declared), and finally routes the
+    result to the right receiver by label match.
+  </p>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    Prometheus graduated on the strength of being independently reinvented at nearly every large
+    engineering org before it existed as shared software — the pull model, dimensional labels, and
+    a purpose-built query language solved a problem everyone running dynamic infrastructure actually
+    had. You'll meet it as the metrics backbone underneath most Kubernetes clusters (frequently paired
+    with Grafana for dashboards), as the API that Horizontal Pod Autoscalers and KEDA can scale on via
+    the Prometheus Adapter, and as the ingestion target that most CNCF projects (Envoy, Istio, Cilium,
+    CoreDNS, etcd) expose natively. It's still actively evolving: <strong>Prometheus 3.0</strong>
+    (November 2024) stabilized <span class="term" title="A newer histogram representation using exponential bucket boundaries computed from the data itself, far more compact and precise than manually chosen static buckets, and now scrapeable as a stable feature.">native histograms</span>,
+    added a new default web UI, support for UTF-8 metric and label names, and — notably — the ability
+    to natively ingest <strong>OTLP</strong> (OpenTelemetry's wire protocol), plus a more efficient
+    <strong>Remote Write 2.0</strong> protocol for shipping data to long-term storage backends.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>Grafana</strong> is a visualization layer that queries Prometheus (among many other
+    sources) — it has no scraper and no TSDB of its own, and doesn't compete with Prometheus so much
+    as sit on top of it. <strong>OpenTelemetry</strong> standardizes how applications are
+    <em>instrumented</em> and how telemetry is transported (via the OTel Collector); it's
+    complementary, not competing — an OTel Collector can export metrics into Prometheus format, and
+    Prometheus 3.0 can now ingest OTLP directly. <strong>Thanos, Cortex, and Mimir</strong> are
+    separate systems built <em>on top of</em> Prometheus's data model and block storage format to
+    add horizontal scale, multi-cluster global querying, and long-term retention — they extend
+    Prometheus, they don't replace it. <strong>StatsD and Graphite</strong> are the older, push-based
+    predecessors Prometheus was designed as a reaction against.
+  </div>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. Why does Prometheus's pull-based scrape model fit Kubernetes especially well?</p>
+      <button class="quiz-option" data-val="a">Pulling uses less network bandwidth than pushing, in every case.</button>
+      <button class="quiz-option" data-val="b">Prometheus can reuse Kubernetes's own service discovery (the API server's view of Pods/Services) to find scrape targets, and a failed scrape is an unambiguous "target is down" signal rather than silent missing data.</button>
+      <button class="quiz-option" data-val="c">Kubernetes only supports pull-based protocols for any traffic.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">2. A counter resets to 0 when its process restarts mid-window. What does <code>rate()</code> do about that?</p>
+      <button class="quiz-option" data-val="a">It detects the value decreased between samples, assumes a counter reset, and adds the post-reset value back into the increase estimate — so the computed rate stays sane instead of going negative.</button>
+      <button class="quiz-option" data-val="b">It returns a negative rate to accurately reflect the drop in the raw value.</button>
+      <button class="quiz-option" data-val="c">It silently drops that time series from the query result entirely.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">3. Why would you use <code>rate()</code> on a counter but never on a gauge?</p>
+      <button class="quiz-option" data-val="a">Gauges are stored in a different database than counters.</button>
+      <button class="quiz-option" data-val="b">rate() only works on metrics with the word "total" in the name.</button>
+      <button class="quiz-option" data-val="c">A counter only ever increases (or resets to zero), so its raw value isn't meaningful on its own — rate() turns "cumulative count" into "how fast." A gauge already goes up and down freely, so you graph its raw value directly.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var labels = ["t0","t1","t2","t3","t4","t5","t6","t7","t8","t9"];
+  var seriesA = [0,14,29,44,7,19,33,47,60,75];   // instance 10.0.0.1:9100 — restarts between t3 and t4
+  var seriesB = [0,9,20,29,41,50,62,71,83,95];   // instance 10.0.0.2:9100 — steady
+
+  var colorA = "#5b8bf0";
+  var colorB = "#2fcada";
+  var colorSum = "#7c5cde";
+
+  function computeRate(values) {
+    // Returns array aligned to values[1..n-1]; null at index 0.
+    var out = [null];
+    for (var i = 1; i < values.length; i++) {
+      var delta = values[i] - values[i - 1];
+      if (delta < 0) delta = values[i]; // counter reset: treat prior value as 0
+      out.push(delta / 15); // 15s scrape interval -> per-second rate
+    }
+    return out;
+  }
+
+  var rateA = computeRate(seriesA);
+  var rateB = computeRate(seriesB);
+  var sumRate = rateA.map(function (v, i) {
+    return (v === null || rateB[i] === null) ? null : v + rateB[i];
+  });
+
+  var buckets = [
+    { le: "0.1", count: 10 },
+    { le: "0.5", count: 25 },
+    { le: "1",   count: 38 },
+    { le: "+Inf",count: 40 }
+  ];
+
+  var queries = [
+    {
+      key: "raw",
+      expr: "http_requests_total",
+      explain: "An instant vector: the current raw counter value per instance. Notice 10.0.0.1:9100 drops at t4 — the process restarted and the counter reset to (near) zero.",
+      type: "lines",
+      series: [
+        { label: "instance=\"10.0.0.1:9100\"", color: colorA, values: seriesA },
+        { label: "instance=\"10.0.0.2:9100\"", color: colorB, values: seriesB }
+      ]
+    },
+    {
+      key: "rate",
+      expr: "rate(http_requests_total[1m])",
+      explain: "Per-second rate of increase, per instance. The reset at t4 no longer produces a negative or nonsensical value — rate() detected the drop and treated the post-reset value as new growth from zero.",
+      type: "lines",
+      series: [
+        { label: "instance=\"10.0.0.1:9100\"", color: colorA, values: rateA },
+        { label: "instance=\"10.0.0.2:9100\"", color: colorB, values: rateB }
+      ]
+    },
+    {
+      key: "sum",
+      expr: "sum(rate(http_requests_total[1m])) by (job)",
+      explain: "Both instances share job=\"api\", so aggregating by (job) collapses two per-instance rate series into one combined line — total requests/sec for the whole job, independent of how many replicas are running.",
+      type: "lines",
+      series: [
+        { label: "job=\"api\" (summed)", color: colorSum, values: sumRate }
+      ]
+    },
+    {
+      key: "hist",
+      expr: "histogram_quantile(0.9, sum(rate(http_request_duration_seconds_bucket[1m])) by (le))",
+      explain: "Cumulative per-second bucket counts for one job's latency histogram. The 90th-percentile rank (0.9 × total) falls inside one bucket; histogram_quantile linearly interpolates between that bucket's lower and upper bounds.",
+      type: "hist"
+    }
+  ];
+
+  var queriesEl = document.getElementById("pqQueries");
+  var explainEl = document.getElementById("pqExplain");
+  var svg = document.getElementById("pqSvg");
+  var legendEl = document.getElementById("pqLegend");
+  var calcEl = document.getElementById("pqCalc");
+
+  var currentKey = "raw";
+
+  function renderButtons() {
+    queriesEl.innerHTML = "";
+    queries.forEach(function (q) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn ghost pq-query-btn" + (q.key === currentKey ? " selected" : "");
+      btn.textContent = q.expr;
+      btn.addEventListener("click", function () {
+        currentKey = q.key;
+        render();
+      });
+      queriesEl.appendChild(btn);
+    });
+  }
+
+  var NS = "http://www.w3.org/2000/svg";
+  function svgEl(tag, attrs) {
+    var el = document.createElementNS(NS, tag);
+    for (var k in attrs) el.setAttribute(k, attrs[k]);
+    return el;
+  }
+
+  var PAD_L = 44, PAD_R = 16, PAD_T = 16, PAD_B = 30;
+  var W = 640, H = 260;
+
+  function renderLineChart(seriesList) {
+    svg.innerHTML = "";
+    var allVals = [];
+    seriesList.forEach(function (s) {
+      s.values.forEach(function (v) { if (v !== null) allVals.push(v); });
+    });
+    var maxV = Math.max.apply(null, allVals.concat([0.001]));
+    var minV = Math.min(0, Math.min.apply(null, allVals));
+    var n = labels.length;
+    var innerW = W - PAD_L - PAD_R;
+    var innerH = H - PAD_T - PAD_B;
+
+    function x(i) { return PAD_L + (innerW * i) / (n - 1); }
+    function y(v) { return PAD_T + innerH - ((v - minV) / (maxV - minV || 1)) * innerH; }
+
+    // axis lines
+    svg.appendChild(svgEl("line", { x1: PAD_L, y1: PAD_T, x2: PAD_L, y2: PAD_T + innerH, stroke: "var(--border-strong)", "stroke-width": 1 }));
+    svg.appendChild(svgEl("line", { x1: PAD_L, y1: PAD_T + innerH, x2: PAD_L + innerW, y2: PAD_T + innerH, stroke: "var(--border-strong)", "stroke-width": 1 }));
+
+    // y-axis max/min labels
+    var maxLbl = svgEl("text", { x: PAD_L - 6, y: PAD_T + 4, "text-anchor": "end", "font-size": 10, fill: "var(--text-faint)", "font-family": "var(--font-mono)" });
+    maxLbl.textContent = maxV.toFixed(1);
+    svg.appendChild(maxLbl);
+    var minLbl = svgEl("text", { x: PAD_L - 6, y: PAD_T + innerH + 4, "text-anchor": "end", "font-size": 10, fill: "var(--text-faint)", "font-family": "var(--font-mono)" });
+    minLbl.textContent = minV.toFixed(1);
+    svg.appendChild(minLbl);
+
+    // x labels (every other tick to avoid crowding)
+    labels.forEach(function (lbl, i) {
+      if (i % 2 !== 0) return;
+      var t = svgEl("text", { x: x(i), y: PAD_T + innerH + 18, "text-anchor": "middle", "font-size": 10, fill: "var(--text-faint)", "font-family": "var(--font-mono)" });
+      t.textContent = lbl;
+      svg.appendChild(t);
+    });
+
+    seriesList.forEach(function (s) {
+      var pts = [];
+      s.values.forEach(function (v, i) {
+        if (v === null) return;
+        pts.push(x(i) + "," + y(v));
+      });
+      svg.appendChild(svgEl("polyline", { points: pts.join(" "), fill: "none", stroke: s.color, "stroke-width": 2.5 }));
+      s.values.forEach(function (v, i) {
+        if (v === null) return;
+        svg.appendChild(svgEl("circle", { cx: x(i), cy: y(v), r: 3, fill: s.color }));
+      });
+    });
+  }
+
+  function renderLegend(seriesList) {
+    legendEl.innerHTML = "";
+    seriesList.forEach(function (s) {
+      var item = document.createElement("div");
+      item.className = "pq-legend-item";
+      item.innerHTML = "<span class=\"pq-swatch\" style=\"background:" + s.color + "\"></span>" + s.label;
+      legendEl.appendChild(item);
+    });
+  }
+
+  function renderHistogram() {
+    svg.innerHTML = "";
+    legendEl.innerHTML = "";
+    var total = buckets[buckets.length - 1].count;
+    var target = 0.9 * total;
+
+    // find bucket containing target
+    var lowIdx = -1;
+    for (var i = 0; i < buckets.length; i++) {
+      if (buckets[i].count >= target) { lowIdx = i; break; }
+    }
+    var lowerBound = lowIdx === 0 ? 0 : parseFloat(buckets[lowIdx - 1].le);
+    var upperBound = buckets[lowIdx].le === "+Inf" ? parseFloat(buckets[lowIdx - 1].le) : parseFloat(buckets[lowIdx].le);
+    var lowerCount = lowIdx === 0 ? 0 : buckets[lowIdx - 1].count;
+    var upperCount = buckets[lowIdx].count;
+    var frac = (target - lowerCount) / (upperCount - lowerCount);
+    var quantile = lowerBound + frac * (upperBound - lowerBound);
+
+    var innerW = W - PAD_L - PAD_R;
+    var innerH = H - PAD_T - PAD_B;
+    var n = buckets.length;
+    var barW = innerW / n * 0.55;
+
+    function bx(i) { return PAD_L + (innerW * (i + 0.5)) / n; }
+    function by(v) { return PAD_T + innerH - (v / total) * innerH; }
+
+    svg.appendChild(svgEl("line", { x1: PAD_L, y1: PAD_T, x2: PAD_L, y2: PAD_T + innerH, stroke: "var(--border-strong)", "stroke-width": 1 }));
+    svg.appendChild(svgEl("line", { x1: PAD_L, y1: PAD_T + innerH, x2: PAD_L + innerW, y2: PAD_T + innerH, stroke: "var(--border-strong)", "stroke-width": 1 }));
+
+    // target rank guideline
+    var guideY = by(target);
+    svg.appendChild(svgEl("line", { x1: PAD_L, y1: guideY, x2: PAD_L + innerW, y2: guideY, stroke: "var(--signal-amber)", "stroke-width": 1, "stroke-dasharray": "4,3" }));
+    var guideLbl = svgEl("text", { x: PAD_L + innerW - 4, y: guideY - 4, "text-anchor": "end", "font-size": 10, fill: "var(--signal-amber)", "font-family": "var(--font-mono)" });
+    guideLbl.textContent = "0.9 × total = " + target.toFixed(1);
+    svg.appendChild(guideLbl);
+
+    buckets.forEach(function (b, i) {
+      var barH = (b.count / total) * innerH;
+      var rect = svgEl("rect", {
+        x: bx(i) - barW / 2, y: PAD_T + innerH - barH, width: barW, height: barH,
+        fill: i === lowIdx ? "var(--cloud-cyan)" : "var(--k8s-blue)", opacity: i === lowIdx ? 1 : 0.6, rx: 3
+      });
+      svg.appendChild(rect);
+      var lbl = svgEl("text", { x: bx(i), y: PAD_T + innerH + 18, "text-anchor": "middle", "font-size": 10, fill: "var(--text-faint)", "font-family": "var(--font-mono)" });
+      lbl.textContent = "le=\"" + b.le + "\"";
+      svg.appendChild(lbl);
+      var cnt = svgEl("text", { x: bx(i), y: PAD_T + innerH - barH - 6, "text-anchor": "middle", "font-size": 10, fill: "var(--text-muted)", "font-family": "var(--font-mono)" });
+      cnt.textContent = b.count;
+      svg.appendChild(cnt);
+    });
+
+    calcEl.style.display = "block";
+    calcEl.innerHTML =
+      "total (le=\"+Inf\") = " + total + "<br>" +
+      "target rank = 0.9 × " + total + " = " + target.toFixed(1) + "<br>" +
+      "falls between le=\"" + (lowIdx === 0 ? "0" : buckets[lowIdx - 1].le) + "\" (count " + lowerCount + ") and le=\"" + buckets[lowIdx].le + "\" (count " + upperCount + ")<br>" +
+      "fraction into bucket = (" + target.toFixed(1) + " − " + lowerCount + ") / (" + upperCount + " − " + lowerCount + ") = " + frac.toFixed(3) + "<br>" +
+      "quantile = " + lowerBound + " + " + frac.toFixed(3) + " × (" + upperBound + " − " + lowerBound + ") = <span class=\"result\">" + quantile.toFixed(3) + "s</span>";
+  }
+
+  function render() {
+    renderButtons();
+    var q = queries.filter(function (qq) { return qq.key === currentKey; })[0];
+    explainEl.textContent = q.explain;
+    if (q.type === "hist") {
+      renderHistogram();
+    } else {
+      calcEl.style.display = "none";
+      renderLineChart(q.series);
+      renderLegend(q.series);
+    }
+  }
+
+  render();
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
