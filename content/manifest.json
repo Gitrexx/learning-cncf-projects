@@ -130,7 +130,7 @@
       "summary": "The vendor-neutral standard for traces, metrics, and logs (graduated 2026).",
       "prerequisites": ["prometheus"],
       "file": "opentelemetry.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "jaeger",

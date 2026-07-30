@@ -1,0 +1,573 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OpenTelemetry — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the signal-pipeline builder widget. ---- */
+  .ot-row { margin-bottom: var(--sp-4); }
+  .ot-label {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-2);
+    display: block;
+  }
+  .ot-btn-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+  .ot-btn-row .btn.ghost {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+  }
+  .ot-btn-row .btn.ghost.selected {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+    color: var(--text);
+  }
+  .ot-check-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+  }
+  .ot-check {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    padding: var(--sp-2) var(--sp-4);
+    cursor: pointer;
+  }
+  .ot-check input { accent-color: var(--accent); }
+  .ot-run { margin-top: var(--sp-1); margin-bottom: var(--sp-5); }
+
+  .ot-pipeline {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    margin-bottom: var(--sp-4);
+  }
+  .ot-stage {
+    padding: 0.3em 0.8em;
+    border-radius: var(--r-pill);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-muted);
+  }
+  .ot-stage.pass  { border-color: color-mix(in srgb, var(--signal-green) 50%, var(--border)); color: var(--signal-green); background: color-mix(in srgb, var(--signal-green) 10%, var(--surface)); }
+  .ot-stage.drop  { border-color: color-mix(in srgb, var(--signal-red) 50%, var(--border)); color: var(--signal-red); background: color-mix(in srgb, var(--signal-red) 10%, var(--surface)); }
+  .ot-arrow { color: var(--text-faint); }
+
+  .ot-log {
+    max-height: 20rem;
+    overflow-y: auto;
+  }
+  .ot-log pre { margin: 0; }
+  .ot-log code { white-space: pre-wrap; }
+  .ot-log .step-head { color: var(--cloud-cyan-deep); font-weight: 700; }
+  .ot-log .step-drop { color: var(--signal-red); font-weight: 700; }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Observability · Sub-topic 12 / 36</p>
+  <h1>OpenTelemetry</h1>
+  <p class="lead">
+    By the mid-2010s, "observability" had a fragmentation problem: every vendor and language shipped
+    its own tracing SDK, its own metrics client, its own wire format, and switching backends meant
+    re-instrumenting every service by hand. OpenTelemetry (often shortened to <strong>OTel</strong>)
+    is the industry's answer — a single, vendor-neutral specification, set of APIs/SDKs, and a
+    standalone <strong>Collector</strong> process for generating, processing, and exporting the
+    three telemetry signals — <strong>traces, metrics, and logs</strong> — the same way regardless of
+    which backend eventually stores or displays them.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    OpenTelemetry formed in 2019 from the merger of two competing CNCF/Google efforts —
+    <strong>OpenTracing</strong> (a tracing API standard) and <strong>OpenCensus</strong> (Google's
+    combined tracing+metrics library) — under the thesis that the ecosystem needed one standard, not
+    two. It reached CNCF Graduated status in May 2026, and by contributor and commit volume it's
+    routinely cited as the <strong>second-most active CNCF project after Kubernetes itself</strong> —
+    a reflection of how much of the observability industry (Datadog, Grafana, Honeycomb, New Relic,
+    Splunk, and the cloud providers) now builds against its API and wire format instead of a
+    proprietary one.
+  </div>
+
+  <h2>The problem: N languages × M backends × your own instrumentation</h2>
+  <p>
+    Before a shared standard, adding tracing to a service meant picking a vendor's SDK and sprinkling
+    vendor-specific calls through your code. Move to a different tracing backend, or a different APM
+    vendor, and you re-instrument everything — the SDK calls, the context-propagation glue, all of it.
+    Worse, in a microservices system where one request crosses ten services possibly written in five
+    languages by five teams, get <em>any</em> of them using an incompatible tracing library and the
+    trace breaks at that hop — you can no longer follow one request end to end.
+  </p>
+  <p>
+    OpenTelemetry attacks this by separating three concerns that used to be bundled into one vendor
+    SDK: a <strong>stable API</strong> your code calls (so instrumented code never needs to change
+    when you change backends), an <strong>SDK</strong> that implements that API and decides how data
+    is processed and exported, and a portable wire protocol (<strong>OTLP</strong>) plus a standalone
+    <strong>Collector</strong> process that can receive, transform, and re-export telemetry without
+    the application knowing or caring where it ultimately lands.
+  </p>
+
+  <h2>Three signals, one shared foundation</h2>
+  <p>
+    All three signals attach to the same underlying primitives so they can be correlated, not just
+    collected side by side.
+  </p>
+  <table>
+    <thead><tr><th>Signal</th><th>Unit of data</th><th>What it answers</th></tr></thead>
+    <tbody>
+      <tr><td>Traces</td><td><strong>Span</strong> — a named operation with a start/end time, attributes, and a parent-child link to other spans</td><td>What happened, across which services, in what order, and where did the time go?</td></tr>
+      <tr><td>Metrics</td><td><strong>Data point</strong> — a number (counter, gauge, histogram) with attributes, aggregated over time</td><td>How much / how often / how fast, in aggregate, over a window?</td></tr>
+      <tr><td>Logs</td><td><strong>Log record</strong> — a timestamped body plus attributes, optionally carrying a trace/span ID</td><td>What exactly happened at this one instant, in detail?</td></tr>
+    </tbody>
+  </table>
+  <p>
+    Every piece of telemetry is tagged with a shared <span class="term" title="A Resource describes the entity producing telemetry — service.name, service.version, the Kubernetes Pod/Namespace, the cloud region — attached once per process and carried on every span, metric, and log it emits.">Resource</span>
+    (which process/service/Pod produced it) and uses standardized <span class="term" title="Semantic conventions are OTel's naming standard for common attributes — http.route, db.system, k8s.pod.name, and hundreds more — so a span from a Java service and a span from a Go service use the exact same attribute key for 'the HTTP route', and any backend can build dashboards without per-language mapping tables.">semantic conventions</span>
+    for attribute names, so a Go service's <code>http.route</code> means exactly the same thing as a
+    Java service's. The killer feature this enables: a log line can carry the <code>trace_id</code> of
+    the request it happened during, so you can jump straight from "this specific error log" to "the
+    full distributed trace it occurred in" — something three separate, uncorrelated tools could never
+    do.
+  </p>
+
+  <h2>Context propagation: how one trace survives crossing services</h2>
+  <p>
+    A trace only stays connected across a network hop if the receiving service knows which trace and
+    which parent span it belongs to. OpenTelemetry does this with the
+    <span class="term" title="A W3C standard (not OTel-specific) HTTP header: traceparent: 00-{32 hex trace-id}-{16 hex parent span-id}-{2 hex flags}. Because it's a W3C spec, not a proprietary header, any compliant tracing system — not just OTel — can participate in the same trace.">W3C Trace Context</span>
+    standard: an outgoing request carries a <code>traceparent</code> header encoding the trace ID,
+    the calling span's ID, and sampling flags; the receiving service's instrumentation reads that
+    header, creates its own span as a <em>child</em> of the one named in the header, and forwards the
+    (updated) header to whatever it calls next. In-process, this same information rides on a
+    language-native <strong>Context</strong> object that auto-instrumentation threads through
+    async boundaries so you don't have to. A companion mechanism, <strong>Baggage</strong>, lets you
+    propagate arbitrary key-value pairs (a tenant ID, a feature flag) alongside the trace context to
+    every downstream service, independent of what gets exported as telemetry.
+  </p>
+
+  <h2>Architecture: instrument once, route data through a Collector</h2>
+  <p>
+    Application code depends only on the <strong>API</strong> (a stable interface with no
+    implementation) — this is what makes instrumented libraries portable regardless of which backend
+    a given deployment eventually chooses. At startup, the process wires in an <strong>SDK</strong>
+    (the concrete implementation) configured with processors and exporters, or uses
+    <strong>auto-instrumentation</strong> (a Java agent, a Python/Node loader, or eBPF-based
+    instrumentation) to generate telemetry for common frameworks with zero code changes. Telemetry
+    typically doesn't go straight to a backend — it's sent over <strong>OTLP</strong> (OpenTelemetry
+    Protocol, over gRPC or HTTP) to the <strong>OpenTelemetry Collector</strong>: a standalone,
+    vendor-agnostic process that decouples "what my app emits" from "where it ends up."
+  </p>
+  <p>
+    A Collector is configured as one or more pipelines, each a chain of three component kinds:
+  </p>
+  <ul>
+    <li><strong>Receivers</strong> — how data gets in: an OTLP receiver (the default), or receivers
+      that scrape/pull from other systems entirely (a Prometheus-format scrape receiver, a Jaeger
+      receiver for legacy clients), so the Collector can absorb telemetry that never spoke OTLP.</li>
+    <li><strong>Processors</strong> — transform data in flight: <code>batch</code> (buffer and flush
+      in bulk instead of one network call per span), <code>attributes</code> (insert, rename, or
+      redact fields — a common place to strip PII or stamp <code>deployment.environment</code>),
+      <code>filter</code> (drop telemetry matching a rule, e.g. noisy health-check spans), and
+      <code>memory_limiter</code> (protect the Collector itself from an ingestion spike).</li>
+    <li><strong>Exporters</strong> — how data leaves: to Jaeger, to Prometheus (remote-write or as a
+      scrape target), to a commercial backend's OTLP endpoint, or just to stdout for debugging.</li>
+  </ul>
+  <p>
+    Collectors are deployed in two common shapes: as an <strong>agent</strong> (a sidecar or
+    per-node DaemonSet, close to the workload, doing light processing) forwarding to a
+    <strong>gateway</strong> Collector (a central deployment doing heavier processing, sampling, and
+    fan-out to one or more backends) — or as a single Collector doing both jobs in smaller setups.
+  </p>
+
+  <figure>
+    <div class="row" style="justify-content:center; gap: var(--sp-3); font-family: var(--font-mono); font-size: var(--fs-sm); flex-wrap: wrap;">
+      <span class="badge">app + SDK / auto-instrumentation</span><span class="muted">— OTLP →</span>
+      <span class="badge">Collector: receiver</span><span class="muted">→</span>
+      <span class="badge">processors (batch, attributes, filter)</span>
+    </div>
+    <div class="row" style="justify-content:center; gap: var(--sp-3); font-family: var(--font-mono); font-size: var(--fs-sm); flex-wrap: wrap; margin-top: var(--sp-3);">
+      <span class="badge">processors</span><span class="muted">→</span>
+      <span class="badge">Collector: exporter</span><span class="muted">→</span>
+      <span class="badge">Jaeger / Prometheus / vendor backend</span>
+    </div>
+    <figcaption>The app never talks to the backend directly — the Collector pipeline sits in between and can be reconfigured without touching app code.</figcaption>
+  </figure>
+
+  <h2>Try it: build a Collector pipeline and watch data flow through it</h2>
+  <p>
+    Pick a signal and a sample event, choose which processors are enabled, pick an exporter, then run
+    it. Try enabling the <code>filter</code> processor with the "noisy" sample selected — it's
+    configured with a rule that matches and drops that one.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">OTel Collector pipeline builder</div>
+
+    <div class="ot-row">
+      <span class="ot-label">1. Signal</span>
+      <div class="ot-btn-row" id="otSignals"></div>
+    </div>
+
+    <div class="ot-row">
+      <span class="ot-label">2. Sample event</span>
+      <div class="ot-btn-row" id="otSamples"></div>
+    </div>
+
+    <div class="ot-row">
+      <span class="ot-label">3. Processors (in this fixed order)</span>
+      <div class="ot-check-row" id="otProcessors"></div>
+    </div>
+
+    <div class="ot-row">
+      <span class="ot-label">4. Exporter</span>
+      <div class="ot-btn-row" id="otExporters"></div>
+    </div>
+
+    <button class="btn ot-run" id="otRun" type="button">Send through pipeline →</button>
+
+    <div class="ot-pipeline" id="otPipeline"></div>
+
+    <div class="ot-log">
+      <pre><code id="otLog">Configure the pipeline above, then click "Send through pipeline".</code></pre>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">What to notice</span>
+    Switch the signal to <strong>Logs</strong> and run the "normal" sample: the log record carries a
+    <code>trace_id</code> matching the trace sample's ID — that shared field is the whole mechanism
+    behind "jump from this error log straight to its distributed trace." Then switch to
+    <strong>Traces</strong>, pick the "noisy" sample, and enable the <code>filter</code> processor:
+    the pipeline visualization shows the record stopping dead at the filter stage — it never reaches
+    <code>batch</code> or the exporter, exactly as a real Collector would drop unwanted health-check
+    or readiness-probe telemetry before it costs you ingestion volume downstream.
+  </div>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    OpenTelemetry graduated on the strength of near-universal adoption as the instrumentation layer
+    underneath the rest of observability — it doesn't compete with backends, it feeds them. Every
+    major cloud provider and observability vendor now ships or ingests OTLP natively; language
+    ecosystems ship official OTel SDKs; and Kubernetes-adjacent projects increasingly assume it as the
+    default telemetry path rather than a bolt-on. You'll meet it as the Collector sitting between
+    workloads and Prometheus/Jaeger/a vendor backend, as the auto-instrumentation agent injected by an
+    Operator or admission webhook with zero app changes, and — directly relevant to what's next on
+    this roadmap — as the foundation <strong>Jaeger</strong> itself now runs on: Jaeger v2 is built as
+    a distribution of the OpenTelemetry Collector, with tracing storage as one of its exporters.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>Jaeger</strong> is a tracing <em>backend</em> — storage plus a UI for viewing traces; it
+    consumes telemetry that OpenTelemetry standardizes how to generate and ship, and its current
+    architecture is literally an OTel Collector under the hood. <strong>Prometheus</strong> owns
+    metrics storage and PromQL; OpenTelemetry standardizes how metrics are <em>produced</em> and
+    <em>transported</em> upstream of it — Prometheus 3.0 can ingest OTLP directly, and a Collector's
+    Prometheus exporter can expose a scrape endpoint either way. <strong>Fluentd</strong> is a
+    logging-specific collector with its own routing model, predating OTel's logs signal; OTel's log
+    support is newer but adds the trace/span correlation Fluentd alone doesn't have. OpenTelemetry
+    itself stores nothing and renders no UI — it is instrumentation and transport, not a backend.
+  </div>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. Why does application code depend only on OpenTelemetry's API, not directly on a specific backend's SDK?</p>
+      <button class="quiz-option" data-val="a">Because the API is faster at runtime than any SDK could be.</button>
+      <button class="quiz-option" data-val="b">So instrumented code never has to change when you switch backends or exporters — only the SDK/Collector configuration wired in at startup needs to change.</button>
+      <button class="quiz-option" data-val="c">Because backends don't accept telemetry from SDKs directly, only from the API.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. A request crosses three services. What actually keeps all three services' spans attached to the same trace?</p>
+      <button class="quiz-option" data-val="a">Each service independently guesses the trace ID from the request path.</button>
+      <button class="quiz-option" data-val="b">A shared database that all three services poll for the current trace ID.</button>
+      <button class="quiz-option" data-val="c">The W3C Trace Context header (traceparent) is forwarded on each outgoing call, carrying the trace ID and parent span ID so the next service creates a child span in the same trace.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. In an OpenTelemetry Collector pipeline, what does the "filter" processor do that a receiver or exporter can't?</p>
+      <button class="quiz-option" data-val="a">It drops telemetry matching a rule in the middle of the pipeline, before it ever reaches the batch stage or the exporter — so unwanted data (e.g. health-check spans) never costs export volume.</button>
+      <button class="quiz-option" data-val="b">It converts traces into metrics automatically.</button>
+      <button class="quiz-option" data-val="c">It encrypts telemetry before sending it to the exporter.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var SIGNALS = {
+    traces: {
+      label: "Traces",
+      receiver: "receiver: otlp (gRPC :4317)",
+      filterMatches: function (attrs) { return attrs["http.route"] === "/healthz"; },
+      filterDesc: 'drop spans where http.route == "/healthz"',
+      samples: {
+        normal: {
+          label: "GET /checkout",
+          data: { name: "GET /checkout", trace_id: "4bf92f3577b34da6a3ce929d0e0e4736", span_id: "00f067aa0ba902b7", kind: "SERVER", attributes: { "http.method": "GET", "http.route": "/checkout", "http.status_code": 200 }, duration_ms: 42 }
+        },
+        noisy: {
+          label: "GET /healthz (noise)",
+          data: { name: "GET /healthz", trace_id: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", span_id: "11e067aa0ba902c8", kind: "SERVER", attributes: { "http.method": "GET", "http.route": "/healthz", "http.status_code": 200 }, duration_ms: 1 }
+        }
+      },
+      exporters: [
+        { key: "jaeger", label: "OTLP → Jaeger", desc: "sends the span over OTLP/gRPC to a Jaeger backend for storage and the trace-waterfall UI." },
+        { key: "logging", label: "Logging (stdout)", desc: "prints the span to the Collector's own stdout — used to debug a pipeline, never in production." }
+      ]
+    },
+    metrics: {
+      label: "Metrics",
+      receiver: "receiver: otlp (gRPC :4317)",
+      filterMatches: function (attrs) { return attrs["http.route"] === "/healthz"; },
+      filterDesc: 'drop data points where http.route == "/healthz"',
+      samples: {
+        normal: {
+          label: "http.server.duration @ /checkout",
+          data: { name: "http.server.duration", type: "Histogram", attributes: { "http.route": "/checkout" }, value_ms: 42 }
+        },
+        noisy: {
+          label: "http.server.duration @ /healthz (noise)",
+          data: { name: "http.server.duration", type: "Histogram", attributes: { "http.route": "/healthz" }, value_ms: 1 }
+        }
+      },
+      exporters: [
+        { key: "prometheus", label: "Prometheus (remote_write)", desc: "pushes the data point to a Prometheus-compatible remote_write endpoint." },
+        { key: "otlp", label: "OTLP → vendor backend", desc: "forwards the data point over OTLP to a commercial metrics backend." }
+      ]
+    },
+    logs: {
+      label: "Logs",
+      receiver: "receiver: otlp (gRPC :4317)",
+      filterMatches: function (attrs) { return attrs["http.route"] === "/healthz"; },
+      filterDesc: 'drop records where http.route == "/healthz"',
+      samples: {
+        normal: {
+          label: "ERROR during /checkout",
+          data: { severity: "ERROR", body: "payment gateway timeout after 30s", trace_id: "4bf92f3577b34da6a3ce929d0e0e4736", attributes: { "http.route": "/checkout" } }
+        },
+        noisy: {
+          label: "DEBUG during /healthz (noise)",
+          data: { severity: "DEBUG", body: "liveness probe ok", trace_id: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", attributes: { "http.route": "/healthz" } }
+        }
+      },
+      exporters: [
+        { key: "logging", label: "Logging (stdout)", desc: "prints the log record to the Collector's own stdout." },
+        { key: "otlp", label: "OTLP → log backend", desc: "forwards the log record over OTLP to a Loki-compatible or vendor log backend." }
+      ]
+    }
+  };
+
+  var PROCESSORS = [
+    { key: "attributes", label: "attributes — insert service.name=checkout, deployment.environment=prod" },
+    { key: "filter", label: "filter — drop records matching a rule" },
+    { key: "batch", label: "batch — buffer and flush every 5s / 512 items" }
+  ];
+
+  var state = {
+    signal: "traces",
+    sample: "normal",
+    processors: { attributes: true, filter: true, batch: true },
+    exporter: null
+  };
+
+  var signalsEl = document.getElementById("otSignals");
+  var samplesEl = document.getElementById("otSamples");
+  var processorsEl = document.getElementById("otProcessors");
+  var exportersEl = document.getElementById("otExporters");
+  var pipelineEl = document.getElementById("otPipeline");
+  var logEl = document.getElementById("otLog");
+  var runBtn = document.getElementById("otRun");
+
+  function clone(obj) { return JSON.parse(JSON.stringify(obj)); }
+
+  function renderSignalButtons() {
+    signalsEl.innerHTML = "";
+    Object.keys(SIGNALS).forEach(function (key) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn ghost" + (state.signal === key ? " selected" : "");
+      btn.textContent = SIGNALS[key].label;
+      btn.addEventListener("click", function () {
+        state.signal = key;
+        state.exporter = null;
+        renderAll();
+      });
+      signalsEl.appendChild(btn);
+    });
+  }
+
+  function renderSampleButtons() {
+    samplesEl.innerHTML = "";
+    var sig = SIGNALS[state.signal];
+    Object.keys(sig.samples).forEach(function (key) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn ghost" + (state.sample === key ? " selected" : "");
+      btn.textContent = sig.samples[key].label;
+      btn.addEventListener("click", function () {
+        state.sample = key;
+        renderAll();
+      });
+      samplesEl.appendChild(btn);
+    });
+  }
+
+  function renderProcessorChecks() {
+    processorsEl.innerHTML = "";
+    PROCESSORS.forEach(function (p) {
+      var label = document.createElement("label");
+      label.className = "ot-check";
+      var input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = !!state.processors[p.key];
+      input.addEventListener("change", function () {
+        state.processors[p.key] = input.checked;
+      });
+      var span = document.createElement("span");
+      span.textContent = p.label;
+      label.appendChild(input);
+      label.appendChild(span);
+      processorsEl.appendChild(label);
+    });
+  }
+
+  function renderExporterButtons() {
+    exportersEl.innerHTML = "";
+    var sig = SIGNALS[state.signal];
+    if (!state.exporter || !sig.exporters.some(function (e) { return e.key === state.exporter; })) {
+      state.exporter = sig.exporters[0].key;
+    }
+    sig.exporters.forEach(function (e) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn ghost" + (state.exporter === e.key ? " selected" : "");
+      btn.textContent = e.label;
+      btn.addEventListener("click", function () {
+        state.exporter = e.key;
+        renderAll();
+      });
+      exportersEl.appendChild(btn);
+    });
+  }
+
+  function renderPipeline(stages) {
+    pipelineEl.innerHTML = "";
+    stages.forEach(function (s, i) {
+      if (i > 0) {
+        var arrow = document.createElement("span");
+        arrow.className = "ot-arrow";
+        arrow.textContent = "→";
+        pipelineEl.appendChild(arrow);
+      }
+      var el = document.createElement("span");
+      el.className = "ot-stage" + (s.status ? " " + s.status : "");
+      el.textContent = s.name;
+      pipelineEl.appendChild(el);
+    });
+  }
+
+  function renderAll() {
+    renderSignalButtons();
+    renderSampleButtons();
+    renderProcessorChecks();
+    renderExporterButtons();
+    renderPipeline([{ name: SIGNALS[state.signal].receiver }]);
+    logEl.textContent = 'Configure the pipeline above, then click "Send through pipeline".';
+  }
+
+  function run() {
+    var sig = SIGNALS[state.signal];
+    var sample = sig.samples[state.sample];
+    var exporter = sig.exporters.filter(function (e) { return e.key === state.exporter; })[0];
+    var data = clone(sample.data);
+    var lines = [];
+    var stages = [{ name: sig.receiver, status: "pass" }];
+    var dropped = false;
+
+    lines.push('<span class="step-head">' + sig.receiver + '</span> ingests raw ' + sig.label.toLowerCase().replace(/s$/, "") + ':');
+    lines.push(JSON.stringify(data, null, 2));
+    lines.push("");
+
+    PROCESSORS.forEach(function (p) {
+      if (dropped) { return; }
+      if (!state.processors[p.key]) { return; }
+
+      if (p.key === "attributes") {
+        data.attributes = data.attributes || {};
+        data.attributes["service.name"] = "checkout";
+        data.attributes["deployment.environment"] = "prod";
+        lines.push('<span class="step-head">processor: attributes</span> → inserted resource attributes:');
+        lines.push(JSON.stringify(data.attributes, null, 2));
+        lines.push("");
+        stages.push({ name: "attributes", status: "pass" });
+      } else if (p.key === "filter") {
+        var attrs = data.attributes || {};
+        if (sig.filterMatches(attrs)) {
+          lines.push('<span class="step-drop">processor: filter</span> → rule matched (' + sig.filterDesc + ') — record DROPPED. Nothing downstream ever sees it.');
+          stages.push({ name: "filter", status: "drop" });
+          dropped = true;
+        } else {
+          lines.push('<span class="step-head">processor: filter</span> → rule (' + sig.filterDesc + ') did not match — passes through.');
+          stages.push({ name: "filter", status: "pass" });
+        }
+        lines.push("");
+      } else if (p.key === "batch") {
+        lines.push('<span class="step-head">processor: batch</span> → added to the export batch; flushes on a 5s timer or once 512 items are queued.');
+        lines.push("");
+        stages.push({ name: "batch", status: "pass" });
+      }
+    });
+
+    if (!dropped) {
+      lines.push('<span class="step-head">exporter: ' + exporter.label + '</span> → ' + exporter.desc);
+      lines.push(JSON.stringify(data, null, 2));
+      stages.push({ name: exporter.label, status: "pass" });
+    } else {
+      stages.push({ name: exporter.label + " (never reached)", status: "drop" });
+    }
+
+    renderPipeline(stages);
+    logEl.innerHTML = lines.join("\n");
+  }
+
+  runBtn.addEventListener("click", run);
+  renderAll();
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
