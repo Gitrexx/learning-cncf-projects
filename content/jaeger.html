@@ -1,0 +1,483 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jaeger — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the trace-waterfall explorer widget. ---- */
+  .jg-row { margin-bottom: var(--sp-4); }
+  .jg-label {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-2);
+    display: block;
+  }
+  .jg-btn-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+  .jg-btn-row .btn.ghost { font-family: var(--font-mono); font-size: var(--fs-xs); }
+  .jg-btn-row .btn.ghost.selected {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+    color: var(--text);
+  }
+
+  .jg-waterfall {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: var(--sp-4);
+  }
+  .jg-span-row {
+    display: grid;
+    grid-template-columns: minmax(11rem, 22%) 1fr;
+    align-items: center;
+    gap: var(--sp-3);
+    cursor: pointer;
+    padding: 0.2rem 0;
+    border-radius: var(--r-sm);
+  }
+  .jg-span-row:hover { background: var(--surface-2); }
+  .jg-span-row.selected { background: color-mix(in srgb, var(--accent) 10%, var(--surface-2)); }
+  .jg-span-name {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .jg-span-track {
+    position: relative;
+    height: 1.4rem;
+    background: var(--surface-2);
+    border-radius: var(--r-sm);
+  }
+  .jg-span-bar {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    border-radius: var(--r-sm);
+    min-width: 3px;
+    display: flex;
+    align-items: center;
+    padding: 0 0.4em;
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--on-accent);
+    white-space: nowrap;
+    overflow: hidden;
+    box-sizing: border-box;
+    border: 2px solid transparent;
+  }
+  .jg-span-bar.bottleneck { border-color: var(--signal-red); box-shadow: 0 0 0 2px color-mix(in srgb, var(--signal-red) 40%, transparent); }
+
+  .jg-detail {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+  }
+  .jg-detail dt { color: var(--text-faint); margin-top: var(--sp-2); }
+  .jg-detail dd { margin: 0; color: var(--text); word-break: break-word; }
+  .jg-detail .jg-detail-head { font-size: var(--fs-md); font-weight: 700; color: var(--text); margin-bottom: var(--sp-1); }
+
+  .jg-legend { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin-bottom: var(--sp-3); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
+  .jg-swatch { display: inline-block; width: 0.8em; height: 0.8em; border-radius: 2px; margin-right: 0.4em; vertical-align: -0.1em; }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Observability · Sub-topic 13 / 36</p>
+  <h1>Jaeger</h1>
+  <p class="lead">
+    A single user click on "Checkout" can fan out into a dozen network calls across a dozen
+    services — an API gateway, an auth check, a catalog lookup, a payment charge, a database
+    query, an event publish. When that request is slow, or fails, which of those dozen hops was
+    the problem? <strong>Distributed tracing</strong> answers that by following one request as it
+    crosses every service boundary, and <strong>Jaeger</strong> is the CNCF project that made
+    distributed tracing practical at scale: born at Uber to debug exactly this fan-out problem in
+    their microservices fleet, open-sourced in 2017, and CNCF Graduated in 2019.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Jaeger is a <strong>tracing backend</strong> — it stores traces and gives you a UI and query
+    API to explore them. It doesn't generate telemetry itself; that's the job of instrumentation
+    (today, almost always <a href="opentelemetry.html">OpenTelemetry</a> SDKs). In fact, as of
+    <strong>Jaeger v2</strong> (the current architecture), Jaeger is no longer a separate codebase
+    from OpenTelemetry at all — it's built as a purpose-configured
+    <strong>distribution of the OpenTelemetry Collector</strong>, with Jaeger's storage and query
+    layer wired in as Collector components. If you've read the OpenTelemetry deep-dive, you
+    already know most of the pipeline; this page is about what happens to trace data once it
+    lands, and how to actually read a trace.
+  </div>
+
+  <h2>What a trace actually is</h2>
+  <p>
+    A <strong>trace</strong> is not a single record — it's a tree of <strong>spans</strong>, each
+    one representing a single unit of work (an HTTP handler, a database query, a function call).
+    Every span carries the same <code>trace_id</code> (shared by every span in the request), its
+    own <code>span_id</code>, and a <code>parent_span_id</code> pointing at whichever span caused
+    it to start. That parent/child chain — propagated across network hops via the W3C
+    <code>traceparent</code> header, as covered in the OpenTelemetry page — is what lets a tracing
+    backend reassemble "gateway called auth, which returned, then gateway called payment, which
+    called a database" purely from independently-reported spans, with no central coordinator
+    involved while the request is in flight.
+  </p>
+  <p>
+    Each span also records a start time and duration, a <strong>service name</strong> and
+    <strong>operation name</strong>, key-value <strong>tags</strong> (<code>http.route</code>,
+    <code>db.statement</code>, an HTTP status code), and optionally timestamped
+    <strong>logs</strong> within the span (a retry, an exception). Stack all of a trace's spans up
+    against a shared time axis, indented by parent/child depth, and you get the classic
+    <strong>waterfall view</strong> — the primary way anyone reads a trace.
+  </p>
+
+  <h2>Architecture: from agents-and-collectors to an OTel Collector distribution</h2>
+  <p>
+    Jaeger's original (v1) architecture split the pipeline into dedicated processes: a
+    <strong>Jaeger Agent</strong> as a per-host sidecar batching spans from local processes, a
+    <strong>Jaeger Collector</strong> receiving those batches, validating and indexing them, and
+    writing to a storage backend (Cassandra or Elasticsearch for production scale, or an
+    in-memory/Badger store for local use), and a <strong>Query service + UI</strong> reading that
+    storage back out for the web console.
+  </p>
+  <p>
+    <strong>Jaeger v2</strong> collapses this into the OpenTelemetry Collector's own
+    receiver/processor/exporter model: a <code>jaeger</code> receiver still accepts spans from
+    legacy Jaeger clients, but the default path is the same OTLP ingestion OpenTelemetry SDKs
+    already speak; Jaeger's storage layer ships as an <strong>exporter</strong>
+    (<code>jaeger_storage</code>, backed by the same Cassandra/Elasticsearch/Badger options); and
+    the Query service and UI run alongside as an extension of the same binary. Practically, this
+    means "run Jaeger" today largely means "run a Collector configured with Jaeger's storage
+    exporter" — one less system to reason about, and direct interoperability with every other
+    OTel-speaking tool in your pipeline.
+  </p>
+
+  <h2>Sampling: you can't keep everything</h2>
+  <p>
+    At real traffic volumes, recording and storing every span of every request is prohibitively
+    expensive, so tracing systems <strong>sample</strong> — deciding which traces are worth
+    keeping in full.
+  </p>
+  <ul>
+    <li><strong>Head-based sampling</strong> decides at the very start of a trace, usually
+      probabilistically (e.g. keep 1% of requests) or via rate limiting, before anyone knows
+      whether the request will be slow or fail. Cheap and simple, but you might sample away
+      exactly the slow, erroring trace you'd want to investigate.</li>
+    <li><strong>Tail-based sampling</strong> buffers all of a trace's spans until the trace
+      finishes, then decides — keep it if it errored, keep it if it was unusually slow, sample the
+      rest normally. This needs a buffering layer (typically a Collector tier) that can see a
+      trace's full span set before deciding, which costs more memory but keeps the traces you
+      actually need.</li>
+    <li>Jaeger also supports <strong>adaptive sampling</strong>, where the Collector adjusts
+      per-service, per-operation sampling probabilities over time to hit a target volume rather
+      than using one fixed rate everywhere.</li>
+  </ul>
+
+  <h2>Try it: read a real trace waterfall</h2>
+  <p>
+    Pick a sample trace, click any span to inspect its tags, and use "Reveal bottleneck" to see
+    which span is actually eating the request's time. Notice that a parent span's own duration
+    includes everything its children did — the metric that actually points at the culprit is
+    <strong>self time</strong>: a span's duration minus whatever time its children accounted for.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Trace waterfall explorer</div>
+
+    <div class="jg-row">
+      <span class="jg-label">Sample trace</span>
+      <div class="jg-btn-row" id="jgTraces"></div>
+    </div>
+
+    <div class="jg-row">
+      <button class="btn ghost" id="jgBottleneck" type="button">Reveal bottleneck (highest self time)</button>
+    </div>
+
+    <div class="jg-legend" id="jgLegend"></div>
+
+    <div class="jg-waterfall" id="jgWaterfall"></div>
+
+    <div class="jg-detail" id="jgDetail">
+      <p class="muted">Click a span above to inspect its tags and timing.</p>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">What to notice</span>
+    Switch to the <strong>"Slow checkout"</strong> trace and click "Reveal bottleneck." The
+    <code>payment-service</code> span looks like the slow one at a glance — it spans 330 of the
+    trace's 420ms. But its own work is quick; almost all of that time is really its child, the
+    <code>payment-db</code> span, running an unindexed query (<code>db.rows_examined</code> in the
+    tags jumps from a dozen rows in the fast trace to nearly half a million in the slow one). That
+    distinction — a wide bar in the waterfall versus the span whose <em>self time</em> actually
+    accounts for it — is the whole reason engineers reach for a trace instead of a dashboard: an
+    aggregate latency metric tells you the checkout endpoint got slow; the trace tells you exactly
+    which query, on which service, at which parent call, did it.
+  </div>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    Jaeger graduated on the strength of being the reference open-source distributed tracing
+    backend at a time when every organization running microservices on Kubernetes hit the same
+    wall: metrics tell you <em>that</em> something is slow, logs tell you what happened on one
+    host, but only a trace tells you <em>where in a multi-service call chain</em> the time or the
+    failure actually occurred. You'll meet Jaeger as the tracing backend behind an OpenTelemetry
+    Collector's exporter list, as the UI engineers open after a Prometheus alert fires to find the
+    slow hop, and increasingly bundled as the default tracing store in service-mesh
+    observability add-ons (Istio and Linkerd both ship Jaeger integration out of the box).
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>OpenTelemetry</strong> generates and transports traces (the API, SDKs, and Collector);
+    Jaeger stores them and gives you a UI to read them — and, per above, Jaeger v2 is literally
+    built on the OTel Collector, so the line between "instrumentation" and "backend" is now mostly
+    about which components you enable. <strong>Zipkin</strong> is an older, still-maintained
+    tracing backend with a similar span model and its own wire format (predating OTLP) — Jaeger
+    can ingest Zipkin-format spans, but the two are separate projects with separate storage and
+    UIs. <strong>Prometheus</strong> owns metrics and aggregate time-series, not per-request
+    causality — a Prometheus alert on p99 latency is what tells you to go open Jaeger, not a
+    replacement for it. And a trace is not a log: a log line tells you what happened at one
+    instant on one host; a trace tells you the shape and timing of an entire multi-service call.
+  </div>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">1. What links together every span that belongs to the same trace, even though they're reported independently by different services?</p>
+      <button class="quiz-option" data-val="a">They all arrive at the Collector within the same one-second window.</button>
+      <button class="quiz-option" data-val="b">A central coordinator assigns each service a slot before the request starts.</button>
+      <button class="quiz-option" data-val="c">A shared trace_id carried on every span, plus a parent_span_id on each span pointing at the span that caused it — propagated across network hops via the traceparent header.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">2. A parent span's duration is 330ms, and it has one child span lasting 290ms. What does that tell you about where the 330ms actually went?</p>
+      <button class="quiz-option" data-val="a">The parent span itself is doing 330ms of slow work.</button>
+      <button class="quiz-option" data-val="b">The parent's own (self) time is only about 40ms — the other 290ms is fully accounted for by the child, so the child is where to look for the actual bottleneck.</button>
+      <button class="quiz-option" data-val="c">Nothing — span duration never relates to child spans.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. Why might tail-based sampling keep a trace that head-based, probabilistic sampling would very likely have discarded?</p>
+      <button class="quiz-option" data-val="a">Tail-based sampling waits until a trace finishes and can then choose to keep it because it errored or ran unusually slow — information that doesn't exist yet at the moment head-based sampling has to decide.</button>
+      <button class="quiz-option" data-val="b">Tail-based sampling keeps every trace, so it's really not sampling at all.</button>
+      <button class="quiz-option" data-val="c">Tail-based sampling only applies to database spans.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var COLORS = ["var(--accent)", "var(--cloud-cyan-deep)", "var(--signal-violet)", "var(--signal-amber)", "var(--signal-green)"];
+
+  var TRACES = {
+    fast: {
+      label: "Fast checkout (healthy)",
+      spans: [
+        { id: "s1", parent: null, service: "api-gateway", op: "POST /checkout", start: 0, duration: 120,
+          tags: { "http.method": "POST", "http.route": "/checkout", "http.status_code": 200 } },
+        { id: "s2", parent: "s1", service: "auth-service", op: "POST /validate-token", start: 5, duration: 15,
+          tags: { "http.method": "POST", "http.route": "/validate-token", "http.status_code": 200 } },
+        { id: "s3", parent: "s1", service: "catalog-service", op: "GET /cart/items", start: 25, duration: 20,
+          tags: { "http.method": "GET", "http.route": "/cart/items", "http.status_code": 200 } },
+        { id: "s4", parent: "s1", service: "payment-service", op: "POST /charge", start: 50, duration: 55,
+          tags: { "http.method": "POST", "http.route": "/charge", "http.status_code": 200, "payment.provider": "stripe" } },
+        { id: "s5", parent: "s4", service: "payment-db", op: "SELECT ... FROM ledger", start: 60, duration: 35,
+          tags: { "db.system": "postgresql", "db.statement": "SELECT * FROM ledger WHERE account_id = $1", "db.rows_examined": 12 } },
+        { id: "s6", parent: "s1", service: "notify-service", op: "PublishEvent order.completed", start: 108, duration: 8,
+          tags: { "messaging.system": "kafka", "messaging.destination": "order.completed" } }
+      ]
+    },
+    slow: {
+      label: "Slow checkout (DB bottleneck)",
+      spans: [
+        { id: "s1", parent: null, service: "api-gateway", op: "POST /checkout", start: 0, duration: 420,
+          tags: { "http.method": "POST", "http.route": "/checkout", "http.status_code": 200 } },
+        { id: "s2", parent: "s1", service: "auth-service", op: "POST /validate-token", start: 5, duration: 15,
+          tags: { "http.method": "POST", "http.route": "/validate-token", "http.status_code": 200 } },
+        { id: "s3", parent: "s1", service: "catalog-service", op: "GET /cart/items", start: 25, duration: 40,
+          tags: { "http.method": "GET", "http.route": "/cart/items", "http.status_code": 200 } },
+        { id: "s4", parent: "s1", service: "payment-service", op: "POST /charge", start: 70, duration: 330,
+          tags: { "http.method": "POST", "http.route": "/charge", "http.status_code": 200, "payment.provider": "stripe" } },
+        { id: "s5", parent: "s4", service: "payment-db", op: "SELECT ... FROM ledger", start: 90, duration: 290,
+          tags: { "db.system": "postgresql", "db.statement": "SELECT * FROM ledger WHERE account_id = $1", "db.rows_examined": 480000, "db.index_used": "false" } },
+        { id: "s6", parent: "s1", service: "notify-service", op: "PublishEvent order.completed", start: 405, duration: 10,
+          tags: { "messaging.system": "kafka", "messaging.destination": "order.completed" } }
+      ]
+    }
+  };
+
+  var state = { trace: "fast", selected: null, showBottleneck: false };
+
+  var tracesEl = document.getElementById("jgTraces");
+  var bottleneckBtn = document.getElementById("jgBottleneck");
+  var legendEl = document.getElementById("jgLegend");
+  var waterfallEl = document.getElementById("jgWaterfall");
+  var detailEl = document.getElementById("jgDetail");
+
+  function currentTrace() { return TRACES[state.trace]; }
+
+  function serviceColor(services, name) {
+    var idx = services.indexOf(name);
+    return COLORS[idx % COLORS.length];
+  }
+
+  function selfTimes(spans) {
+    var self = {};
+    spans.forEach(function (s) { self[s.id] = s.duration; });
+    spans.forEach(function (s) {
+      if (s.parent && self[s.parent] !== undefined) {
+        self[s.parent] -= s.duration;
+      }
+    });
+    return self;
+  }
+
+  function bottleneckId(spans) {
+    var self = selfTimes(spans);
+    var best = null;
+    spans.forEach(function (s) {
+      if (best === null || self[s.id] > self[best]) best = s.id;
+    });
+    return best;
+  }
+
+  function renderTraceButtons() {
+    tracesEl.innerHTML = "";
+    Object.keys(TRACES).forEach(function (key) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn ghost" + (state.trace === key ? " selected" : "");
+      btn.textContent = TRACES[key].label;
+      btn.addEventListener("click", function () {
+        state.trace = key;
+        state.selected = null;
+        state.showBottleneck = false;
+        renderAll();
+      });
+      tracesEl.appendChild(btn);
+    });
+  }
+
+  function renderLegend(services) {
+    legendEl.innerHTML = "";
+    services.forEach(function (name) {
+      var span = document.createElement("span");
+      var sw = document.createElement("span");
+      sw.className = "jg-swatch";
+      sw.style.background = serviceColor(services, name);
+      span.appendChild(sw);
+      span.appendChild(document.createTextNode(name));
+      legendEl.appendChild(span);
+    });
+  }
+
+  function renderDetail(span, self) {
+    if (!span) {
+      detailEl.innerHTML = '<p class="muted">Click a span above to inspect its tags and timing.</p>';
+      return;
+    }
+    var trace = currentTrace();
+    var total = trace.spans[0].duration;
+    var pctTotal = Math.round((span.duration / total) * 100);
+    var pctSelf = Math.round((self[span.id] / total) * 100);
+    var parentSpan = span.parent ? trace.spans.filter(function (s) { return s.id === span.parent; })[0] : null;
+    var html = '<div class="jg-detail-head">' + span.service + " — " + span.op + "</div>";
+    html += "<dl>";
+    html += "<dt>Duration</dt><dd>" + span.duration + "ms (" + pctTotal + "% of trace)</dd>";
+    html += "<dt>Self time</dt><dd>" + Math.max(self[span.id], 0) + "ms (" + Math.max(pctSelf, 0) + "% of trace) — time spent in this span, excluding its children</dd>";
+    html += "<dt>Parent</dt><dd>" + (parentSpan ? parentSpan.service + " — " + parentSpan.op : "— (root span)") + "</dd>";
+    html += "<dt>Tags</dt><dd><pre style='margin:0'><code>" + JSON.stringify(span.tags, null, 2) + "</code></pre></dd>";
+    html += "</dl>";
+    detailEl.innerHTML = html;
+  }
+
+  function renderWaterfall() {
+    var trace = currentTrace();
+    var spans = trace.spans;
+    var total = spans[0].duration;
+    var services = [];
+    spans.forEach(function (s) { if (services.indexOf(s.service) === -1) services.push(s.service); });
+    var self = selfTimes(spans);
+    var bottleneck = state.showBottleneck ? bottleneckId(spans) : null;
+
+    var depth = {};
+    depth[spans[0].id] = 0;
+    spans.forEach(function (s) {
+      if (s.parent) depth[s.id] = (depth[s.parent] || 0) + 1;
+    });
+
+    waterfallEl.innerHTML = "";
+    spans.forEach(function (s) {
+      var row = document.createElement("div");
+      row.className = "jg-span-row" + (state.selected === s.id ? " selected" : "");
+
+      var name = document.createElement("span");
+      name.className = "jg-span-name";
+      name.style.paddingLeft = (depth[s.id] * 1.1) + "em";
+      name.textContent = s.service + " · " + s.op;
+
+      var track = document.createElement("span");
+      track.className = "jg-span-track";
+
+      var bar = document.createElement("span");
+      bar.className = "jg-span-bar" + (bottleneck === s.id ? " bottleneck" : "");
+      bar.style.left = ((s.start / total) * 100) + "%";
+      bar.style.width = Math.max((s.duration / total) * 100, 1) + "%";
+      bar.style.background = serviceColor(services, s.service);
+      bar.textContent = s.duration + "ms";
+      track.appendChild(bar);
+
+      row.appendChild(name);
+      row.appendChild(track);
+      row.addEventListener("click", function () {
+        state.selected = s.id;
+        renderAll();
+      });
+      waterfallEl.appendChild(row);
+    });
+
+    renderLegend(services);
+    var selectedSpan = spans.filter(function (s) { return s.id === state.selected; })[0];
+    renderDetail(selectedSpan, self);
+  }
+
+  function renderAll() {
+    renderTraceButtons();
+    bottleneckBtn.className = "btn ghost" + (state.showBottleneck ? " selected" : "");
+    renderWaterfall();
+  }
+
+  bottleneckBtn.addEventListener("click", function () {
+    state.showBottleneck = !state.showBottleneck;
+    renderAll();
+  });
+
+  renderAll();
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
