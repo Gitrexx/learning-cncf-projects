@@ -140,7 +140,7 @@
       "summary": "Distributed tracing: follow a single request across many microservices.",
       "prerequisites": ["opentelemetry"],
       "file": "jaeger.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "fluentd",
