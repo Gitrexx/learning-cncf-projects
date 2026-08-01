@@ -150,7 +150,7 @@
       "summary": "The unified logging layer: collect, parse, buffer, and route logs anywhere.",
       "prerequisites": [],
       "file": "fluentd.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "argo",

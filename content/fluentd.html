@@ -1,0 +1,481 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fluentd — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the log-pipeline builder widget. ---- */
+  .fd-row { margin-bottom: var(--sp-4); }
+  .fd-label {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-2);
+    display: block;
+  }
+  .fd-btn-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+  .fd-btn-row .btn.ghost { font-family: var(--font-mono); font-size: var(--fs-xs); }
+  .fd-btn-row .btn.ghost.selected {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+    color: var(--text);
+  }
+
+  .fd-pipeline {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr auto 1fr;
+    gap: var(--sp-3);
+    align-items: stretch;
+    margin-bottom: var(--sp-4);
+  }
+  @media (max-width: 720px) {
+    .fd-pipeline { grid-template-columns: 1fr; }
+    .fd-arrow { transform: rotate(90deg); justify-self: center; }
+  }
+  .fd-stage {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: var(--sp-3);
+    cursor: pointer;
+  }
+  .fd-stage.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface-2)); }
+  .fd-stage-title {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent-strong);
+    margin-bottom: var(--sp-2);
+    display: block;
+  }
+  .fd-stage-body { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); white-space: pre-wrap; word-break: break-word; }
+  .fd-arrow { display: flex; align-items: center; justify-content: center; color: var(--text-faint); font-size: var(--fs-lg); }
+
+  .fd-record {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    min-height: 2rem;
+  }
+  .fd-record .fd-new { color: var(--signal-green); }
+  .fd-record .fd-tag { color: var(--accent-strong); }
+
+  .fd-route-table { font-family: var(--font-mono); font-size: var(--fs-xs); border-collapse: collapse; width: 100%; }
+  .fd-route-table td, .fd-route-table th { padding: 0.35em 0.6em; border-bottom: 1px solid var(--border); text-align: left; }
+  .fd-route-table tr.fd-matched { background: color-mix(in srgb, var(--signal-green) 12%, transparent); }
+  .fd-route-table tr.fd-skipped { color: var(--text-faint); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Observability · Sub-topic 14 / 36</p>
+  <h1>Fluentd</h1>
+  <p class="lead">
+    A single request might leave a trail across an nginx access log, an application's JSON stdout,
+    a database's slow-query log, and a kernel audit log — each in a different format, on a
+    different host, rotated on a different schedule. Before <strong>Fluentd</strong>, "collect all
+    the logs somewhere useful" meant a pile of bespoke <code>tail</code>-and-<code>grep</code>
+    scripts, format-specific shippers, and fragile pipelines glued together per data source. Born
+    at Treasure Data in 2011 and CNCF's <strong>third</strong> graduated project (2019, right after
+    Kubernetes and Prometheus), Fluentd made log collection a single, pluggable, configurable
+    layer: one process that can read from almost anything, reshape records uniformly, and route
+    them to almost anywhere.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Fluentd is the <strong>unified logging layer</strong>: it doesn't generate logs (your
+    application, nginx, and the kernel do that), and it isn't a place logs live long-term (that's
+    Elasticsearch, S3, a data warehouse, or a log-analysis SaaS). It sits in between — collecting,
+    parsing, enriching, buffering, and routing — the same conceptual slot that
+    <a href="opentelemetry.html">OpenTelemetry</a>'s Collector occupies for traces and metrics, but
+    Fluentd predates OTel by a decade and today is most often deployed as a per-node log shipper in
+    a Kubernetes cluster, typically as a <code>DaemonSet</code> reading each node's container log
+    files.
+  </div>
+
+  <h2>The plugin pipeline: input → parser → filter → buffer → output</h2>
+  <p>
+    Every Fluentd deployment is a chain of five plugin types, each independently swappable:
+  </p>
+  <ul>
+    <li><strong>Input plugins</strong> (<code>source</code> directives) get data in — tailing a
+      file, listening on a TCP/HTTP port for the <code>forward</code> protocol, subscribing to
+      syslog, reading from a container runtime's log driver. Over 500 plugins exist across all
+      five categories, covering nearly any source or destination you'd want.</li>
+    <li><strong>Parser plugins</strong> turn a raw line into a structured record — regex, JSON,
+      CSV, the standard Apache/nginx combined log format, or a custom grok-style pattern. This is
+      what turns an opaque string into queryable fields.</li>
+    <li><strong>Filter plugins</strong> transform records already in flight — adding fields
+      (hostname, environment, Kubernetes pod metadata via <code>kubernetes_metadata</code>),
+      dropping records that match a pattern (<code>grep</code>), masking sensitive fields, or
+      re-parsing a nested string field.</li>
+    <li><strong>Buffer plugins</strong> hold records before they're written out — in memory for low
+      latency, or on disk (<code>file</code> buffer) so a crash or a downstream outage doesn't lose
+      data already accepted.</li>
+    <li><strong>Output plugins</strong> (<code>match</code> directives) write records out —
+      Elasticsearch, Kafka, S3, BigQuery, another Fluentd/Fluent Bit forwarder, or just
+      <code>stdout</code> for debugging.</li>
+  </ul>
+
+  <h2>Tag-based routing: the config model that ties it together</h2>
+  <p>
+    Every record Fluentd handles carries a <strong>tag</strong> — a dot-delimited string like
+    <code>app.checkout.access</code> — assigned by whichever <code>source</code> ingested it (often
+    via a <code>tag</code> parameter naming the plugin and file). Routing is then just pattern
+    matching: a <code>&lt;match app.**&gt;</code> block catches every tag starting with
+    <code>app.</code>, a more specific <code>&lt;match app.checkout.*&gt;</code> wins for that
+    exact prefix, and <code>&lt;filter app.**&gt;</code> blocks apply transformations to matching
+    records as they pass through — all without touching the record's actual content, the same way
+    Kubernetes Services route by label selector rather than by inspecting pod internals. A minimal
+    config reads almost like a short program:
+  </p>
+  <pre><code>&lt;source&gt;
+  @type tail
+  path /var/log/app/*.log
+  tag app.checkout
+  &lt;parse&gt;
+    @type json
+  &lt;/parse&gt;
+&lt;/source&gt;
+
+&lt;filter app.**&gt;
+  @type record_transformer
+  &lt;record&gt;
+    hostname "#{Socket.gethostname}"
+  &lt;/record&gt;
+&lt;/filter&gt;
+
+&lt;match app.**&gt;
+  @type elasticsearch
+  host es.internal
+  &lt;buffer&gt;
+    @type file
+    path /var/log/fluentd-buffer
+  &lt;/buffer&gt;
+&lt;/match&gt;</code></pre>
+
+  <h2>Buffering and delivery guarantees</h2>
+  <p>
+    Fluentd batches records into <strong>chunks</strong> before an output plugin flushes them, and
+    chunks accumulate in a <strong>buffer</strong> — either in memory (fast, but lost on a crash)
+    or on disk via the <code>file</code> buffer (survives a restart, at the cost of I/O). If a
+    flush fails — the Elasticsearch cluster is down, a network blip — Fluentd retries with
+    exponential backoff rather than dropping the chunk, which is what gives Fluentd pipelines their
+    <strong>at-least-once</strong> delivery characteristic: a record can be delivered more than
+    once during a retry, but a transient downstream outage shouldn't silently lose logs. This is
+    the same buffer-and-retry shape you'd recognize from a Kafka producer or an OpenTelemetry
+    Collector's queued exporter — decoupling "accept the record" from "successfully deliver the
+    record" is what makes any of these pipelines resilient to a flaky downstream.
+  </p>
+
+  <h2>Try it: build a log pipeline</h2>
+  <p>
+    Pick a raw log line, then click through the three pipeline stages to watch it get parsed into
+    structured fields, enriched by a filter, and finally routed to an output by tag match. Notice
+    that routing only ever looks at the <strong>tag</strong> — never the record's contents — which
+    is why the same filter and match blocks can apply uniformly to every record from a given
+    source.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Log-pipeline builder</div>
+
+    <div class="fd-row">
+      <span class="fd-label">Sample raw log line</span>
+      <div class="fd-btn-row" id="fdLines"></div>
+    </div>
+
+    <div class="fd-pipeline">
+      <div class="fd-stage" id="fdStageInput" data-stage="input">
+        <span class="fd-stage-title">1. Input + Parse</span>
+        <span class="fd-stage-body" id="fdInputBody"></span>
+      </div>
+      <div class="fd-arrow">→</div>
+      <div class="fd-stage" id="fdStageFilter" data-stage="filter">
+        <span class="fd-stage-title">2. Filter (enrich)</span>
+        <span class="fd-stage-body" id="fdFilterBody"></span>
+      </div>
+      <div class="fd-arrow">→</div>
+      <div class="fd-stage" id="fdStageOutput" data-stage="output">
+        <span class="fd-stage-title">3. Match (route)</span>
+        <span class="fd-stage-body" id="fdOutputBody"></span>
+      </div>
+    </div>
+
+    <div class="fd-row">
+      <span class="fd-label" id="fdRecordLabel">Record after selected stage</span>
+      <div class="fd-record" id="fdRecord"></div>
+    </div>
+
+    <div class="fd-row">
+      <span class="fd-label">Match directives (tag routing table)</span>
+      <table class="fd-route-table" id="fdRouteTable"></table>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">What to notice</span>
+    Switch between the two sample lines and re-run the stages. Both records flow through the exact
+    same filter and match config — nothing in the pipeline branches on log content — yet they land
+    on different outputs because they were tagged differently at the input stage
+    (<code>web.access</code> vs. <code>app.checkout</code>). Tag assignment at ingestion time is
+    the one decision that determines a record's entire downstream journey.
+  </div>
+
+  <h2>Fluentd vs. Fluent Bit</h2>
+  <p>
+    Fluentd is written in C for its core with plugins in Ruby, which makes it flexible and
+    plugin-rich (500+ plugins) but heavier — tens of MB of memory at rest. <strong>Fluent Bit</strong>
+    is a separate CNCF graduated project: a from-scratch reimplementation in pure C, with a much
+    smaller plugin set and a memory footprint in the single-digit MBs, purpose-built to run as a
+    DaemonSet on every node without denting the node's resources. The common production pattern
+    pairs them: <strong>Fluent Bit at the edge</strong> (one per node, forwarding via the Fluentd
+    <code>forward</code> protocol) feeding a smaller number of <strong>Fluentd instances doing
+    aggregation</strong> — heavier parsing, enrichment, and fan-out to multiple backends — so the
+    expensive plugin ecosystem only runs where resource cost is amortized across many nodes' worth
+    of logs.
+  </p>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    Fluentd graduated on the strength of being the neutral, vendor-agnostic answer to "how do logs
+    get from everywhere to anywhere" at a time when every logging vendor wanted to own the
+    collection agent too. Its plugin architecture meant switching log backends — Elasticsearch to
+    S3 to a SaaS vendor — was a config change, not a re-instrumentation project. You'll meet
+    Fluentd (or its sibling Fluent Bit) as the log-shipping DaemonSet in nearly every Kubernetes
+    logging stack — EFK (Elasticsearch-Fluentd-Kibana) is the direct descendant of the classic
+    ELK stack with Fluentd in Logstash's seat — and as the default log forwarder bundled by most
+    managed Kubernetes log-collection add-ons.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>Fluent Bit</strong> is Fluentd's lightweight sibling project (see above) — not a
+    competitor, and the two are commonly deployed together. <strong>Logstash</strong> (part of the
+    Elastic Stack) plays a similar collect-transform-route role but is Elastic-owned, JVM-based,
+    and tightly coupled to the Elasticsearch ecosystem, versus Fluentd's vendor-neutral, CNCF-hosted
+    plugin model. The <strong>OpenTelemetry Collector</strong> can also collect and route logs (via
+    its own receiver/processor/exporter pipeline, covered in the OpenTelemetry deep-dive) and is
+    increasingly overlapping with Fluentd's territory as OTel unifies all three signal types —
+    but Fluentd remains the more battle-tested, plugin-rich choice specifically for logs today.
+  </div>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. When a match directive decides where to route a record, what does it actually look at?</p>
+      <button class="quiz-option" data-val="a">The full parsed content of the record, searching for keywords.</button>
+      <button class="quiz-option" data-val="b">The record's tag — a dot-delimited string assigned at the input stage — matched against a glob pattern like app.**.</button>
+      <button class="quiz-option" data-val="c">The file size of the buffer chunk currently being flushed.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. An Elasticsearch output starts rejecting writes for two minutes. What does Fluentd's buffer-and-retry model do with the records queued during that window?</p>
+      <button class="quiz-option" data-val="a">Drops them immediately to avoid backpressure on the input plugins.</button>
+      <button class="quiz-option" data-val="b">Silently truncates the log lines to fit a smaller emergency buffer.</button>
+      <button class="quiz-option" data-val="c">Holds them in the buffer (memory or, more durably, on disk) and retries the flush with backoff, which is why delivery is at-least-once rather than best-effort.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. Why do production Kubernetes logging stacks commonly run Fluent Bit as a per-node DaemonSet and Fluentd as a smaller aggregation tier, rather than Fluentd everywhere?</p>
+      <button class="quiz-option" data-val="a">Fluent Bit's much smaller memory/CPU footprint suits running one instance per node, while Fluentd's heavier plugin ecosystem is worth its cost only when consolidated onto fewer aggregation instances.</button>
+      <button class="quiz-option" data-val="b">Fluent Bit and Fluentd use incompatible log formats, so both are required to cover all sources.</button>
+      <button class="quiz-option" data-val="c">Fluentd cannot run inside containers, only on bare-metal hosts.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var LINES = {
+    web: {
+      label: "nginx access log",
+      raw: '10.2.4.18 - - [01/Aug/2026:14:22:03 +0000] "GET /cart HTTP/1.1" 200 1843',
+      tag: "web.access",
+      parser: "@type nginx  (combined log format)",
+      parsed: {
+        remote: "10.2.4.18",
+        time: "01/Aug/2026:14:22:03 +0000",
+        method: "GET",
+        path: "/cart",
+        code: 200,
+        size: 1843
+      },
+      filterAdds: { hostname: "web-node-07", environment: "production" }
+    },
+    app: {
+      label: "app JSON log",
+      raw: '{"level":"error","msg":"charge failed","order_id":"o-88213","code":"card_declined"}',
+      tag: "app.checkout",
+      parser: "@type json",
+      parsed: {
+        level: "error",
+        msg: "charge failed",
+        order_id: "o-88213",
+        code: "card_declined"
+      },
+      filterAdds: { hostname: "checkout-pod-3a1", environment: "production" }
+    }
+  };
+
+  var ROUTES = [
+    { pattern: "web.**", output: "@type s3 (bucket: access-logs-archive)" },
+    { pattern: "app.**", output: "@type elasticsearch (host: es.internal)" },
+    { pattern: "**", output: "@type stdout (catch-all fallback)" }
+  ];
+
+  function matchTag(tag, pattern) {
+    if (pattern === "**") return true;
+    var prefix = pattern.replace(/\*\*$/, "");
+    return tag.indexOf(prefix) === 0;
+  }
+
+  function firstMatch(tag) {
+    for (var i = 0; i < ROUTES.length; i++) {
+      if (matchTag(tag, ROUTES[i].pattern)) return i;
+    }
+    return -1;
+  }
+
+  var state = { line: "web", stage: "input" };
+
+  var linesEl = document.getElementById("fdLines");
+  var stageInput = document.getElementById("fdStageInput");
+  var stageFilter = document.getElementById("fdStageFilter");
+  var stageOutput = document.getElementById("fdStageOutput");
+  var inputBody = document.getElementById("fdInputBody");
+  var filterBody = document.getElementById("fdFilterBody");
+  var outputBody = document.getElementById("fdOutputBody");
+  var recordEl = document.getElementById("fdRecord");
+  var recordLabel = document.getElementById("fdRecordLabel");
+  var routeTableEl = document.getElementById("fdRouteTable");
+
+  function current() { return LINES[state.line]; }
+
+  function renderLineButtons() {
+    linesEl.innerHTML = "";
+    Object.keys(LINES).forEach(function (key) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn ghost" + (state.line === key ? " selected" : "");
+      btn.textContent = LINES[key].label;
+      btn.addEventListener("click", function () {
+        state.line = key;
+        state.stage = "input";
+        renderAll();
+      });
+      linesEl.appendChild(btn);
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>]/g, function (c) {
+      return c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;";
+    });
+  }
+
+  function renderStages() {
+    var line = current();
+    inputBody.textContent = "tag " + line.tag + "\nparser: " + line.parser;
+    filterBody.textContent = "@type record_transformer\nadd: hostname, environment";
+    var matchIdx = firstMatch(line.tag);
+    outputBody.textContent = ROUTES[matchIdx].pattern + "\n" + ROUTES[matchIdx].output;
+
+    [stageInput, stageFilter, stageOutput].forEach(function (el) { el.classList.remove("active"); });
+    if (state.stage === "input") stageInput.classList.add("active");
+    if (state.stage === "filter") stageFilter.classList.add("active");
+    if (state.stage === "output") stageOutput.classList.add("active");
+  }
+
+  function renderRecord() {
+    var line = current();
+    var html = "";
+    if (state.stage === "input") {
+      recordLabel.textContent = "Record after Input + Parse — raw line turned into structured fields";
+      html = '<span class="fd-tag">tag: ' + line.tag + '</span>\n' + JSON.stringify(line.parsed, null, 2);
+    } else if (state.stage === "filter") {
+      recordLabel.textContent = "Record after Filter — enrichment fields added";
+      var merged = {};
+      Object.keys(line.parsed).forEach(function (k) { merged[k] = line.parsed[k]; });
+      var lines = ['<span class="fd-tag">tag: ' + line.tag + '</span>', "{"];
+      Object.keys(merged).forEach(function (k) {
+        lines.push('  "' + k + '": ' + JSON.stringify(merged[k]) + ",");
+      });
+      Object.keys(line.filterAdds).forEach(function (k) {
+        lines.push('  <span class="fd-new">"' + k + '": ' + JSON.stringify(line.filterAdds[k]) + '  // added by filter</span>');
+      });
+      lines.push("}");
+      html = lines.join("\n");
+    } else {
+      var matchIdx = firstMatch(line.tag);
+      recordLabel.textContent = "Record after Match — delivered to output";
+      html = '<span class="fd-tag">tag: ' + line.tag + '</span>\nrouted to: ' + ROUTES[matchIdx].output +
+        "\n\n(buffered as a chunk, flushed with retry-on-failure — at-least-once delivery)";
+    }
+    recordEl.innerHTML = html;
+  }
+
+  function renderRouteTable() {
+    var line = current();
+    var matchIdx = firstMatch(line.tag);
+    var html = "<tr><th>Match pattern</th><th>Output</th><th>Result</th></tr>";
+    ROUTES.forEach(function (r, i) {
+      var matched = i === matchIdx;
+      var reached = state.stage === "output" && matched;
+      var cls = matched ? (state.stage === "output" ? "fd-matched" : "") : "fd-skipped";
+      var result = matched ? (state.stage === "output" ? "✓ matched — record delivered here" : "would match this tag") : "not reached (already matched above)";
+      html += "<tr class=\"" + cls + "\"><td>" + escapeHtml(r.pattern) + "</td><td>" + escapeHtml(r.output) + "</td><td>" + result + "</td></tr>";
+    });
+    routeTableEl.innerHTML = html;
+  }
+
+  function renderAll() {
+    renderLineButtons();
+    renderStages();
+    renderRecord();
+    renderRouteTable();
+  }
+
+  [["fdStageInput", "input"], ["fdStageFilter", "filter"], ["fdStageOutput", "output"]].forEach(function (pair) {
+    document.getElementById(pair[0]).addEventListener("click", function () {
+      state.stage = pair[1];
+      renderAll();
+    });
+  });
+
+  renderAll();
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
