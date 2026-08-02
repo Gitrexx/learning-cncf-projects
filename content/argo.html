@@ -1,0 +1,517 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Argo — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the GitOps sync simulator widget. ---- */
+  .ar-row { margin-bottom: var(--sp-4); }
+  .ar-label {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-2);
+    display: block;
+  }
+  .ar-btn-row { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; }
+
+  .ar-panels {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: var(--sp-3);
+    align-items: stretch;
+    margin: var(--sp-4) 0;
+  }
+  @media (max-width: 720px) {
+    .ar-panels { grid-template-columns: 1fr; }
+    .ar-arrow { transform: rotate(90deg); justify-self: center; }
+  }
+  .ar-panel {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
+  }
+  .ar-panel-title {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent-strong);
+    margin-bottom: var(--sp-3);
+    display: block;
+  }
+  .ar-arrow { display: flex; align-items: center; justify-content: center; color: var(--text-faint); font-size: var(--fs-lg); }
+
+  .ar-wave {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3);
+    margin-bottom: var(--sp-3);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    transition: border-color .15s, background .15s;
+  }
+  .ar-wave:last-child { margin-bottom: 0; }
+  .ar-wave.ar-active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+  .ar-wave.ar-applied { border-color: var(--signal-green); }
+  .ar-wave.ar-progressing { border-color: var(--signal-amber); }
+  .ar-wave-name { color: var(--text); font-weight: 600; display: block; margin-bottom: var(--sp-1); }
+  .ar-wave-field { color: var(--text-muted); }
+  .ar-wave-field .ar-diff { color: var(--signal-amber); font-weight: 700; }
+  .ar-wave-field .ar-match { color: var(--signal-green); }
+
+  .ar-badges { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-4); }
+  .ar-badge-lg {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    font-weight: 700;
+    padding: var(--sp-2) var(--sp-4);
+    border-radius: var(--r-pill);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-muted);
+  }
+  .ar-badge-lg.ar-good { border-color: color-mix(in srgb, var(--signal-green) 45%, var(--border)); color: var(--signal-green); background: color-mix(in srgb, var(--signal-green) 10%, var(--surface)); }
+  .ar-badge-lg.ar-bad { border-color: color-mix(in srgb, var(--signal-amber) 45%, var(--border)); color: var(--signal-amber); background: color-mix(in srgb, var(--signal-amber) 10%, var(--surface)); }
+
+  .ar-log {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3);
+    min-height: 2.4em;
+  }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · CI/CD, GitOps &amp; Autoscaling · Sub-topic 15 / 36</p>
+  <h1>Argo</h1>
+  <p class="lead">
+    Classic continuous delivery <em>pushes</em>: a CI pipeline builds an artifact, then runs
+    <code>kubectl apply</code> or <code>helm upgrade</code> against your cluster using credentials
+    the pipeline holds. That means every CI job is a standing door into production, and if someone
+    hand-edits a live resource, nothing notices or fixes it. <strong>Argo</strong> is CNCF's answer
+    to running Kubernetes delivery the other way around — an in-cluster controller
+    <em>pulls</em> desired state from Git and continuously reconciles the cluster to match it. Argo
+    isn't one tool; it's a family of independent controllers — <strong>Argo CD</strong> (GitOps
+    delivery), <strong>Argo Workflows</strong> (Kubernetes-native pipelines), <strong>Argo
+    Rollouts</strong> (progressive delivery), and <strong>Argo Events</strong> (event-driven
+    triggers) — that graduated together as a single CNCF project in December 2022 and are commonly
+    chained into one end-to-end delivery pipeline.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Argo sits at the <strong>delivery</strong> layer: it doesn't build your container images (that's
+    your CI system) and it doesn't run your cluster (that's Kubernetes). It's the layer that gets
+    already-built artifacts and already-written manifests <em>into</em> a running cluster, safely and
+    repeatably — the same conceptual slot as a Jenkins/GitHub Actions deploy job, but pull-based and
+    Kubernetes-native instead of push-based and imperative.
+  </div>
+
+  <h2>The four sub-projects, at a glance</h2>
+  <p>
+    Each is a separate set of <span class="term" title="Custom Resource Definitions — how Kubernetes is extended with new resource types">CRDs</span>
+    and controller(s), independently installable, that happen to compose well together:
+  </p>
+  <table>
+    <thead><tr><th>Project</th><th>Core CRD</th><th>Job</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Argo CD</strong></td><td><code>Application</code></td><td>Continuously syncs a Git repo's manifests into a cluster (GitOps delivery)</td></tr>
+      <tr><td><strong>Argo Workflows</strong></td><td><code>Workflow</code></td><td>Runs a DAG of containers as a Kubernetes-native pipeline (CI, ML, batch)</td></tr>
+      <tr><td><strong>Argo Rollouts</strong></td><td><code>Rollout</code></td><td>Drop-in <code>Deployment</code> replacement with canary/blue-green progressive delivery</td></tr>
+      <tr><td><strong>Argo Events</strong></td><td><code>EventSource</code> / <code>Sensor</code></td><td>Listens for external events and triggers Workflows or other actions</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Argo CD: the reconciliation loop</h2>
+  <p>
+    Argo CD runs as four components in its own namespace. The <strong>repo server</strong> clones
+    the Git repo and renders raw Kubernetes manifests — from plain YAML, Helm charts, Kustomize
+    overlays, or Jsonnet — without ever touching the live cluster. The <strong>application
+    controller</strong> is the actual reconciliation engine: it diffs those rendered manifests
+    against live cluster state (watched via the Kubernetes API) and drives sync operations. The
+    <strong>API server</strong> is the stateless gRPC/REST front door for the CLI, UI, and webhooks,
+    and <strong>Redis</strong> caches rendered manifests and cluster state so the controller isn't
+    re-cloning Git and re-templating on every reconcile tick.
+  </p>
+  <p>
+    An <code>Application</code> resource ties a Git <code>source</code> (repo, path, revision) to a
+    cluster <code>destination</code> (context + namespace). Every reconcile, the controller renders
+    the source at its pinned revision, diffs it against live state, and reports two
+    <strong>orthogonal</strong> status fields — this distinction trips up almost everyone the first
+    time they see it:
+  </p>
+  <ul>
+    <li><strong>Sync status</strong> (<code>Synced</code> / <code>OutOfSync</code>) — does live state
+      match what's in Git, right now?</li>
+    <li><strong>Health status</strong> (<code>Healthy</code> / <code>Progressing</code> /
+      <code>Degraded</code>) — is the workload actually working, independent of whether it matches
+      Git?</li>
+  </ul>
+  <p>
+    An app can be <code>Synced</code> and <code>Degraded</code> — correctly deployed, but
+    crash-looping — or <code>OutOfSync</code> and <code>Healthy</code> — someone hand-edited a live
+    resource and it's still running fine, just drifted. Health assessment is built in for common
+    types (Deployments, StatefulSets, Ingresses) but Argo CD has no generic notion of "healthy" for
+    an arbitrary CRD; you supply a Lua health check for anything custom.
+  </p>
+
+  <h2>Sync waves and hooks: ordering the apply</h2>
+  <p>
+    A raw <code>kubectl apply -f</code> of everything at once breaks when order matters — a
+    Deployment referencing a ConfigMap that doesn't exist yet, or an app that needs a database
+    migration run first. Argo CD resources can carry a
+    <code>argocd.argoproj.io/sync-wave</code> annotation (an integer, default <code>0</code>): the
+    controller applies the lowest wave first, waits for those resources to report healthy, then
+    proceeds to the next wave. Orthogonally, <strong><code>PreSync</code></strong>,
+    <strong><code>Sync</code></strong>, and <strong><code>PostSync</code></strong> hooks attach
+    one-off Jobs to lifecycle phases — a <code>PreSync</code> migration Job that must succeed before
+    the main apply proceeds, for instance. Try the ordering yourself below.
+  </p>
+
+  <h2>Try it: GitOps sync simulator</h2>
+  <p>
+    Commit a change to the mock Git repo, then watch Argo CD detect the drift and reconcile the live
+    cluster back to match — one sync wave at a time. Watch how Sync status flips to
+    <code>OutOfSync</code> the instant Git changes (before anything in the cluster has moved), and
+    how Health status stays independent of Sync status throughout.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">GitOps sync simulator</div>
+
+    <div class="ar-badges">
+      <span class="ar-badge-lg" id="arSyncBadge">Sync: Synced</span>
+      <span class="ar-badge-lg" id="arHealthBadge">Health: Healthy</span>
+    </div>
+
+    <div class="ar-panels">
+      <div class="ar-panel">
+        <span class="ar-panel-title">Git (desired state)</span>
+        <div class="ar-wave" id="arGitWave0">
+          <span class="ar-wave-name">wave 0 — ConfigMap/app-config</span>
+          <span class="ar-wave-field" id="arGitConfig"></span>
+        </div>
+        <div class="ar-wave" id="arGitWave1">
+          <span class="ar-wave-name">wave 1 — Deployment/checkout</span>
+          <span class="ar-wave-field" id="arGitImage"></span><br />
+          <span class="ar-wave-field" id="arGitReplicas"></span>
+        </div>
+      </div>
+      <div class="ar-arrow">→</div>
+      <div class="ar-panel">
+        <span class="ar-panel-title">Live cluster (actual state)</span>
+        <div class="ar-wave" id="arLiveWave0">
+          <span class="ar-wave-name">wave 0 — ConfigMap/app-config</span>
+          <span class="ar-wave-field" id="arLiveConfig"></span>
+        </div>
+        <div class="ar-wave" id="arLiveWave1">
+          <span class="ar-wave-name">wave 1 — Deployment/checkout</span>
+          <span class="ar-wave-field" id="arLiveImage"></span><br />
+          <span class="ar-wave-field" id="arLiveReplicas"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="ar-row">
+      <span class="ar-label">Reconciliation controller</span>
+      <div class="ar-log" id="arLog"></div>
+    </div>
+
+    <div class="ar-row ar-btn-row">
+      <button class="btn ghost" id="arCommitBtn">Commit a change to Git</button>
+      <button class="btn" id="arAdvanceBtn">Advance sync →</button>
+      <button class="btn ghost" id="arResetBtn">Reset</button>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">What to notice</span>
+    "Commit a change" only edits the <strong>Git</strong> panel — the live cluster doesn't move
+    until you advance the sync, and the moment Git and live disagree, Sync status flips to
+    <code>OutOfSync</code> even though Health stays <code>Healthy</code> (the old version is still
+    running fine). Advancing the sync applies wave 0 before wave 1, exactly as the
+    <code>sync-wave</code> annotation dictates, and the Deployment briefly reports
+    <code>Progressing</code> health after its spec changes — a live Argo CD app looks exactly like
+    this while new Pods roll out.
+  </div>
+
+  <h2>ApplicationSet: syncing a fleet, not one app</h2>
+  <p>
+    One <code>Application</code> per cluster or environment doesn't scale past a handful of
+    targets. The <strong>ApplicationSet</strong> controller generates many <code>Application</code>
+    resources from a single spec, using <strong>generators</strong>: <code>List</code> (a static
+    list), <code>Cluster</code> (one app per cluster registered with Argo CD — the standard
+    multi-cluster fan-out), <code>Git</code> (one app per repo subfolder or per matching file), and
+    <code>Matrix</code> (the cartesian product of two generators, e.g. every cluster × every
+    environment overlay). One <code>ApplicationSet</code> YAML replaces dozens of hand-maintained
+    <code>Application</code> manifests.
+  </p>
+
+  <h2>Argo Workflows: pipelines as Kubernetes pods</h2>
+  <p>
+    A <code>Workflow</code> is a set of named <strong>templates</strong>. A <em>container
+    template</em> is the atomic unit — one Pod running one container. Composition templates chain
+    them: <code>Steps</code> runs a sequential (or parallel-within-a-step) list, while
+    <code>DAG</code> lets you declare each task's <code>dependencies</code> explicitly and the
+    controller computes the parallelism and fan-out for you. Because each step really is its own
+    Pod, steps can run wildly different container images side by side — a GPU training image next
+    to a lightweight data-validation image — which is why Argo Workflows is the substrate under
+    <strong>Kubeflow Pipelines</strong>: Kubeflow compiles its Python pipeline definitions down to
+    Argo <code>Workflow</code> DAGs and lets the Workflows controller do the actual execution.
+  </p>
+  <p>
+    Data moves between steps as <strong>artifacts</strong> (staged through S3/GCS/Azure Blob between
+    Pod runs) or small <strong>parameters</strong>. <code>WorkflowTemplate</code> and
+    <code>ClusterWorkflowTemplate</code> make common templates reusable via
+    <code>templateRef</code> instead of copy-pasting YAML, and <code>CronWorkflow</code> schedules
+    Workflow creation the way a CronJob schedules Pods.
+  </p>
+
+  <h2>Argo Rollouts: progressive delivery</h2>
+  <p>
+    The <code>Rollout</code> CRD is a near drop-in replacement for <code>Deployment</code> — same
+    pod template, same selector semantics — but it swaps the built-in rolling-update strategy for
+    progressive-delivery strategies. <strong>Canary</strong> defines a sequence of
+    <code>steps</code> (<code>setWeight: 20</code>, <code>pause</code>, <code>setWeight: 50</code>,
+    …) that gradually shift traffic from the stable version to the new one.
+    <strong>Blue-Green</strong> stands up a full "preview" ReplicaSet alongside the active one and
+    cuts traffic over — manually or automatically — once it's validated.
+  </p>
+  <p>
+    What makes this <em>progressive</em> rather than just "rolling update with extra steps" is
+    <strong>automated analysis</strong>: an <code>AnalysisTemplate</code> queries a metrics provider
+    (Prometheus, Datadog, and others) at each step, and a failing threshold automatically aborts the
+    rollout and shifts traffic back to stable — no human watching a dashboard required. Actual
+    traffic shifting is delegated to whatever's already in the cluster — a service mesh
+    (<a href="istio.html">Istio</a>, <a href="linkerd.html">Linkerd</a>), an ingress controller, or
+    the Gateway API — via a pluggable traffic-router interface.
+  </p>
+
+  <h2>Argo Events: triggering the pipeline</h2>
+  <p>
+    Three CRDs cover event-driven automation: an <strong><code>EventSource</code></strong> listens
+    for something external (a webhook, an S3 upload, a Kafka topic, a cron schedule) and normalizes
+    it into a common event format; an <strong><code>EventBus</code></strong> — backed by NATS
+    JetStream — carries those events; and a <strong><code>Sensor</code></strong> subscribes to
+    events, evaluates trigger conditions (including boolean combinations of multiple events), and
+    fires a <strong>trigger</strong> — most commonly creating an Argo <code>Workflow</code>, but it
+    can equally invoke a Lambda, an HTTP call, or any Kubernetes resource.
+  </p>
+
+  <h2>How the family chains into one pipeline</h2>
+  <p>
+    None of the four controllers depend on each other at runtime, but they compose into a common
+    shape: <strong>Argo Events</strong> normalizes a git push into a trigger →
+    <strong>Argo Workflows</strong> runs the CI pipeline (build, test, push image, write the new tag
+    to a manifest repo) → <strong>Argo CD</strong> detects that Git commit and syncs the manifest
+    into the cluster, where it's a <code>Rollout</code> rather than a plain
+    <code>Deployment</code> → <strong>Argo Rollouts</strong> takes over the actual canary rollout of
+    that change, using live metrics to auto-promote or auto-abort. A newer sibling project,
+    <strong>Kargo</strong> (from the original Argo CD/Rollouts team), fills the gap none of the four
+    solve on their own: multi-stage <em>promotion</em> — dev → staging → prod — by orchestrating the
+    Git commits that Argo CD then syncs.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>Flux</strong> is the other major CNCF-graduated GitOps toolkit and solves the same
+    pull-based reconciliation problem as Argo CD, but as a modular set of small controllers
+    (source, kustomize, helm, notification) with no built-in UI, versus Argo CD's centralized,
+    UI-first application platform — covered in its own upcoming deep-dive. <strong>Tekton</strong>
+    and <strong>Jenkins X</strong> overlap with Argo Workflows as Kubernetes-native pipeline
+    engines, though Tekton is more CI-focused while Workflows leans general-purpose DAG execution
+    (hence its ML/data-pipeline adoption). <strong>Flagger</strong>, from the Flux ecosystem, plays
+    the same role as Argo Rollouts for progressive delivery.
+  </div>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    Argo graduated on the strength of proving GitOps at production scale: pull-based reconciliation
+    means CI systems never hold cluster-admin credentials, drift is continuously self-corrected
+    instead of applied once and forgotten, and every change is auditable through Git history alone.
+    You'll meet Argo CD as the dashboard platform teams point at to answer "what's actually running,
+    and does it match Git"; Argo Workflows as the engine under CI systems and ML pipeline tools like
+    Kubeflow; and Argo Rollouts wherever a team wants automated, metric-driven canary releases
+    instead of a fixed-timer rolling update.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. An Argo CD Application shows Sync status "OutOfSync" and Health status "Healthy." What does that combination actually mean?</p>
+      <button class="quiz-option" data-val="a">Argo CD is broken — these two fields should never disagree.</button>
+      <button class="quiz-option" data-val="b">Live cluster state has drifted from what's in Git, but the currently-running workload is still functioning fine — Sync and Health are independent signals.</button>
+      <button class="quiz-option" data-val="c">The application has crashed and Argo CD is about to delete it.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. A ConfigMap is annotated with sync-wave 0 and a Deployment that reads it is annotated with sync-wave 1. Why does that ordering matter?</p>
+      <button class="quiz-option" data-val="a">It doesn't — Argo CD applies all resources simultaneously regardless of wave annotations.</button>
+      <button class="quiz-option" data-val="b">Higher-numbered waves always apply before lower-numbered ones.</button>
+      <button class="quiz-option" data-val="c">Argo CD applies the lowest wave first and waits for it to become healthy before moving to the next, so the ConfigMap exists before the Deployment that depends on it is created.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. What's the core structural difference between GitOps (pull-based, Argo CD/Flux style) and a traditional CI pipeline that runs "kubectl apply" against the cluster (push-based)?</p>
+      <button class="quiz-option" data-val="a">In GitOps, an in-cluster controller pulls and continuously reconciles toward Git — so external CI systems never need standing cluster-admin credentials, and drift gets self-corrected rather than only fixed at deploy time.</button>
+      <button class="quiz-option" data-val="b">GitOps only works for stateless applications, while push-based CI/CD is required for anything stateful.</button>
+      <button class="quiz-option" data-val="c">Push-based CI/CD doesn't use Git at all, while GitOps requires storing container images directly in the Git repo.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var initial = { configVersion: "v1", image: "checkout:1.4.0", replicas: 3 };
+  var commits = [
+    { configVersion: "v1", image: "checkout:1.5.0", replicas: 3, msg: "bumped image tag to 1.5.0" },
+    { configVersion: "v2", image: "checkout:1.5.0", replicas: 5, msg: "updated app-config and scaled replicas to 5" },
+    { configVersion: "v2", image: "checkout:1.6.0", replicas: 5, msg: "bumped image tag to 1.6.0" }
+  ];
+
+  var state = {
+    git: { configVersion: initial.configVersion, image: initial.image, replicas: initial.replicas },
+    live: { configVersion: initial.configVersion, image: initial.image, replicas: initial.replicas },
+    commitIdx: 0,
+    phase: "synced" // synced -> outofsync -> wave0 -> wave1 -> progressing -> synced
+  };
+
+  var el = {};
+  ["arSyncBadge", "arHealthBadge", "arGitConfig", "arGitImage", "arGitReplicas",
+   "arLiveConfig", "arLiveImage", "arLiveReplicas", "arGitWave0", "arGitWave1",
+   "arLiveWave0", "arLiveWave1", "arLog", "arCommitBtn", "arAdvanceBtn", "arResetBtn"
+  ].forEach(function (id) { el[id] = document.getElementById(id); });
+
+  function isSynced() {
+    return state.git.configVersion === state.live.configVersion &&
+      state.git.image === state.live.image &&
+      state.git.replicas === state.live.replicas;
+  }
+
+  function fieldHtml(label, gitVal, liveVal, match) {
+    return label + ": <span class=\"" + (match ? "ar-match" : "ar-diff") + "\">" + liveVal + "</span>";
+  }
+
+  function render() {
+    var configMatch = state.git.configVersion === state.live.configVersion;
+    var imageMatch = state.git.image === state.live.image;
+    var replicasMatch = state.git.replicas === state.live.replicas;
+
+    el.arGitConfig.textContent = "configVersion: " + state.git.configVersion;
+    el.arGitImage.textContent = "image: " + state.git.image;
+    el.arGitReplicas.textContent = "replicas: " + state.git.replicas;
+
+    el.arLiveConfig.innerHTML = fieldHtml("configVersion", state.git.configVersion, state.live.configVersion, configMatch);
+    el.arLiveImage.innerHTML = fieldHtml("image", state.git.image, state.live.image, imageMatch);
+    el.arLiveReplicas.innerHTML = fieldHtml("replicas", state.git.replicas, state.live.replicas, replicasMatch);
+
+    [el.arGitWave0, el.arGitWave1, el.arLiveWave0, el.arLiveWave1].forEach(function (n) {
+      n.classList.remove("ar-active", "ar-applied", "ar-progressing");
+    });
+
+    var synced = isSynced();
+    var healthy = state.phase !== "wave1" && state.phase !== "progressing";
+
+    if (state.phase === "wave0") {
+      el.arGitWave0.classList.add("ar-active");
+      el.arLiveWave0.classList.add("ar-active");
+    } else if (configMatch && (state.phase === "wave1" || state.phase === "progressing")) {
+      el.arLiveWave0.classList.add("ar-applied");
+    }
+    if (state.phase === "wave1" || state.phase === "progressing") {
+      el.arGitWave1.classList.add(state.phase === "wave1" ? "ar-active" : "ar-progressing");
+      el.arLiveWave1.classList.add(state.phase === "wave1" ? "ar-active" : "ar-progressing");
+    }
+
+    el.arSyncBadge.textContent = "Sync: " + (synced ? "Synced" : "OutOfSync");
+    el.arSyncBadge.className = "ar-badge-lg " + (synced ? "ar-good" : "ar-bad");
+    el.arHealthBadge.textContent = "Health: " + (healthy ? "Healthy" : "Progressing");
+    el.arHealthBadge.className = "ar-badge-lg " + (healthy ? "ar-good" : "ar-bad");
+
+    var logMsg;
+    if (state.phase === "synced") logMsg = "Idle. Live state matches Git at " + state.git.image + " / " + state.git.replicas + " replicas.";
+    else if (state.phase === "outofsync") logMsg = "Detected drift: " + commits[state.commitIdx].msg + ". Waiting to sync — click \"Advance sync\".";
+    else if (state.phase === "wave0") logMsg = "Applying wave 0 (ConfigMap/app-config)…";
+    else if (state.phase === "wave1") logMsg = "Wave 0 healthy. Applying wave 1 (Deployment/checkout)…";
+    else if (state.phase === "progressing") logMsg = "New Pods rolling out — Health: Progressing. Click \"Advance sync\" once more to complete the health check.";
+    el.arLog.textContent = logMsg;
+
+    el.arCommitBtn.disabled = state.phase !== "synced";
+    el.arAdvanceBtn.disabled = state.phase === "synced";
+  }
+
+  function commit() {
+    if (state.phase !== "synced") return;
+    var c = commits[state.commitIdx % commits.length];
+    state.commitIdx++;
+    state.git.configVersion = c.configVersion;
+    state.git.image = c.image;
+    state.git.replicas = c.replicas;
+    state.phase = "outofsync";
+    render();
+  }
+
+  function advance() {
+    if (state.phase === "outofsync") {
+      state.phase = "wave0";
+      state.live.configVersion = state.git.configVersion;
+    } else if (state.phase === "wave0") {
+      state.phase = "wave1";
+      state.live.image = state.git.image;
+      state.live.replicas = state.git.replicas;
+    } else if (state.phase === "wave1") {
+      state.phase = "progressing";
+    } else if (state.phase === "progressing") {
+      state.phase = "synced";
+    }
+    render();
+  }
+
+  function reset() {
+    state.git = { configVersion: initial.configVersion, image: initial.image, replicas: initial.replicas };
+    state.live = { configVersion: initial.configVersion, image: initial.image, replicas: initial.replicas };
+    state.commitIdx = 0;
+    state.phase = "synced";
+    render();
+  }
+
+  el.arCommitBtn.addEventListener("click", commit);
+  el.arAdvanceBtn.addEventListener("click", advance);
+  el.arResetBtn.addEventListener("click", reset);
+
+  render();
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
