@@ -160,7 +160,7 @@
       "summary": "GitOps CD, Kubernetes-native workflows, and progressive delivery (Argo family).",
       "prerequisites": ["kubernetes"],
       "file": "argo.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "flux",
