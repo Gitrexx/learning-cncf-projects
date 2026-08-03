@@ -170,7 +170,7 @@
       "summary": "The GitOps Toolkit: pull-based, continuous, declarative delivery from Git.",
       "prerequisites": ["kubernetes"],
       "file": "flux.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "keda",

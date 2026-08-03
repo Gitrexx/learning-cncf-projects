@@ -1,0 +1,520 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Flux — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the reconciliation-loop simulator widget. ---- */
+  .fx-row { margin-bottom: var(--sp-4); }
+  .fx-label {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-2);
+    display: block;
+  }
+  .fx-btn-row { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; }
+
+  .fx-panels {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr auto 1fr;
+    gap: var(--sp-3);
+    align-items: stretch;
+    margin: var(--sp-4) 0;
+  }
+  @media (max-width: 900px) {
+    .fx-panels { grid-template-columns: 1fr; }
+    .fx-arrow { transform: rotate(90deg); justify-self: center; }
+  }
+  .fx-panel {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
+  }
+  .fx-panel-title {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent-strong);
+    margin-bottom: var(--sp-3);
+    display: block;
+  }
+  .fx-arrow { display: flex; align-items: center; justify-content: center; color: var(--text-faint); font-size: var(--fs-lg); }
+
+  .fx-field {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: var(--sp-2) var(--sp-3);
+    margin-bottom: var(--sp-2);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+  }
+  .fx-field:last-child { margin-bottom: 0; }
+  .fx-field .fx-diff { color: var(--signal-amber); font-weight: 700; }
+  .fx-field .fx-match { color: var(--signal-green); }
+
+  .fx-panel.fx-active { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent); }
+  .fx-panel.fx-drift { border-color: var(--signal-amber); }
+
+  .fx-badges { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-4); }
+  .fx-badge-lg {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    font-weight: 700;
+    padding: var(--sp-2) var(--sp-4);
+    border-radius: var(--r-pill);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-muted);
+  }
+  .fx-badge-lg.fx-good { border-color: color-mix(in srgb, var(--signal-green) 45%, var(--border)); color: var(--signal-green); background: color-mix(in srgb, var(--signal-green) 10%, var(--surface)); }
+  .fx-badge-lg.fx-warn { border-color: color-mix(in srgb, var(--signal-amber) 45%, var(--border)); color: var(--signal-amber); background: color-mix(in srgb, var(--signal-amber) 10%, var(--surface)); }
+
+  .fx-log {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3);
+    min-height: 2.4em;
+  }
+  .fx-clock {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-faint);
+  }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · CI/CD, GitOps &amp; Autoscaling · Sub-topic 16 / 36</p>
+  <h1>Flux</h1>
+  <p class="lead">
+    <a href="argo.html">Argo</a> proved the pull-based GitOps model — an in-cluster controller
+    reconciling toward Git instead of a CI job pushing changes with standing cluster credentials —
+    as a single, centralized platform with its own UI. <strong>Flux</strong> is CNCF's other
+    graduated GitOps toolkit, and it takes the opposite architectural bet: instead of one
+    application-shaped controller, Flux is the <strong>GitOps Toolkit</strong> — a set of small,
+    single-purpose controllers, each built around one Kubernetes CRD, that compose through a shared
+    "source produces artifact, other controllers consume it" contract. There's no bundled UI; Flux
+    is a set of APIs meant to be composed, scripted, and built on top of.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Same delivery-layer slot as Argo CD: Flux doesn't build images (your CI does that) and it
+    doesn't run the cluster (Kubernetes does). It's the layer that continuously pulls
+    already-built manifests and charts from Git (or an OCI registry) into a running cluster — the
+    thing that makes "Git is the source of truth" literally true, all the time, not just at deploy
+    time.
+  </div>
+
+  <h2>The GitOps Toolkit: one job per controller</h2>
+  <p>
+    Where Argo CD's application controller does source-fetching, diffing, and applying all in one
+    process, Flux splits that into independently deployable controllers connected by
+    <span class="term" title="Custom Resource Definitions — how Kubernetes is extended with new resource types">CRDs</span>.
+    Each is a small Kubernetes operator you can run, upgrade, and even omit on its own:
+  </p>
+  <table>
+    <thead><tr><th>Controller</th><th>Core CRD(s)</th><th>Job</th></tr></thead>
+    <tbody>
+      <tr><td><strong>source-controller</strong></td><td><code>GitRepository</code>, <code>OCIRepository</code>, <code>HelmRepository</code>, <code>HelmChart</code>, <code>Bucket</code></td><td>Fetches from Git/OCI/Helm/S3-compatible sources and publishes a versioned <strong>Artifact</strong></td></tr>
+      <tr><td><strong>kustomize-controller</strong></td><td><code>Kustomization</code></td><td>Builds an Artifact with Kustomize and applies it to the cluster, continuously</td></tr>
+      <tr><td><strong>helm-controller</strong></td><td><code>HelmRelease</code></td><td>Installs/upgrades Helm charts sourced from an Artifact, the declarative way</td></tr>
+      <tr><td><strong>notification-controller</strong></td><td><code>Alert</code>, <code>Provider</code>, <code>Receiver</code></td><td>Forwards Flux events out (Slack, webhooks) and accepts events in (instant re-reconcile on push)</td></tr>
+      <tr><td><strong>image-reflector / image-automation</strong></td><td><code>ImageRepository</code>, <code>ImagePolicy</code>, <code>ImageUpdateAutomation</code></td><td>Scans registries for new tags and commits the update back into Git</td></tr>
+    </tbody>
+  </table>
+
+  <h2>The core contract: sources produce Artifacts</h2>
+  <p>
+    Every reconciliation in Flux starts with <strong>source-controller</strong>. Point a
+    <code>GitRepository</code> at a repo/branch (or an <code>OCIRepository</code> at a registry, or
+    a <code>HelmRepository</code> at a chart repo), and on every reconcile interval it fetches the
+    latest content, computes a content-addressed <strong>revision</strong> — for Git this looks
+    like <code>main@sha1:8f3c2a1…</code> — and, only if that revision changed, repackages it as a
+    tarball <strong>Artifact</strong> served over an internal HTTP endpoint inside the cluster.
+    Nothing downstream ever talks to GitHub directly; <em>everything</em> downstream — the
+    kustomize-controller, the helm-controller, even a custom controller you write — consumes that
+    same Artifact HTTP endpoint. That single indirection is what lets Flux support Git, OCI
+    registries, S3 buckets, and Helm repos through one uniform interface, and it's why Flux can
+    reconcile straight from a signed OCI artifact with no Git repo involved at all.
+  </p>
+
+  <h2>Kustomization: continuous apply, continuous drift correction</h2>
+  <p>
+    A <code>Kustomization</code> resource ties a <code>sourceRef</code> (which
+    <code>GitRepository</code>/<code>OCIRepository</code> to build from) to a <code>path</code>
+    inside that Artifact, and reconciles on an <code>interval</code> (commonly <code>1m</code>):
+  </p>
+  <pre><code>apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: checkout
+spec:
+  interval: 1m
+  path: ./deploy/production
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: checkout-repo
+  dependsOn:
+    - name: infra-base
+  healthChecks:
+    - kind: Deployment
+      name: checkout
+      namespace: default</code></pre>
+  <p>
+    Every interval, kustomize-controller re-runs <code>kustomize build</code> against the latest
+    Artifact, computes a diff against live cluster state, and applies it with
+    <span class="term" title="A Kubernetes apply strategy where each field tracks which controller owns it, so multiple actors can safely co-manage one object">server-side apply</span>.
+    <code>prune: true</code> means resources removed from Git get deleted from the cluster too, not
+    just left behind. <code>dependsOn</code> makes one Kustomization wait for another to report
+    healthy before it reconciles — the ordering mechanism that plays the same role as Argo CD's
+    sync waves, but expressed as an explicit graph between whole Kustomizations rather than a
+    numeric annotation on individual resources. <code>healthChecks</code> gates <code>Ready</code>
+    status on named resources actually rolling out successfully.
+  </p>
+  <div class="callout note">
+    <span class="callout-title">The differentiator: drift correction, not just drift detection</span>
+    Because the reconcile loop reruns on every interval regardless of whether Git changed, Flux
+    doesn't just apply once and wait for the next commit — it keeps re-diffing live state against
+    the last-fetched Artifact and re-applies whenever they disagree. Someone runs
+    <code>kubectl edit</code> on a Flux-managed Deployment and changes the replica count by hand?
+    Within one interval, kustomize-controller reverts it back to what Git says, no commit required.
+    This is Flux's default behavior, whereas GitOps engines built around an explicit "sync" action
+    have historically needed self-heal turned on separately to get the same guarantee.
+  </div>
+
+  <h2>Try it: reconciliation-loop simulator</h2>
+  <p>
+    Edit the mock Git repo below, then press play. Watch source-controller poll on its interval,
+    publish a new Artifact only when the revision actually changed, and kustomize-controller build
+    and apply it into the cluster — entirely on a timer, with no "click sync" step. Then try editing
+    the <strong>cluster</strong> directly and watch the next interval correct it back.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Reconciliation-loop simulator</div>
+
+    <div class="fx-badges">
+      <span class="fx-badge-lg" id="fxRevBadge">Artifact: rev a1</span>
+      <span class="fx-badge-lg" id="fxStatusBadge">Ready</span>
+      <span class="fx-clock" id="fxClock">tick 0 · next poll in 3</span>
+    </div>
+
+    <div class="fx-panels">
+      <div class="fx-panel" id="fxGitPanel">
+        <span class="fx-panel-title">Git repo (desired)</span>
+        <div class="fx-field" id="fxGitImage"></div>
+        <div class="fx-field" id="fxGitReplicas"></div>
+      </div>
+      <div class="fx-arrow" id="fxArrow1">→</div>
+      <div class="fx-panel" id="fxArtifactPanel">
+        <span class="fx-panel-title">source-controller Artifact</span>
+        <div class="fx-field" id="fxArtifactRev"></div>
+        <div class="fx-field" id="fxArtifactImage"></div>
+        <div class="fx-field" id="fxArtifactReplicas"></div>
+      </div>
+      <div class="fx-arrow" id="fxArrow2">→</div>
+      <div class="fx-panel" id="fxClusterPanel">
+        <span class="fx-panel-title">Live cluster (kustomize-controller applies)</span>
+        <div class="fx-field" id="fxLiveImage"></div>
+        <div class="fx-field" id="fxLiveReplicas"></div>
+      </div>
+    </div>
+
+    <div class="fx-row">
+      <span class="fx-label">Reconciliation log</span>
+      <div class="fx-log" id="fxLog"></div>
+    </div>
+
+    <div class="fx-row fx-btn-row">
+      <button class="btn ghost" id="fxCommitBtn">Commit a change to Git</button>
+      <button class="btn ghost" id="fxDriftBtn">Hand-edit the live cluster</button>
+      <button class="btn" id="fxPlayBtn">▶ Play</button>
+      <button class="btn ghost" id="fxStepBtn">Step one tick</button>
+      <button class="btn ghost" id="fxResetBtn">Reset</button>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">What to notice</span>
+    Nothing happens the instant you commit — the Artifact panel only updates when
+    source-controller's poll interval elapses, and only because the revision hash actually changed.
+    "Hand-edit the live cluster" changes only the rightmost panel, immediately flips status to a
+    warning, and — with no commit and no button telling Flux to "sync" — the very next tick
+    overwrites your manual edit back to whatever the Artifact says. That auto-revert is the
+    behavior teams mean when they say Flux is "self-healing by default."
+  </div>
+
+  <h2>HelmRelease: the same model, for charts</h2>
+  <p>
+    <code>helm-controller</code> mirrors the Kustomization pattern for Helm: a
+    <code>HelmRelease</code> references a chart (resolved through a <code>HelmChart</code>/
+    <code>HelmRepository</code> Artifact, exactly like Kustomization's <code>sourceRef</code>),
+    carries inline <code>values</code>, and reconciles continuously — including drift correction on
+    Helm-managed resources, and automatic rollback if a new release fails its readiness checks.
+    Because it's a first-class CRD rather than a shell-out to the <code>helm</code> binary, chart
+    installs are declarative, observable via <code>kubectl get helmrelease</code>, and composable
+    with <code>dependsOn</code> alongside plain Kustomizations — a database HelmRelease can gate an
+    application Kustomization that needs it up first.
+  </p>
+
+  <h2>Multi-tenancy: impersonation, not implicit trust</h2>
+  <p>
+    A cluster with many teams' Kustomizations reconciling shouldn't mean every team's Git commits
+    can touch every other team's resources with the same blanket permissions. Each
+    <code>Kustomization</code>/<code>HelmRelease</code> can set a
+    <code>serviceAccountName</code>, and the controller impersonates that ServiceAccount — scoped
+    by ordinary Kubernetes RBAC — for every apply it performs on that object's behalf. A
+    platform team can hand tenant teams a namespace and a tightly-scoped ServiceAccount, point
+    their Kustomization at it, and know a compromised or careless commit in that tenant's repo
+    can't reach outside its RBAC boundary — no separate multi-tenancy feature required, just
+    Kubernetes' own permission model applied per reconciler.
+  </p>
+
+  <h2>Closing the loop: notifications and image automation</h2>
+  <p>
+    <strong>notification-controller</strong> runs in both directions. Outbound, an
+    <code>Alert</code> + <code>Provider</code> pair forwards Flux reconciliation events — a failed
+    apply, a completed sync — to Slack, Microsoft Teams, generic webhooks, or as OpenTelemetry
+    spans for tracing a rollout across the whole toolkit. Inbound, a <code>Receiver</code> exposes a
+    webhook endpoint that a Git host or registry can hit on push, triggering an immediate
+    reconciliation instead of waiting out the poll interval — the event-driven complement to
+    Flux's default interval-based polling.
+  </p>
+  <p>
+    <strong>image-reflector-controller</strong> and <strong>image-automation-controller</strong>
+    push GitOps a step further by closing the loop back into Git itself: an
+    <code>ImageRepository</code> scans a registry for new tags, an <code>ImagePolicy</code> picks
+    the one that matches a rule (semver range, newest build, regex), and an
+    <code>ImageUpdateAutomation</code> patches the matching tag directly into your manifests and
+    <em>commits that change to Git</em> — so even "just bump the image tag" stays GitOps: the
+    commit exists, is reviewable, and is what source-controller then picks up on its next poll.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong><a href="argo.html">Argo CD</a></strong> solves the same pull-based reconciliation
+    problem but as one centralized, UI-first application platform with an explicit sync action per
+    <code>Application</code>; Flux is a modular set of composable controllers, continuously
+    self-healing by default, with no bundled UI (a community <strong>Flux Operator</strong> and
+    dashboards like Weave GitOps fill that gap when teams want one). Where Argo has
+    <strong>Argo Rollouts</strong> for progressive delivery, Flux's ecosystem sibling is
+    <strong>Flagger</strong> — a separate CNCF-adjacent project that drives canary/blue-green
+    rollouts by watching metrics and manipulating a service mesh or ingress, triggered by the same
+    HelmRelease/Kustomization revisions Flux reconciles.
+  </div>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    Flux graduated in November 2023 on the strength of the same core GitOps guarantee as Argo —
+    Git as the single source of truth, continuously enforced — proven through a different
+    architectural lens: small, independently composable controllers over one centralized
+    application platform. You'll meet Flux wherever a platform team wants to build its own
+    opinionated internal developer platform on top of GitOps primitives rather than adopt a
+    monolithic UI, wherever multi-tenant clusters need RBAC-scoped reconciliation out of the box,
+    and increasingly wherever teams want to ship OCI artifacts straight into a cluster without a
+    Git repo in the loop at all.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. Someone runs <code>kubectl edit</code> on a Deployment that a Flux Kustomization manages, changing its replica count. What happens by default, with no extra configuration?</p>
+      <button class="quiz-option" data-val="a">Nothing — Flux only applies changes when a new Git commit lands, so the manual edit persists until the next commit.</button>
+      <button class="quiz-option" data-val="b">On its next reconcile interval, kustomize-controller re-diffs live state against the last-fetched Artifact and reverts the manual edit back to what Git says — drift correction is on by default.</button>
+      <button class="quiz-option" data-val="c">Flux CD immediately deletes the Deployment because it detected an unauthorized change.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. Why does source-controller publish a separate "Artifact" instead of letting kustomize-controller and helm-controller fetch straight from Git/Helm repos themselves?</p>
+      <button class="quiz-option" data-val="a">It's a caching optimization only — there's no architectural reason it couldn't work the other way.</button>
+      <button class="quiz-option" data-val="b">Artifacts are required because Git repos don't support webhooks.</button>
+      <button class="quiz-option" data-val="c">It gives every downstream controller (kustomize, helm, and custom ones) one uniform HTTP interface to consume, regardless of whether the original source was Git, an OCI registry, a Helm repo, or an S3 bucket.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. What's the main architectural difference between Flux and Argo CD, given that both implement pull-based GitOps?</p>
+      <button class="quiz-option" data-val="a">Flux is a set of small, independently composable controllers (source, kustomize, helm, notification) with no bundled UI, while Argo CD is a centralized application platform with a built-in UI and an explicit per-app sync action.</button>
+      <button class="quiz-option" data-val="b">Argo CD is pull-based while Flux is push-based, requiring CI systems to hold cluster credentials.</button>
+      <button class="quiz-option" data-val="c">Flux only supports Helm charts, while Argo CD only supports plain YAML manifests.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var revisions = [
+    { id: "a1", image: "checkout:1.4.0", replicas: 3 },
+    { id: "b7", image: "checkout:1.5.0", replicas: 3 },
+    { id: "c2", image: "checkout:1.5.0", replicas: 5 },
+    { id: "d9", image: "checkout:1.6.0", replicas: 5 }
+  ];
+
+  var TICK_MS = 900;
+  var POLL_EVERY = 3; // ticks between source-controller polls
+
+  var state = {
+    git: { revIdx: 0 },
+    artifact: { revIdx: 0, image: revisions[0].image, replicas: revisions[0].replicas },
+    live: { image: revisions[0].image, replicas: revisions[0].replicas, drifted: false },
+    tick: 0,
+    playing: false,
+    timer: null,
+    lastAction: "Idle. Cluster matches the latest Artifact."
+  };
+
+  var el = {};
+  ["fxRevBadge", "fxStatusBadge", "fxClock", "fxGitPanel", "fxGitImage", "fxGitReplicas",
+   "fxArtifactPanel", "fxArtifactRev", "fxArtifactImage", "fxArtifactReplicas",
+   "fxClusterPanel", "fxLiveImage", "fxLiveReplicas", "fxLog",
+   "fxCommitBtn", "fxDriftBtn", "fxPlayBtn", "fxStepBtn", "fxResetBtn"
+  ].forEach(function (id) { el[id] = document.getElementById(id); });
+
+  function fieldHtml(label, match, val) {
+    return label + ": <span class=\"" + (match ? "fx-match" : "fx-diff") + "\">" + val + "</span>";
+  }
+
+  function render() {
+    var gitRev = revisions[state.git.revIdx];
+    var artifactStale = state.artifact.revIdx !== state.git.revIdx;
+    var imageMatch = state.live.image === state.artifact.image;
+    var replicasMatch = state.live.replicas === state.artifact.replicas;
+    var synced = imageMatch && replicasMatch && !state.live.drifted;
+
+    el.fxGitImage.textContent = "image: " + gitRev.image;
+    el.fxGitReplicas.textContent = "replicas: " + gitRev.replicas;
+
+    el.fxArtifactRev.textContent = "revision: rev-" + revisions[state.artifact.revIdx].id;
+    el.fxArtifactImage.textContent = "image: " + state.artifact.image;
+    el.fxArtifactReplicas.textContent = "replicas: " + state.artifact.replicas;
+
+    el.fxLiveImage.innerHTML = fieldHtml("image", imageMatch, state.live.image);
+    el.fxLiveReplicas.innerHTML = fieldHtml("replicas", replicasMatch, state.live.replicas);
+
+    el.fxGitPanel.classList.toggle("fx-active", artifactStale);
+    el.fxArtifactPanel.classList.toggle("fx-active", artifactStale);
+    el.fxClusterPanel.classList.toggle("fx-drift", state.live.drifted || !synced);
+
+    el.fxRevBadge.textContent = "Artifact: rev-" + revisions[state.artifact.revIdx].id;
+    el.fxStatusBadge.textContent = synced ? "Ready" : (state.live.drifted ? "Drift detected" : "Reconciling");
+    el.fxStatusBadge.className = "fx-badge-lg " + (synced ? "fx-good" : "fx-warn");
+
+    var nextPoll = POLL_EVERY - (state.tick % POLL_EVERY);
+    el.fxClock.textContent = "tick " + state.tick + " · next poll in " + nextPoll;
+
+    el.fxLog.textContent = state.lastAction;
+
+    el.fxCommitBtn.disabled = state.git.revIdx >= revisions.length - 1;
+    el.fxPlayBtn.textContent = state.playing ? "⏸ Pause" : "▶ Play";
+  }
+
+  function commit() {
+    if (state.git.revIdx >= revisions.length - 1) return;
+    state.git.revIdx++;
+    state.lastAction = "Committed change to Git: now at rev-" + revisions[state.git.revIdx].id +
+      ". Waiting for source-controller's next poll to notice.";
+    render();
+  }
+
+  function causeDrift() {
+    state.live.image = "checkout:9.9.9-hotfix";
+    state.live.replicas = state.live.replicas + 2;
+    state.live.drifted = true;
+    state.lastAction = "Hand-edited the live cluster directly (kubectl edit). No commit was made — " +
+      "Flux will detect and revert this on the next reconcile tick.";
+    render();
+  }
+
+  function tick() {
+    state.tick++;
+    var polled = state.tick % POLL_EVERY === 0;
+
+    if (polled) {
+      if (state.artifact.revIdx !== state.git.revIdx) {
+        state.artifact.revIdx = state.git.revIdx;
+        state.artifact.image = revisions[state.artifact.revIdx].image;
+        state.artifact.replicas = revisions[state.artifact.revIdx].replicas;
+        state.lastAction = "source-controller polled: revision changed → published rev-" +
+          revisions[state.artifact.revIdx].id + " as a new Artifact.";
+      } else if (state.live.drifted || state.live.image !== state.artifact.image ||
+                 state.live.replicas !== state.artifact.replicas) {
+        state.live.image = state.artifact.image;
+        state.live.replicas = state.artifact.replicas;
+        state.live.drifted = false;
+        state.lastAction = "kustomize-controller polled: live state differed from the Artifact — " +
+          "re-applied to correct it (drift correction).";
+      } else {
+        state.lastAction = "source-controller polled: revision unchanged, nothing to do.";
+      }
+    } else {
+      state.lastAction = "Idle tick " + state.tick + " — next poll in " +
+        (POLL_EVERY - (state.tick % POLL_EVERY)) + ".";
+    }
+    render();
+  }
+
+  function play() {
+    state.playing = !state.playing;
+    if (state.playing) {
+      state.timer = setInterval(tick, TICK_MS);
+    } else {
+      clearInterval(state.timer);
+    }
+    render();
+  }
+
+  function reset() {
+    clearInterval(state.timer);
+    state.git.revIdx = 0;
+    state.artifact = { revIdx: 0, image: revisions[0].image, replicas: revisions[0].replicas };
+    state.live = { image: revisions[0].image, replicas: revisions[0].replicas, drifted: false };
+    state.tick = 0;
+    state.playing = false;
+    state.lastAction = "Idle. Cluster matches the latest Artifact.";
+    render();
+  }
+
+  el.fxCommitBtn.addEventListener("click", commit);
+  el.fxDriftBtn.addEventListener("click", causeDrift);
+  el.fxPlayBtn.addEventListener("click", play);
+  el.fxStepBtn.addEventListener("click", tick);
+  el.fxResetBtn.addEventListener("click", reset);
+
+  render();
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
