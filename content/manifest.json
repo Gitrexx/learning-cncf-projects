@@ -180,7 +180,7 @@
       "summary": "Event-driven autoscaling, including scale-to-zero, on top of the HPA.",
       "prerequisites": ["kubernetes"],
       "file": "keda.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "falco",
