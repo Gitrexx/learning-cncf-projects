@@ -1,0 +1,478 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>KEDA — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the autoscaling simulator widget. ---- */
+  .kd-badges { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-4); align-items: center; }
+  .kd-badge-lg {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    font-weight: 700;
+    padding: var(--sp-2) var(--sp-4);
+    border-radius: var(--r-pill);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-muted);
+  }
+  .kd-badge-lg.kd-zero  { border-color: color-mix(in srgb, var(--text-faint) 45%, var(--border)); color: var(--text-faint); }
+  .kd-badge-lg.kd-keda  { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+  .kd-badge-lg.kd-hpa   { border-color: color-mix(in srgb, var(--signal-green) 45%, var(--border)); color: var(--signal-green); background: color-mix(in srgb, var(--signal-green) 10%, var(--surface)); }
+  .kd-badge-lg.kd-cool  { border-color: color-mix(in srgb, var(--signal-amber) 45%, var(--border)); color: var(--signal-amber); background: color-mix(in srgb, var(--signal-amber) 10%, var(--surface)); }
+  .kd-clock { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); }
+
+  .kd-row { margin-bottom: var(--sp-4); }
+  .kd-label {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-2);
+    display: block;
+  }
+  .kd-slider-row { display: flex; align-items: center; gap: var(--sp-4); }
+  .kd-slider-row input[type="range"] { flex: 1; }
+  .kd-slider-val { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--text); min-width: 8em; text-align: right; }
+
+  .kd-viz {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--sp-4);
+    margin: var(--sp-4) 0;
+  }
+  @media (max-width: 700px) { .kd-viz { grid-template-columns: 1fr; } }
+  .kd-panel {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
+  }
+  .kd-panel-title {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent-strong);
+    margin-bottom: var(--sp-3);
+    display: block;
+  }
+  .kd-pods { display: flex; flex-wrap: wrap; gap: var(--sp-2); min-height: 2.4em; align-items: flex-end; }
+  .kd-pod {
+    width: 1.6em; height: 1.6em;
+    border-radius: var(--r-sm);
+    border: 1px solid color-mix(in srgb, var(--signal-green) 55%, var(--border));
+    background: color-mix(in srgb, var(--signal-green) 22%, var(--surface));
+  }
+  .kd-queue-bar {
+    height: 1.4em;
+    border-radius: var(--r-sm);
+    background: linear-gradient(90deg, var(--accent), var(--accent-strong));
+    transition: width 0.2s ease;
+  }
+  .kd-queue-track { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; }
+
+  .kd-log {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3);
+    min-height: 2.4em;
+  }
+  .kd-btn-row { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · CI/CD, GitOps &amp; Autoscaling · Sub-topic 17 / 36</p>
+  <h1>KEDA</h1>
+  <p class="lead">
+    Kubernetes ships a built-in autoscaler for Pods — the
+    <span class="term" title="HorizontalPodAscaler: a Kubernetes controller that adjusts a Deployment/StatefulSet's replica count to track an observed metric">Horizontal Pod Autoscaler (HPA)</span>
+    — but it was designed around one shape of signal: CPU and memory utilization pulled from
+    <code>metrics.k8s.io</code>, sampled from Pods that are already running. That's a bad fit for a
+    huge class of real workloads: a consumer that should scale on how many messages are sitting in a
+    Kafka topic or a SQS queue, not on how busy the Pod happens to be right now — and it can't help
+    at all with the case where the right number of replicas is <strong>zero</strong>, because HPA
+    can never scale a Deployment below 1. <strong>KEDA</strong> (Kubernetes Event-Driven
+    Autoscaling) fills both gaps: it lets the HPA scale on external, event-source-specific metrics
+    instead of just CPU/memory, and it adds the 0↔1 transition HPA structurally can't do — real
+    scale-to-zero for anything, not just Knative-style HTTP services.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    KEDA doesn't replace the HPA — it feeds it. KEDA is a thin, pluggable layer that watches an
+    event source (a queue, a stream, a cron schedule, a Prometheus query, 60+ others), turns that
+    into a metric the HPA can understand, and additionally takes over the one job the HPA can't do:
+    deciding when a workload should exist at all. It sits squarely inside "autoscaling," the same
+    landscape slot as the HPA and the Cluster Autoscaler, but one layer higher: it decides
+    <em>how many Pods</em>, not <em>how many nodes</em>.
+  </div>
+
+  <h2>The gap KEDA closes: custom metrics were always possible, never uniform</h2>
+  <p>
+    Kubernetes' HPA has supported "external metrics" since early on via the
+    <code>custom.metrics.k8s.io</code> and <code>external.metrics.k8s.io</code> APIs — but someone
+    had to run a metrics adapter that implemented that API for their specific event source, and
+    every team building one solved the same problem slightly differently: how to poll the source,
+    how to authenticate, how to convert "37 messages in the queue" into a Kubernetes metric value,
+    how to handle the source being briefly unreachable. KEDA standardizes all of that behind one
+    CRD-driven contract and a growing catalog of maintained <strong>scalers</strong> — small Go
+    modules that each know how to talk to one event source (RabbitMQ, Kafka, Redis, PostgreSQL,
+    Azure Service Bus, AWS SQS, GCP Pub/Sub, Prometheus, cron schedules, and dozens more) — so
+    "scale my Deployment on Kafka consumer lag" becomes a twenty-line YAML resource instead of a
+    bespoke adapter someone has to build and operate.
+  </p>
+
+  <h2>Three components, one job split in two phases</h2>
+  <p>
+    A KEDA install runs three pieces, and the split matters because it maps directly onto how
+    scaling decisions get made:
+  </p>
+  <table>
+    <thead><tr><th>Component</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr><td><strong>keda-operator</strong></td><td>Watches <code>ScaledObject</code>/<code>ScaledJob</code> resources, polls each scaler on its <code>pollingInterval</code>, and owns the <strong>activation</strong> decision — scaling 0↔1 directly by patching the Deployment, bypassing the HPA entirely.</td></tr>
+      <tr><td><strong>keda-operator-metrics-apiserver</strong></td><td>Implements the <code>external.metrics.k8s.io</code> API, translating each scaler's raw reading (queue depth, lag, whatever) into a metric value the standard Kubernetes HPA controller can query.</td></tr>
+      <tr><td><strong>keda-admission-webhooks</strong></td><td>Validates <code>ScaledObject</code>/<code>ScaledJob</code> specs on create/update — e.g. rejects two ScaledObjects targeting the same Deployment, which would fight over the same HPA.</td></tr>
+    </tbody>
+  </table>
+  <p>
+    That gives KEDA a genuinely two-phase architecture. For the <strong>0↔1 transition</strong> —
+    the part the HPA cannot do, since it only ever adjusts an existing replica count — the KEDA
+    operator itself decides and patches the Deployment straight to 1 (or straight to 0) the moment
+    a scaler's <code>IsActive</code> check flips. For <strong>1↔N scaling</strong> once at least one
+    replica is running, KEDA gets out of the way: it creates and owns a standard Kubernetes
+    <code>HorizontalPodAutoscaler</code> object on your behalf, wired to query KEDA's own metrics
+    server as an external metric source, and the native HPA control loop — the same one that's
+    always driven CPU-based scaling — takes it from there, complete with its usual stabilization
+    windows and scale-velocity policies.
+  </p>
+
+  <h2>ScaledObject: the core resource</h2>
+  <pre><code>apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: order-worker
+spec:
+  scaleTargetRef:
+    name: order-worker           # the Deployment being scaled
+  pollingInterval: 30            # seconds between scaler checks (default)
+  cooldownPeriod: 300            # seconds of inactivity before scaling to zero (default)
+  minReplicaCount: 0             # KEDA-only: HPA alone could never go this low
+  maxReplicaCount: 10
+  triggers:
+    - type: rabbitmq
+      metadata:
+        queueName: orders
+        queueLength: "5"          # target: ~5 messages per replica
+      authenticationRef:
+        name: rabbitmq-trigger-auth</code></pre>
+  <p>
+    <code>scaleTargetRef</code> points at any Deployment, StatefulSet, or arbitrary scalable
+    <span class="term" title="A Kubernetes resource exposing a /scale subresource, e.g. Deployments, StatefulSets, and some CRDs">custom resource</span>.
+    Each entry under <code>triggers</code> selects a scaler by <code>type</code> and configures it —
+    a ScaledObject can list several triggers, and KEDA scales up if <em>any</em> of them says it
+    should. <code>authenticationRef</code> points at a separate
+    <code>TriggerAuthentication</code> (or cluster-scoped <code>ClusterTriggerAuthentication</code>)
+    resource, which keeps credentials — a connection string, an IAM role, a Vault path — out of the
+    ScaledObject itself and lets platform teams manage secrets once, referenced by many workloads.
+  </p>
+
+  <div class="callout note">
+    <span class="callout-title">ScaledJob: the other target shape</span>
+    Not every event-driven workload is a long-running Deployment that should have more or fewer
+    replicas — sometimes each unit of work should be its own Kubernetes <code>Job</code>, run to
+    completion and discarded. <code>ScaledJob</code> covers that case: instead of adjusting a
+    Deployment's replica count, KEDA creates one Job per unit of pending work (up to
+    <code>maxReplicaCount</code> concurrently), which fits batch-style, one-shot processing better
+    than a pool of long-lived worker Pods.
+  </div>
+
+  <h2>Try it: autoscaling simulator</h2>
+  <p>
+    Drag the queue-depth slider to simulate messages arriving at a RabbitMQ queue behind an
+    <code>order-worker</code> ScaledObject (<code>queueLength: 5</code> per replica,
+    <code>maxReplicaCount: 10</code>). Press play and watch the two phases play out on their own
+    timers: KEDA's own poll decides the 0↔1 jump the instant work appears, then the HPA — reading
+    KEDA's external metric — takes over scaling 1→N. Drop the queue back to zero and watch
+    <code>cooldownPeriod</code> hold the last replica alive for a while before KEDA scales to zero.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Autoscaling simulator — order-worker ScaledObject</div>
+
+    <div class="kd-badges">
+      <span class="kd-badge-lg" id="kdPhaseBadge">Idle · 0 replicas</span>
+      <span class="kd-clock" id="kdClock">tick 0 · pollingInterval 30s</span>
+    </div>
+
+    <div class="kd-row">
+      <span class="kd-label">Incoming queue depth (messages in RabbitMQ)</span>
+      <div class="kd-slider-row">
+        <input type="range" id="kdQueueSlider" min="0" max="60" value="0" step="1" />
+        <span class="kd-slider-val" id="kdQueueVal">0 messages</span>
+      </div>
+    </div>
+
+    <div class="kd-viz">
+      <div class="kd-panel">
+        <span class="kd-panel-title">Queue (trigger source)</span>
+        <div class="kd-queue-track"><div class="kd-queue-bar" id="kdQueueBar" style="width:0%"></div></div>
+        <p style="margin-top: var(--sp-3); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted);" id="kdQueueText">0 messages · target 5 / replica</p>
+      </div>
+      <div class="kd-panel">
+        <span class="kd-panel-title">order-worker Deployment</span>
+        <div class="kd-pods" id="kdPods"></div>
+        <p style="margin-top: var(--sp-3); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted);" id="kdPodsText">0 replicas</p>
+      </div>
+    </div>
+
+    <div class="kd-row">
+      <span class="kd-label">Reconcile log</span>
+      <div class="kd-log" id="kdLog">Idle. No replicas, no pending work.</div>
+    </div>
+
+    <div class="kd-row kd-btn-row">
+      <button class="btn" id="kdPlayBtn">▶ Play</button>
+      <button class="btn ghost" id="kdStepBtn">Step one tick</button>
+      <button class="btn ghost" id="kdResetBtn">Reset</button>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">What to notice</span>
+    The jump from 0 to 1 replica happens the instant the queue goes above zero and the operator's
+    poll lands — that's KEDA's own activation decision, no HPA involved. Every replica count above
+    1 only ever changes on an HPA-labeled tick, because from there it's the standard Kubernetes HPA
+    loop reading KEDA's external metric. And dropping the queue to zero doesn't scale down
+    immediately: the badge turns amber and counts down the <code>cooldownPeriod</code> (modeled here
+    as 10 ticks — the real default 300s ÷ 30s pollingInterval) before KEDA scales the last replica
+    to zero, so a brief lull in traffic doesn't thrash your workload.
+  </div>
+
+  <h2>Extensibility: scalers as a plugin surface</h2>
+  <p>
+    The scaler catalog covers most common event sources out of the box, but KEDA doesn't require
+    every integration to live in its own repo. An <strong>external scaler</strong> is a small gRPC
+    service you write and run yourself, implementing KEDA's scaler interface (<code>IsActive</code>,
+    <code>GetMetricsAndActivity</code>); a <code>ScaledObject</code> trigger of type
+    <code>external</code> or <code>external-push</code> points at it. That's the escape hatch for an
+    internal system or a niche event source KEDA doesn't ship a scaler for — you get the same
+    activation/HPA-handoff machinery for free, you just supply the "how do I read this source"
+    logic.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    The <strong>HPA</strong> is what KEDA drives, not what it replaces — KEDA still creates and
+    relies on a real HPA object for 1→N scaling; it only adds the external-metric feed and the 0↔1
+    capability the HPA lacks on its own. The <strong>Vertical Pod Autoscaler (VPA)</strong> is
+    solving a different axis entirely (resizing a Pod's CPU/memory requests, not replica count) and
+    is generally not run alongside KEDA/HPA on the same metric without care, since both would be
+    adjusting the same Pods. The <strong>Cluster Autoscaler</strong> operates one layer down — nodes,
+    not Pods — and typically reacts <em>to</em> KEDA's scaling decisions (more Pods triggering more
+    node capacity), rather than competing with it. And <strong>KEDA HTTP Add-on</strong> is a
+    separate, not-yet-graduated KEDA sub-project purpose-built for scaling on live HTTP request
+    volume (including true zero-downtime scale-from-zero for web traffic) — a scenario the queue/
+    stream-oriented core scalers don't cover well on their own.
+  </div>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    KEDA graduated CNCF in August 2023 on the strength of a simple, sharply-scoped idea executed
+    well: keep the HPA as the trusted scaling control loop, and just widen what can feed it — plus
+    add the one capability, scale-to-zero, that no amount of custom metrics could ever unlock on
+    their own. You'll meet KEDA anywhere workloads are driven by bursty, queue-shaped, or scheduled
+    demand rather than steady CPU load: message-queue consumers, stream processors, cron-triggered
+    batch jobs, and — increasingly — as the autoscaling backbone under serverless-on-Kubernetes
+    platforms (including parts of Knative and Azure Container Apps) that need real scale-to-zero
+    without reinventing the HPA underneath it.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">1. Why can't the standard Kubernetes HPA scale a Deployment to zero replicas on its own?</p>
+      <button class="quiz-option" data-val="a">It can — KEDA just makes it faster.</button>
+      <button class="quiz-option" data-val="b">Scaling to zero requires a service mesh sidecar to hold traffic, which the HPA doesn't have.</button>
+      <button class="quiz-option" data-val="c">The HPA control loop only ever adjusts an existing replica count based on a metric from running Pods — it structurally has no path to decide a workload should have zero Pods; that 0↔1 activation decision is something KEDA's own operator makes and applies directly.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">2. Once a KEDA-managed Deployment has at least 1 replica and needs to scale further (say from 2 to 5), what actually drives that scaling decision?</p>
+      <button class="quiz-option" data-val="a">The keda-operator patches the replica count directly, the same way it handles 0↔1.</button>
+      <button class="quiz-option" data-val="b">The standard Kubernetes HPA controller, reading an external metric that KEDA's metrics-apiserver computes from the scaler — KEDA creates the HPA object but the native HPA loop owns 1→N scaling.</button>
+      <button class="quiz-option" data-val="c">The keda-admission-webhooks component, which recalculates desired replicas on every ScaledObject validation.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. What does a ScaledObject's <code>cooldownPeriod</code> control?</p>
+      <button class="quiz-option" data-val="a">How long KEDA waits, after a trigger goes inactive, before scaling the workload down to zero — preventing a brief lull in events from immediately tearing down the last replica.</button>
+      <button class="quiz-option" data-val="b">How often the scaler polls the event source for a new reading.</button>
+      <button class="quiz-option" data-val="c">How long a ScaledJob's Kubernetes Job is allowed to run before being killed.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var TICK_MS = 800;
+  var TARGET_PER_REPLICA = 5;
+  var MAX_REPLICAS = 10;
+  var COOLDOWN_TICKS = 10; // 300s cooldownPeriod / 30s pollingInterval
+  var HPA_EVERY = 1;       // HPA re-evaluates on the same simulated cadence here for clarity
+
+  var state = {
+    queue: 0,
+    replicas: 0,
+    cooldownRemaining: 0,
+    tick: 0,
+    playing: false,
+    timer: null,
+    lastAction: "Idle. No replicas, no pending work."
+  };
+
+  var el = {};
+  ["kdPhaseBadge", "kdClock", "kdQueueSlider", "kdQueueVal", "kdQueueBar", "kdQueueText",
+   "kdPods", "kdPodsText", "kdLog", "kdPlayBtn", "kdStepBtn", "kdResetBtn"
+  ].forEach(function (id) { el[id] = document.getElementById(id); });
+
+  function desiredReplicas(queue) {
+    if (queue <= 0) return 0;
+    return Math.min(MAX_REPLICAS, Math.max(1, Math.ceil(queue / TARGET_PER_REPLICA)));
+  }
+
+  function render() {
+    el.kdQueueVal.textContent = state.queue + " message" + (state.queue === 1 ? "" : "s");
+    el.kdQueueBar.style.width = Math.min(100, (state.queue / 60) * 100) + "%";
+    el.kdQueueText.textContent = state.queue + " messages · target " + TARGET_PER_REPLICA + " / replica";
+
+    el.kdPods.innerHTML = "";
+    for (var i = 0; i < state.replicas; i++) {
+      var pod = document.createElement("div");
+      pod.className = "kd-pod";
+      el.kdPods.appendChild(pod);
+    }
+    el.kdPodsText.textContent = state.replicas + " replica" + (state.replicas === 1 ? "" : "s");
+
+    var badgeClass = "kd-badge-lg ";
+    var badgeText;
+    if (state.replicas === 0) {
+      badgeClass += "kd-zero";
+      badgeText = "Idle · 0 replicas";
+    } else if (state.cooldownRemaining > 0) {
+      badgeClass += "kd-cool";
+      badgeText = "Cooling down · " + state.replicas + " replica" + (state.replicas === 1 ? "" : "s") +
+        " · scale-to-zero in " + state.cooldownRemaining;
+    } else {
+      badgeClass += "kd-hpa";
+      badgeText = "Active · " + state.replicas + " replica" + (state.replicas === 1 ? "" : "s");
+    }
+    el.kdPhaseBadge.className = badgeClass;
+    el.kdPhaseBadge.textContent = badgeText;
+
+    el.kdClock.textContent = "tick " + state.tick + " · pollingInterval 30s";
+    el.kdLog.textContent = state.lastAction;
+    el.kdPlayBtn.textContent = state.playing ? "⏸ Pause" : "▶ Play";
+  }
+
+  function tick() {
+    state.tick++;
+    var desired = desiredReplicas(state.queue);
+
+    if (state.replicas === 0 && desired >= 1) {
+      state.replicas = 1;
+      state.cooldownRemaining = 0;
+      state.lastAction = "keda-operator polled the RabbitMQ scaler: queue > 0 → activated the " +
+        "workload, patching replicas 0 → 1 directly (no HPA involved in this jump).";
+    } else if (state.replicas > 0 && desired === 0) {
+      if (state.cooldownRemaining === 0) state.cooldownRemaining = COOLDOWN_TICKS;
+      state.cooldownRemaining--;
+      if (state.cooldownRemaining <= 0) {
+        state.replicas = 0;
+        state.cooldownRemaining = 0;
+        state.lastAction = "cooldownPeriod elapsed with the trigger still inactive → keda-operator " +
+          "deactivated the workload, replicas 1 → 0.";
+      } else {
+        state.lastAction = "Trigger inactive (queue empty) — holding at " + state.replicas +
+          " replica(s) during cooldownPeriod (" + state.cooldownRemaining + " tick(s) left).";
+      }
+    } else if (state.replicas > 0 && desired > 0) {
+      state.cooldownRemaining = 0;
+      if (desired !== state.replicas) {
+        var from = state.replicas;
+        state.replicas = desired;
+        state.lastAction = "HPA re-evaluated the external metric (queue/target) and scaled " +
+          from + " → " + desired + " replicas.";
+      } else {
+        state.lastAction = "HPA re-evaluated the external metric: " + desired +
+          " replicas already matches desired, no change.";
+      }
+    } else {
+      state.lastAction = "Idle tick " + state.tick + " — no pending work.";
+    }
+    render();
+  }
+
+  function play() {
+    state.playing = !state.playing;
+    if (state.playing) {
+      state.timer = setInterval(tick, TICK_MS);
+    } else {
+      clearInterval(state.timer);
+    }
+    render();
+  }
+
+  function reset() {
+    clearInterval(state.timer);
+    state.queue = 0;
+    state.replicas = 0;
+    state.cooldownRemaining = 0;
+    state.tick = 0;
+    state.playing = false;
+    state.lastAction = "Idle. No replicas, no pending work.";
+    el.kdQueueSlider.value = 0;
+    render();
+  }
+
+  el.kdQueueSlider.addEventListener("input", function () {
+    state.queue = parseInt(el.kdQueueSlider.value, 10);
+    render();
+  });
+  el.kdPlayBtn.addEventListener("click", play);
+  el.kdStepBtn.addEventListener("click", tick);
+  el.kdResetBtn.addEventListener("click", reset);
+
+  render();
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
