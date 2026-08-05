@@ -190,7 +190,7 @@
       "summary": "Runtime threat detection from kernel syscalls — cloud-native intrusion detection.",
       "prerequisites": [],
       "file": "falco.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "opa",

@@ -1,0 +1,539 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Falco — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the rule-matching simulator widget. ---- */
+  .fc-badges { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-4); align-items: center; }
+  .fc-badge-lg {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    font-weight: 700;
+    padding: var(--sp-2) var(--sp-4);
+    border-radius: var(--r-pill);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-muted);
+  }
+  .fc-badge-lg.fc-alert { border-color: color-mix(in srgb, var(--signal-red) 45%, var(--border)); color: var(--signal-red); background: color-mix(in srgb, var(--signal-red) 10%, var(--surface)); }
+  .fc-badge-lg.fc-excl  { border-color: color-mix(in srgb, var(--signal-amber) 45%, var(--border)); color: var(--signal-amber); background: color-mix(in srgb, var(--signal-amber) 10%, var(--surface)); }
+  .fc-badge-lg.fc-clear { border-color: color-mix(in srgb, var(--signal-green) 45%, var(--border)); color: var(--signal-green); background: color-mix(in srgb, var(--signal-green) 10%, var(--surface)); }
+
+  .fc-row { margin-bottom: var(--sp-4); }
+  .fc-label {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-2);
+    display: block;
+  }
+  .fc-rule-box {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
+    white-space: pre;
+    overflow-x: auto;
+    line-height: 1.6;
+  }
+  .fc-rule-box .fc-dim { color: var(--text-faint); }
+  .fc-exceptions { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-3); }
+  .fc-exceptions label { display: flex; align-items: center; gap: var(--sp-2); font-family: var(--font-mono); font-size: var(--fs-sm); cursor: pointer; }
+
+  .fc-events { display: flex; flex-direction: column; gap: var(--sp-2); }
+  .fc-event {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: var(--sp-2) var(--sp-3);
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-2) var(--sp-4);
+    color: var(--text-muted);
+  }
+  .fc-event .fc-field b { color: var(--text); font-weight: 600; }
+
+  .fc-log { display: flex; flex-direction: column; gap: var(--sp-2); min-height: 3em; }
+  .fc-log-entry {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    border-radius: var(--r-sm);
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-muted);
+  }
+  .fc-log-entry.match {
+    border-color: color-mix(in srgb, var(--signal-red) 45%, var(--border));
+    background: color-mix(in srgb, var(--signal-red) 8%, var(--surface));
+    color: var(--text);
+  }
+  .fc-log-entry.excluded {
+    border-color: color-mix(in srgb, var(--signal-amber) 45%, var(--border));
+    background: color-mix(in srgb, var(--signal-amber) 8%, var(--surface));
+    color: var(--text);
+  }
+  .fc-log-entry.nomatch { color: var(--text-faint); }
+  .fc-btn-row { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; }
+
+  .fc-viz { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-5); margin: var(--sp-4) 0; }
+  @media (max-width: 800px) { .fc-viz { grid-template-columns: 1fr; } }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Security, Policy &amp; Supply Chain · Sub-topic 18 / 36</p>
+  <h1>Falco</h1>
+  <p class="lead">
+    Everything you've studied so far in this landscape either shapes traffic (Envoy, Istio,
+    Linkerd, Cilium) or delivers desired state (Argo, Flux, KEDA) — none of it watches what a
+    running container is actually <em>doing</em>. Admission control (a topic you'll meet next,
+    with OPA and Kyverno) can stop a Pod from ever being created with the wrong image, the wrong
+    privileges, or a mounted host path — but once that Pod is running, nothing in the stack so far
+    notices if a process inside it spawns a shell, reads <code>/etc/shadow</code>, or opens a
+    reverse network connection to an unfamiliar host. That gap — runtime behavior, not
+    deploy-time configuration — is what <strong>Falco</strong> closes: a CNCF-graduated engine
+    that watches the Linux kernel's own record of what every process does and evaluates it
+    against declarative rules in real time.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Falco is <strong>runtime threat detection</strong>, sitting downstream of everything that
+    decides what's <em>allowed to exist</em> (Kubernetes RBAC, admission policy) and catching what
+    happens after a workload is already running — an attacker who got in through a vulnerable
+    dependency, a supply-chain compromise, a misconfigured Pod that's now being abused. It doesn't
+    replace a policy engine or a network policy; it's the layer that assumes those might fail and
+    watches for the fallout, live.
+  </div>
+
+  <h2>The gap: security up to the container boundary, not inside it</h2>
+  <p>
+    Before Falco (created at Sysdig in 2016, donated to CNCF in 2018, graduated February 29,
+    2024), Kubernetes security tooling mostly stopped at the container boundary: scan the image
+    for known CVEs, enforce that it doesn't run as root, restrict what it can mount. All of that
+    is necessary and all of it is <em>static</em> — checked once, at build or deploy time. None of
+    it tells you that, three hours after deployment, a process inside a "safe" container spawned
+    <code>bash</code> with an interactive terminal, or that a Node.js web server suddenly started
+    executing <code>curl</code> to download a binary into <code>/tmp</code>. Catching that
+    requires watching the one source of truth no attacker can lie to: the sequence of
+    <span class="term" title="The low-level requests a process makes to the Linux kernel — open a file, spawn a process, connect a socket, etc. Every observable action a program takes eventually becomes a syscall.">syscalls</span>
+    a process actually issues to the kernel. Falco taps that stream directly.
+  </p>
+
+  <h2>Architecture: a kernel-level driver feeding a stateful rules engine</h2>
+  <p>
+    A Falco instance runs as a privileged DaemonSet Pod on every node and is built from a small
+    stack of purpose-built libraries plus a pluggable capture layer:
+  </p>
+  <table>
+    <thead><tr><th>Layer</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr><td><strong>driver</strong></td><td>Captures raw syscall events from the kernel. Three interchangeable options exist (below) — Falco doesn't care which one is loaded, they all feed the same event stream upward.</td></tr>
+      <tr><td><strong>libscap</strong> (System CAPture)</td><td>The low-level capture backbone: talks to whichever driver is loaded, pulls events off the ring buffer, and can also read/write <code>.scap</code> trace files for offline replay.</td></tr>
+      <tr><td><strong>libsinsp</strong> (System INSPection)</td><td>Enriches raw syscalls with state Falco keeps in memory — which process, container, image, and (via a Kubernetes metadata cache) which Pod/namespace each event belongs to — and evaluates the rules engine against that enriched event.</td></tr>
+      <tr><td><strong>rules engine</strong></td><td>Loads YAML rule files, compiles each <code>condition</code> into a filter expression, and checks every enriched event against every loaded rule, emitting an alert on a match.</td></tr>
+    </tbody>
+  </table>
+  <p>
+    The driver is the one piece with real deployment tradeoffs, so Falco ships three:
+  </p>
+  <table>
+    <thead><tr><th>Driver</th><th>How it captures</th><th>Tradeoff</th></tr></thead>
+    <tbody>
+      <tr><td><code>kernel module</code></td><td>A traditional loadable kernel module (<code>.ko</code>), compiled per-kernel-version.</td><td>Broadest kernel compatibility, but runs code in kernel space and needs a matching build for the exact running kernel.</td></tr>
+      <tr><td><code>ebpf</code> (classic/legacy probe)</td><td>An eBPF program compiled per-kernel-version, loaded into a kernel eBPF hook.</td><td>Safer than a kernel module (eBPF's verifier rejects unsafe programs) but still needs a build matching the host kernel, typically via an init container running <strong>driverkit</strong>.</td></tr>
+      <tr><td><code>modern_ebpf</code> (CO-RE)</td><td>A single pre-compiled <span class="term" title="Compile Once, Run Everywhere: eBPF bytecode built once against BTF (kernel type info) that the kernel itself resolves onto its own memory layout at load time, instead of needing a version-specific recompile.">CO-RE</span> BPF object, portable across kernel versions with no build step.</td><td>No driverkit, no kernel headers, no privileged init container — became the <strong>default driver as of Falco 0.40</strong> for exactly that reason, requires kernel 5.8+.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout note">
+    <span class="callout-title">Same idea, different layer than Cilium</span>
+    If "eBPF in the kernel" sounds familiar from the Cilium deep-dive: Cilium hooks the
+    <em>networking</em> path (XDP/tc) to make forwarding decisions in-line. Falco hooks the
+    <em>syscall</em> path purely to observe — it doesn't sit in the request path and by default
+    can't block anything itself, it emits alerts. (Falco Talon, covered below, is what turns an
+    alert into an actual response.)
+  </div>
+
+  <h2>Anatomy of a rule</h2>
+  <p>
+    A Falco rule is a YAML object with four parts, and the example below is a simplified version
+    of a real rule shipped in Falco's default rule set:
+  </p>
+  <pre><code>- rule: Terminal shell in container
+  desc: A shell was spawned with an attached terminal inside a container.
+  condition: >
+    spawned_process and container
+    and shell_procs and proc.tty != 0
+    and not trusted_debug_containers
+  output: >
+    Shell spawned in container (user=%user.name shell=%proc.name
+    parent=%proc.pname cmdline=%proc.cmdline container=%container.id
+    image=%container.image.repository)
+  priority: WARNING
+  tags: [container, shell, mitre_execution]</code></pre>
+  <ul>
+    <li><strong>condition</strong> — a boolean expression over event <em>fields</em>
+      (<code>proc.name</code>, <code>fd.name</code>, <code>evt.type</code>, <code>container.id</code>,
+      <code>k8s.ns.name</code>, …) using Sysdig's filter syntax. Note <code>spawned_process</code>,
+      <code>container</code>, and <code>shell_procs</code> aren't primitives — they're
+      <strong>macros</strong>, named, reusable sub-expressions (e.g.
+      <code>shell_procs: proc.name in (bash, sh, zsh, dash, ksh)</code>) that keep rules readable
+      and let a whole rule pack share one definition of "what counts as a shell."</li>
+    <li><strong>output</strong> — a template string interpolating fields from the matched event
+      (<code>%proc.name</code>, <code>%container.id</code>, …) into a human-readable alert.</li>
+    <li><strong>priority</strong> — a syslog-style severity from <code>EMERGENCY</code> down to
+      <code>DEBUG</code>, used for routing and filtering downstream.</li>
+    <li><strong>tags</strong> — free-form labels, increasingly aligned to
+      <span class="term" title="A public knowledge base of real-world adversary tactics and techniques, used across the security industry as a common vocabulary for what a detection actually covers.">MITRE ATT&amp;CK</span>
+      technique IDs, so a rule pack can be mapped straight onto a compliance or threat-coverage
+      framework.</li>
+  </ul>
+  <p>
+    <strong>Lists</strong> (a named array, e.g. of trusted image names) and <strong>exceptions</strong>
+    (a <code>not &lt;macro&gt;</code> clause referencing one) are the standard way to tune a
+    noisy default rule without editing its core logic — you add an exception macro like
+    <code>trusted_debug_containers</code> that names the images or namespaces that are legitimately
+    allowed to spawn shells, instead of hand-editing the rule's condition every time.
+  </p>
+
+  <h2>Try it: rule-matching simulator</h2>
+  <p>
+    Below is a simplified version of that same "Terminal shell in container" rule, and a stream of
+    seven events it will see. Step through the stream and watch each event get evaluated against
+    the rule's base condition, then toggle an exception on and replay to see how it silences
+    specific, expected shells (a debug toolbox Pod, a <code>-debug</code> image tag) without
+    touching the core detection.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Rule-matching simulator — Terminal shell in container</div>
+
+    <div class="fc-row">
+      <span class="fc-label">Rule condition</span>
+      <div class="fc-rule-box">spawned_process and container
+  and shell_procs and proc.tty != 0
+  <span id="fcExc1Line" class="fc-dim">and not exception_debug_image</span>
+  <span id="fcExc2Line" class="fc-dim">and not exception_debug_namespace</span></div>
+      <div class="fc-exceptions">
+        <label><input type="checkbox" id="fcExc1" /> Tune rule — exclude images tagged <code>*-debug</code></label>
+        <label><input type="checkbox" id="fcExc2" /> Tune rule — exclude the <code>debug-tools</code> namespace</label>
+      </div>
+    </div>
+
+    <div class="fc-badges">
+      <span class="fc-badge-lg fc-clear" id="fcCountAlert">0 alerts</span>
+      <span class="fc-badge-lg fc-excl" id="fcCountExcl">0 excluded</span>
+      <span class="fc-badge-lg" id="fcCountNo">0 no-match</span>
+    </div>
+
+    <div class="fc-viz">
+      <div>
+        <span class="fc-label">Incoming events (next up: <span id="fcNextIdx">1</span> / 7)</span>
+        <div class="fc-events" id="fcEvents"></div>
+      </div>
+      <div>
+        <span class="fc-label">Falco evaluation log</span>
+        <div class="fc-log" id="fcLog"></div>
+      </div>
+    </div>
+
+    <div class="fc-row fc-btn-row">
+      <button class="btn" id="fcStepBtn">Step next event</button>
+      <button class="btn ghost" id="fcPlayBtn">▶ Play all</button>
+      <button class="btn ghost" id="fcResetBtn">Replay from start</button>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">What to notice</span>
+    Events 3, 6, and 7 never match the <em>base</em> condition at all — one isn't a shell, one is a
+    non-interactive shell child, and one is running on the host rather than inside a container — so
+    toggling the exceptions never changes their outcome. Events 4 and 5 match the base condition
+    exactly like a real attacker's shell would, and only the two exception checkboxes decide whether
+    they alert. Also notice that toggling an exception <em>after</em> stepping doesn't rewrite
+    already-logged entries — same as production Falco, changing a rule only affects events evaluated
+    from that point forward, so hit "Replay from start" to see the new rule apply from event 1.
+  </div>
+
+  <h2>Plugins: beyond syscalls</h2>
+  <p>
+    Syscalls are Falco's original and still primary event source, but not every threat surfaces
+    there — a compromised cloud IAM credential or a suspicious Kubernetes API call (someone
+    <code>exec</code>-ing into a Pod, escalating a ClusterRoleBinding) never shows up as a Linux
+    syscall on a node. Falco's <strong>plugin framework</strong> generalizes the same rules engine
+    to arbitrary event sources:
+  </p>
+  <ul>
+    <li><strong>Source plugins</strong> generate a stream of events from something external — AWS
+      CloudTrail, Okta, GitHub audit logs, or (the flagship example) the
+      <strong>k8saudit</strong> plugin, which consumes the Kubernetes API server's own
+      <span class="term" title="A record every Kubernetes API server can emit of every request it handled — who did what to which resource, when.">audit log</span>
+      via webhook or file and turns each audit entry into a Falco event with source
+      <code>k8s_audit</code>.</li>
+    <li><strong>Extractor plugins</strong> teach the rules engine how to pull fields (like
+      <code>ka.user.name</code> or <code>ka.target.namespace</code>) out of that source's event
+      payload, so rule conditions and output templates can reference them exactly like
+      <code>proc.name</code> from a syscall.</li>
+  </ul>
+  <p>
+    The practical effect: the same declarative rule format, the same priority/tag/output model, and
+    the same downstream alerting pipeline now cover "someone exec'd into a production Pod through
+    the API server" alongside "a process inside that Pod spawned a reverse shell" — two different
+    event sources, one detection engine.
+  </p>
+
+  <h2>From alert to action: falcosidekick and Falco Talon</h2>
+  <p>
+    Falco itself only ever <em>emits</em> — an alert goes to stdout, a file, or gRPC by default,
+    and stops there. Two ecosystem projects pick it up from that point:
+  </p>
+  <ul>
+    <li><strong>falcosidekick</strong> is a fan-out router: it receives Falco's JSON alerts and
+      forwards them to 70+ destinations — Slack, PagerDuty, Elasticsearch, Prometheus, Kafka, cloud
+      event buses — so an alert reaches whatever your team already watches.</li>
+    <li><strong>Falco Talon</strong> is a no-code <em>response engine</em>: you map specific rules
+      (by name, tag, or field match) to automated actions — kill the offending Pod, label it for
+      quarantine, apply an isolating NetworkPolicy — so a detection can trigger real, immediate
+      containment instead of just paging a human.</li>
+  </ul>
+  <p>
+    That three-stage shape — kernel-level detection → fan-out → optional automated response — is
+    deliberate: Falco stays narrowly focused on "is this event a real match for a real rule,"
+    and lets purpose-built downstream tools own delivery and remediation.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>OPA/Kyverno</strong> (upcoming deep-dives) evaluate policy at <em>admission time</em> —
+    should this Pod be allowed to be created at all — a fundamentally earlier and different
+    question than Falco's "given this Pod is already running, is it doing something suspicious
+    right now." You typically run both: admission policy to keep obviously bad configurations out,
+    Falco to catch what gets through anyway. <strong>Tetragon</strong> (a Cilium sibling project)
+    overlaps closely — also eBPF-based, also syscall-level — but leans toward in-kernel
+    <em>enforcement</em> (blocking an action before it completes) and ties naturally into Cilium's
+    existing eBPF dataplane, whereas Falco's strength is its mature, declarative rule ecosystem and
+    broad plugin-based event sources. <strong>Sysdig</strong> is the company that created Falco and
+    remains its largest contributor, but Falco itself has been fully open-source and
+    CNCF-governed since its 2018 donation — Sysdig's commercial platform is a separate product
+    built partly on top of it.
+  </div>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    Falco graduated CNCF on February 29, 2024 — the first (and so far only) project in the
+    "runtime security" category to reach that bar, on the strength of a mature, widely-deployed
+    detection engine, a driver story that finally removed the "which kernel am I on" friction
+    (modern eBPF/CO-RE), and a rule ecosystem with community packs mapped to MITRE ATT&CK for
+    Containers, PCI-DSS, and HIPAA. You'll meet Falco anywhere a team needs to answer "would we
+    even notice if a container got compromised right now" — intrusion detection on Kubernetes
+    nodes, container-escape and cryptomining detection, and increasingly as the audit trail behind
+    a compliance program, since a fired rule with a MITRE tag doubles as evidence a specific
+    control is actually being enforced, not just documented.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. What's the fundamental difference between what Falco does and what an admission controller (like OPA or Kyverno) does?</p>
+      <button class="quiz-option" data-val="a">Falco runs on control-plane nodes only; admission controllers run on every node.</button>
+      <button class="quiz-option" data-val="b">Admission control decides whether a resource is allowed to be created in the first place; Falco watches behavior in already-running workloads and detects suspicious activity after the fact.</button>
+      <button class="quiz-option" data-val="c">They do the same job — Falco is just the eBPF-based implementation and admission controllers are the older webhook-based approach.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. Why did the modern eBPF (CO-RE) driver become Falco's default as of version 0.40?</p>
+      <button class="quiz-option" data-val="a">It's the only driver capable of reading Kubernetes audit logs.</button>
+      <button class="quiz-option" data-val="b">It runs with lower privileges than the kernel module and classic eBPF probe.</button>
+      <button class="quiz-option" data-val="c">It's a single pre-compiled BPF object built once against kernel type info (BTF) and portable across kernel versions, so it needs no driverkit build step, no kernel headers, and no privileged init container — unlike the kernel module or classic eBPF probe, which both need a build matching the exact host kernel.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. In a Falco rule, what's the purpose of a macro like <code>shell_procs</code> combined with an exception like <code>not trusted_debug_containers</code>?</p>
+      <button class="quiz-option" data-val="a">Macros give reusable, named sub-expressions shared across rules (what counts as "a shell"), and an exception macro referenced with <code>not</code> lets you tune out expected, legitimate matches (a debug toolbox Pod) without editing the rule's core detection logic.</button>
+      <button class="quiz-option" data-val="b">Macros define which driver (kernel module vs. eBPF) the rule requires to evaluate correctly.</button>
+      <button class="quiz-option" data-val="c">Exceptions convert a WARNING-priority rule into an EMERGENCY-priority one when both conditions are true.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var TICK_MS = 900;
+
+  var EVENTS = [
+    { proc: "bash", parent: "containerd-shim", evtType: "execve", tty: true,  container: "web-7f9d",   image: "nginx:1.25",       ns: "prod",       host: false },
+    { proc: "sh",   parent: "runc",            evtType: "execve", tty: true,  container: "checkout-2a1c", image: "checkout:1.4",  ns: "prod",       host: false },
+    { proc: "nginx",parent: "containerd-shim", evtType: "execve", tty: false, container: "web-7f9d",   image: "nginx:1.25",       ns: "prod",       host: false },
+    { proc: "bash", parent: "kubectl-exec",    evtType: "execve", tty: true,  container: "debug-tools-9f2", image: "toolbox:debug", ns: "debug-tools", host: false },
+    { proc: "zsh",  parent: "runc",            evtType: "execve", tty: true,  container: "api-55b1",   image: "api:2.0-debug",    ns: "staging",    host: false },
+    { proc: "curl", parent: "bash",            evtType: "execve", tty: false, container: "web-7f9d",   image: "nginx:1.25",       ns: "prod",       host: false },
+    { proc: "bash", parent: "sshd",            evtType: "execve", tty: true,  container: "-",          image: "-",                ns: "-",          host: true }
+  ];
+  var SHELLS = ["bash", "sh", "zsh", "dash", "ksh"];
+
+  var state = { index: 0, log: [], playing: false, timer: null, counts: { alert: 0, excl: 0, no: 0 } };
+
+  var el = {};
+  ["fcEvents", "fcLog", "fcStepBtn", "fcPlayBtn", "fcResetBtn", "fcExc1", "fcExc2",
+   "fcExc1Line", "fcExc2Line", "fcCountAlert", "fcCountExcl", "fcCountNo", "fcNextIdx"
+  ].forEach(function (id) { el[id] = document.getElementById(id); });
+
+  function fieldRow(ev, revealed) {
+    if (!revealed) return '<span class="fc-field">…</span>';
+    return (
+      '<span class="fc-field">proc=<b>' + ev.proc + '</b></span>' +
+      '<span class="fc-field">parent=<b>' + ev.parent + '</b></span>' +
+      '<span class="fc-field">tty=<b>' + ev.tty + '</b></span>' +
+      '<span class="fc-field">container=<b>' + ev.container + '</b></span>' +
+      '<span class="fc-field">image=<b>' + ev.image + '</b></span>' +
+      '<span class="fc-field">ns=<b>' + ev.ns + '</b></span>'
+    );
+  }
+
+  function renderEvents() {
+    el.fcEvents.innerHTML = "";
+    EVENTS.forEach(function (ev, i) {
+      var revealed = i < state.index;
+      var div = document.createElement("div");
+      div.className = "fc-event";
+      div.style.opacity = revealed ? "1" : "0.45";
+      div.innerHTML = "<span class=\"fc-field\">#" + (i + 1) + "</span>" + fieldRow(ev, revealed);
+      el.fcEvents.appendChild(div);
+    });
+    el.fcNextIdx.textContent = Math.min(state.index + 1, EVENTS.length);
+  }
+
+  function renderLog() {
+    el.fcLog.innerHTML = "";
+    if (state.log.length === 0) {
+      var empty = document.createElement("div");
+      empty.className = "fc-log-entry nomatch";
+      empty.textContent = "No events evaluated yet — step or play to start the stream.";
+      el.fcLog.appendChild(empty);
+    }
+    state.log.forEach(function (entry) {
+      var div = document.createElement("div");
+      div.className = "fc-log-entry " + entry.kind;
+      div.textContent = entry.text;
+      el.fcLog.appendChild(div);
+    });
+  }
+
+  function renderBadges() {
+    el.fcCountAlert.textContent = state.counts.alert + " alert" + (state.counts.alert === 1 ? "" : "s");
+    el.fcCountExcl.textContent = state.counts.excl + " excluded";
+    el.fcCountNo.textContent = state.counts.no + " no-match";
+  }
+
+  function renderExceptionLines() {
+    el.fcExc1Line.className = el.fcExc1.checked ? "" : "fc-dim";
+    el.fcExc2Line.className = el.fcExc2.checked ? "" : "fc-dim";
+  }
+
+  function render() {
+    renderEvents();
+    renderLog();
+    renderBadges();
+    renderExceptionLines();
+    el.fcStepBtn.disabled = state.index >= EVENTS.length;
+    el.fcPlayBtn.disabled = state.index >= EVENTS.length;
+    el.fcPlayBtn.textContent = state.playing ? "⏸ Pause" : "▶ Play all";
+  }
+
+  function evaluate(ev) {
+    var isShellSpawn = ev.evtType === "execve" && !ev.host && ev.tty && SHELLS.indexOf(ev.proc) !== -1;
+    if (!isShellSpawn) {
+      var why = ev.host ? "not inside a container (container clause fails)"
+        : (!ev.tty ? "no interactive terminal attached (proc.tty == 0)" : "not a shell process (shell_procs fails)");
+      return { kind: "nomatch", text: "#event " + ev.proc + " — base condition false: " + why + "." };
+    }
+    if (el.fcExc1.checked && /-debug$/.test(ev.image)) {
+      return { kind: "excluded", text: "#event " + ev.proc + " in " + ev.container + " — base condition true, but excluded: image " + ev.image + " matches exception_debug_image." };
+    }
+    if (el.fcExc2.checked && ev.ns === "debug-tools") {
+      return { kind: "excluded", text: "#event " + ev.proc + " in " + ev.container + " — base condition true, but excluded: namespace " + ev.ns + " matches exception_debug_namespace." };
+    }
+    return {
+      kind: "match",
+      text: "🚨 WARNING: Shell spawned in container (user=root shell=" + ev.proc + " parent=" + ev.parent +
+        " container=" + ev.container + " image=" + ev.image + " ns=" + ev.ns + ")"
+    };
+  }
+
+  function step() {
+    if (state.index >= EVENTS.length) return;
+    var ev = EVENTS[state.index];
+    var result = evaluate(ev);
+    state.log.push(result);
+    if (result.kind === "match") state.counts.alert++;
+    else if (result.kind === "excluded") state.counts.excl++;
+    else state.counts.no++;
+    state.index++;
+    render();
+    if (state.index >= EVENTS.length) {
+      clearInterval(state.timer);
+      state.playing = false;
+    }
+  }
+
+  function play() {
+    state.playing = !state.playing;
+    if (state.playing) {
+      state.timer = setInterval(step, TICK_MS);
+    } else {
+      clearInterval(state.timer);
+    }
+    render();
+  }
+
+  function reset() {
+    clearInterval(state.timer);
+    state.index = 0;
+    state.log = [];
+    state.playing = false;
+    state.counts = { alert: 0, excl: 0, no: 0 };
+    render();
+  }
+
+  el.fcStepBtn.addEventListener("click", step);
+  el.fcPlayBtn.addEventListener("click", play);
+  el.fcResetBtn.addEventListener("click", reset);
+  el.fcExc1.addEventListener("change", renderExceptionLines);
+  el.fcExc2.addEventListener("change", renderExceptionLines);
+
+  render();
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
