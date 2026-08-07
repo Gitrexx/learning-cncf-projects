@@ -1,0 +1,542 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Open Policy Agent (OPA) — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the Rego policy playground widget. ---- */
+  .opa-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: var(--sp-5); align-items: start; }
+  @media (max-width: 900px) { .opa-grid { grid-template-columns: 1fr; } }
+
+  .opa-label {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-2);
+    display: block;
+  }
+  .opa-rules { display: flex; flex-direction: column; gap: var(--sp-1); margin-bottom: var(--sp-2); }
+  .opa-rule-toggle {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    cursor: pointer;
+    color: var(--text-muted);
+  }
+  .opa-rule-block {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    margin-bottom: var(--sp-3);
+    white-space: pre;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    line-height: 1.55;
+    transition: opacity .15s, border-left-color .15s;
+  }
+  .opa-rule-block.disabled { opacity: 0.4; border-left-color: var(--text-faint); }
+
+  .opa-textarea { min-height: 220px; resize: vertical; }
+  .opa-presets { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin: var(--sp-3) 0; }
+  .opa-presets .btn { font-size: var(--fs-xs); padding: var(--sp-1) var(--sp-3); }
+
+  .opa-decision {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    margin: var(--sp-4) 0;
+    font-family: var(--font-mono);
+  }
+  .opa-decision-badge {
+    font-size: var(--fs-md);
+    font-weight: 700;
+    padding: var(--sp-2) var(--sp-5);
+    border-radius: var(--r-pill);
+    border: 1px solid var(--border);
+  }
+  .opa-decision-badge.allow { color: var(--signal-green); border-color: color-mix(in srgb, var(--signal-green) 45%, var(--border)); background: color-mix(in srgb, var(--signal-green) 12%, var(--surface)); }
+  .opa-decision-badge.deny  { color: var(--signal-red);   border-color: color-mix(in srgb, var(--signal-red) 45%, var(--border));   background: color-mix(in srgb, var(--signal-red) 12%, var(--surface)); }
+  .opa-decision-badge.err   { color: var(--signal-amber); border-color: color-mix(in srgb, var(--signal-amber) 45%, var(--border)); background: color-mix(in srgb, var(--signal-amber) 12%, var(--surface)); }
+
+  .opa-violations { display: flex; flex-direction: column; gap: var(--sp-2); min-height: 2em; }
+  .opa-violation {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    background: color-mix(in srgb, var(--signal-red) 8%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--signal-red) 40%, var(--border));
+    border-radius: var(--r-sm);
+    padding: var(--sp-2) var(--sp-3);
+    color: var(--text);
+  }
+  .opa-violation .opa-rule-tag { color: var(--text-faint); }
+  .opa-empty { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Security, Policy &amp; Supply Chain · Sub-topic 19 / 36</p>
+  <h1>Open Policy Agent (OPA)</h1>
+  <p class="lead">
+    In the Falco deep-dive, "admission control" kept coming up as the layer upstream of runtime
+    detection — the thing that decides whether a Pod is allowed to exist in the first place, before
+    Falco ever gets a chance to watch it misbehave. <strong>OPA</strong> is the general-purpose
+    engine most admission control (and a lot more besides) is built on: a policy evaluator that
+    takes a JSON document describing "what's about to happen" and a set of declarative rules
+    written in a language called <strong>Rego</strong>, and returns a decision — also JSON. It has
+    no idea what a Kubernetes Pod is. That's deliberate, and it's the whole point.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Every service you've ever written has authorization logic tangled into its code somewhere — an
+    <code>if user.role != "admin"</code> here, a hardcoded list of allowed S3 buckets there. OPA's
+    pitch is to pull that decision out into its own component, express it as data-driven policy, and
+    let any service ask it a question over a simple API. Kubernetes admission control (via
+    Gatekeeper, covered below) is OPA's most famous deployment, but it's the same engine behind
+    Envoy authorization filters, Terraform plan gating, CI/CD approval checks, and API-gateway
+    authorization — anywhere "should this be allowed?" needs to be answered consistently and
+    auditably.
+  </div>
+
+  <h2>The problem: authorization logic scattered everywhere, in every language</h2>
+  <p>
+    Before a general policy engine, "should this request be allowed" logic lives wherever someone
+    happened to write it: inline in a microservice's request handler, in a Terraform wrapper script,
+    in a Jenkins pipeline step, in a Kubernetes admission webhook written from scratch. Every one of
+    those is a different language, a different deploy cycle, and a different place a security or
+    platform team has to look to answer "what's our policy on privileged containers?" — and every
+    one of them has to be updated, tested, and redeployed separately when the policy changes.
+  </p>
+  <p>
+    OPA's answer is to <strong>decouple policy decision-making from policy enforcement</strong>.
+    The service that enforces a decision (a Kubernetes API server, an Envoy proxy, a CI pipeline)
+    stays a thin <span class="term" title="The component that actually acts on a decision — lets the request through, blocks it, or applies a mutation. It doesn't decide policy, it just carries out what the decision engine returned.">policy enforcement point</span>:
+    it packages up the relevant facts about the request as JSON, sends that to OPA, and does
+    whatever OPA's answer says. All the actual logic — what counts as compliant, what's forbidden,
+    under what conditions — lives in one place, in one declarative language, versioned and tested
+    like any other code.
+  </p>
+
+  <h2>Architecture: an in-memory engine over two kinds of documents</h2>
+  <p>
+    Structurally, OPA is a small, dependency-light binary (a single static Go binary) built around
+    one core idea: everything it reasons about is a JSON document, and it keeps two flavors of them
+    in memory to evaluate a query.
+  </p>
+  <table>
+    <thead><tr><th>Document</th><th>What it is</th></tr></thead>
+    <tbody>
+      <tr><td><strong>input</strong></td><td>The request-specific JSON handed to OPA at query time — a Kubernetes AdmissionReview object, an HTTP request's method and headers, a Terraform plan. Never stored; it's the question.</td></tr>
+      <tr><td><strong>base documents (data)</strong></td><td>Context OPA already has loaded — reference lists (allowed registries, an RBAC role table), pulled in as plain JSON alongside policy, typically via a <strong>bundle</strong> (below).</td></tr>
+      <tr><td><strong>virtual documents</strong></td><td>The output of evaluating Rego rules against <code>input</code> and <code>data</code> — the actual answer, e.g. <code>data.k8s.admission.allow</code>.</td></tr>
+    </tbody>
+  </table>
+  <p>
+    OPA is deliberately deployment-agnostic about where it runs relative to the thing enforcing its
+    decisions:
+  </p>
+  <ul>
+    <li><strong>Sidecar / host daemon</strong> — the most common production shape: OPA runs
+      colocated with (or on the same node as) the service that queries it, over localhost HTTP, so a
+      policy decision never leaves the machine and stays low-latency.</li>
+    <li><strong>Library</strong> — Go programs can embed OPA's evaluator directly (no network hop at
+      all); other languages can compile a Rego policy to <span class="term" title="WebAssembly — a portable, sandboxed bytecode format. Compiling Rego to WASM lets a policy run inside a browser, a Node.js process, or any WASM host with no OPA server involved.">WASM</span>
+      and evaluate it in-process.</li>
+    <li><strong>Central service</strong> — a shared OPA (or fleet of them) queried over the network,
+      simpler to operate but a shared dependency and an extra network hop per decision.</li>
+  </ul>
+  <p>
+    Whichever shape, the same REST API underneath: <code>POST /v1/data/&lt;path&gt;</code> with an
+    <code>input</code> body evaluates the virtual document at that path and returns it as JSON.
+  </p>
+
+  <h2>Rego: policies that generate documents, not step through branches</h2>
+  <p>
+    Rego (inspired by <span class="term" title="A declarative logic-programming language from database theory: you state facts and rules about how new facts follow from them, and a query engine derives all the conclusions — rather than you writing an explicit step-by-step procedure.">Datalog</span>)
+    reads unfamiliar at first because it isn't procedural — a Rego rule doesn't execute top-to-bottom
+    like a function, it <em>declares</em> what's true. The critical idiom to internalize is the
+    <strong>partial set rule</strong>:
+  </p>
+  <pre><code>package k8s.admission
+
+import rego.v1
+
+default allow := false
+
+allow if {
+    count(deny) == 0
+}
+
+deny contains msg if {
+    some container in input.request.object.spec.containers
+    not startswith(container.image, "registry.corp.io/")
+    msg := sprintf("container %q uses disallowed registry: %q", [container.name, container.image])
+}
+
+deny contains msg if {
+    some container in input.request.object.spec.containers
+    container.securityContext.privileged == true
+    msg := sprintf("container %q must not run privileged", [container.name])
+}
+
+deny contains msg if {
+    input.request.object.spec.hostNetwork == true
+    msg := "hostNetwork is not allowed"
+}</code></pre>
+  <p>
+    Three separate <code>deny contains msg if { ... }</code> blocks all define the <em>same</em>
+    rule, <code>deny</code> — Rego automatically <strong>unions</strong> every message any of them
+    produce into one set, rather than the last match overwriting the others the way an imperative
+    <code>if/else if/else</code> chain would. And within a single block, <code>some container in
+    input.request.object.spec.containers</code> means "for every container that satisfies the rest
+    of this body" — if three containers all fail the registry check, that one rule body contributes
+    three separate messages to the set, one per container. That's the mental shift: a Rego rule is a
+    generator over every combination that makes the body true, not a single branch that fires once.
+    <code>allow</code> is then just "true when the <code>deny</code> set is empty" — the enforcement
+    point checks one boolean, but the interesting work is entirely in what populated (or didn't
+    populate) <code>deny</code>.
+  </p>
+  <div class="callout note">
+    <span class="callout-title">Rego v1</span>
+    OPA 1.0 (released January 2025) made the <code>if</code> and <code>contains</code> keywords in
+    the example above <em>mandatory</em> for every rule — older Rego let you write
+    <code>deny[msg] { ... }</code> with no keywords at all. If you see that bracket syntax in older
+    blog posts or existing policies, it's pre-1.0 Rego; <code>opa fmt --rego-v1</code> rewrites it
+    automatically.
+  </div>
+
+  <h2>Try it: Rego policy playground</h2>
+  <p>
+    Below is the admission policy from above, wired to a live evaluator. Toggle rules on or off to
+    change what the policy actually checks (a stand-in for editing the Rego itself), load a preset
+    input, or edit the input JSON directly — the decision and violation list re-evaluate on every
+    change, exactly like OPA re-evaluating a fresh <code>input</code> document against the same
+    loaded policy.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Rego policy playground — Kubernetes admission review</div>
+    <div class="opa-grid">
+      <div>
+        <span class="opa-label">Policy (toggle rules to simulate editing it)</span>
+        <div class="opa-rules">
+          <label class="opa-rule-toggle"><input type="checkbox" id="opaRuleRegistry" checked /> disallowed-registry rule</label>
+          <label class="opa-rule-toggle"><input type="checkbox" id="opaRulePrivileged" checked /> privileged-container rule</label>
+          <label class="opa-rule-toggle"><input type="checkbox" id="opaRuleHostnet" checked /> hostNetwork rule</label>
+        </div>
+        <div class="opa-rule-block" id="opaBlockRegistry">deny contains msg if {
+    some container in input.request.object.spec.containers
+    not startswith(container.image, "registry.corp.io/")
+    msg := sprintf("container %q uses disallowed registry: %q",
+                    [container.name, container.image])
+}</div>
+        <div class="opa-rule-block" id="opaBlockPrivileged">deny contains msg if {
+    some container in input.request.object.spec.containers
+    container.securityContext.privileged == true
+    msg := sprintf("container %q must not run privileged", [container.name])
+}</div>
+        <div class="opa-rule-block" id="opaBlockHostnet">deny contains msg if {
+    input.request.object.spec.hostNetwork == true
+    msg := "hostNetwork is not allowed"
+}</div>
+      </div>
+      <div>
+        <span class="opa-label">Input document (edit freely, or load a preset)</span>
+        <div class="opa-presets">
+          <button class="btn ghost" id="opaPresetClean">Compliant Pod</button>
+          <button class="btn ghost" id="opaPresetRegistry">Bad registry</button>
+          <button class="btn ghost" id="opaPresetPriv">Privileged container</button>
+          <button class="btn ghost" id="opaPresetMulti">Multiple violations</button>
+        </div>
+        <textarea id="opaInput" class="opa-textarea"></textarea>
+      </div>
+    </div>
+
+    <div class="opa-decision">
+      <span class="opa-label" style="margin:0;">data.k8s.admission.allow =</span>
+      <span class="opa-decision-badge" id="opaDecisionBadge">—</span>
+    </div>
+    <span class="opa-label">data.k8s.admission.deny</span>
+    <div class="opa-violations" id="opaViolations"></div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">What to notice</span>
+    Load "Multiple violations" and watch two entries appear in <code>deny</code> at once — from two
+    different rule blocks, unioned together, exactly the partial-set behavior described above.
+    Untick the disallowed-registry rule while that same input is loaded and its message disappears
+    from the set immediately, but the privileged-container message stays: each rule contributes
+    independently, and <code>allow</code> only flips true once <em>every</em> contributing rule's
+    output is gone. Try breaking the JSON syntax in the textarea, too — real OPA would reject a
+    malformed <code>input</code> the same way.
+  </div>
+
+  <h2>Bundles, decision logs, and the management APIs</h2>
+  <p>
+    A single OPA instance evaluating one policy file is the whole story for a demo; running it in
+    production adds three management concerns, all standardized as REST APIs so tooling doesn't
+    have to be OPA-instance-specific:
+  </p>
+  <ul>
+    <li><strong>Bundles</strong> — a <code>.tar.gz</code> of Rego policy plus JSON data, served from
+      an object store or HTTP endpoint. OPA polls for a new bundle on an interval and hot-swaps it
+      in atomically, so shipping a policy change is "upload a new bundle," not "redeploy every OPA
+      instance."</li>
+    <li><strong>Decision logs</strong> — every query OPA answers (in production settings) is
+      recorded with its <code>input</code>, the resulting decision, and a <code>decision_id</code>,
+      streamed to a log sink. This is what makes "why was this request denied last Tuesday"
+      answerable after the fact, and it's the audit trail regulators and security teams actually
+      want.</li>
+    <li><strong>Status &amp; discovery APIs</strong> — OPA reports its own health and which bundle
+      revision it's running, and a <strong>discovery bundle</strong> can even hand OPA the rest of
+      its configuration remotely, so a fleet of OPAs can be centrally managed without touching each
+      instance's local config file.</li>
+  </ul>
+
+  <h2>OPA + Gatekeeper: how Kubernetes admission control actually uses this</h2>
+  <p>
+    Bare OPA has no idea what a Kubernetes <code>ValidatingWebhookConfiguration</code> is — it just
+    answers queries over JSON. <strong>Gatekeeper</strong> is the project that wires OPA into
+    Kubernetes as a first-class admission controller, and it does that with two custom resources
+    built on OPA's <span class="term" title="A reusable library inside OPA/Gatekeeper for building constraint-based policy systems — the piece that understands how to turn a Constraint object plus a template's Rego into an evaluated decision.">Constraint Framework</span>:
+  </p>
+  <table>
+    <thead><tr><th>Resource</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr><td><strong>ConstraintTemplate</strong></td><td>Defines reusable policy logic (Rego, or increasingly CEL) plus a schema for the parameters that policy accepts — like defining a function signature. Registering one also registers a new CRD kind.</td></tr>
+      <tr><td><strong>Constraint</strong></td><td>An instance of a ConstraintTemplate's CRD — supplies actual parameters (e.g. the specific list of allowed registries) and which resources/namespaces it applies to. Many Constraints can reuse one ConstraintTemplate.</td></tr>
+    </tbody>
+  </table>
+  <p>
+    Gatekeeper's webhook receives every admission request, evaluates it against every applicable
+    Constraint through its embedded OPA, and enforces (or, in <strong>audit mode</strong>, just
+    records) any violation — the same <code>deny</code>-set-to-decision model above, packaged as
+    Kubernetes-native YAML instead of hand-managed bundles.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>Kyverno</strong> (next deep-dive) solves the same admission-control problem but skips
+    Rego entirely — policies are plain Kubernetes YAML, no new language to learn, at the cost of
+    being Kubernetes-only where OPA is general-purpose. <strong>Falco</strong> (previous deep-dive)
+    answers a different question at a different time: OPA/Gatekeeper decide whether a resource is
+    allowed to be <em>created</em>; Falco watches what an already-running workload actually
+    <em>does</em>. And OPA itself is not an authentication or identity system — it has no concept of
+    who a user is beyond whatever claims show up in its <code>input</code> document; it's purely the
+    decision layer that something else (your API gateway, your Kubernetes API server) has to feed
+    and act on.
+  </div>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    OPA graduated CNCF in February 2021 — the first policy-focused project to reach that bar — on
+    the strength of being genuinely domain-agnostic: the same engine, the same Rego language, and
+    the same decision-log/bundle tooling work whether the question is "can this Pod be created,"
+    "can this Envoy request pass through," "does this Terraform plan violate a guardrail," or "can
+    this CI job deploy to production." You'll meet OPA directly inside Gatekeeper on nearly any
+    Kubernetes cluster with real admission policy, as an Envoy <code>ext_authz</code> filter for API
+    authorization, embedded in Terraform-policy tools like Conftest, and generally anywhere a
+    platform team wants "policy as code" reviewed and versioned the same way application code is.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">1. Three separate <code>deny contains msg if { ... }</code> blocks all define the rule <code>deny</code>. What happens when two of them match the same input?</p>
+      <button class="quiz-option" data-val="a">Only the last matching block's message is kept — later rules overwrite earlier ones, like an if/else chain.</button>
+      <button class="quiz-option" data-val="b">OPA raises an error, since a rule name can only be defined once.</button>
+      <button class="quiz-option" data-val="c">Both messages are unioned into the same <code>deny</code> set — Rego's partial set rules combine every matching rule body's output rather than picking one.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">2. What does Gatekeeper add on top of bare OPA to make it work as Kubernetes admission control?</p>
+      <button class="quiz-option" data-val="a">A replacement for Rego that compiles policies to WASM for lower latency.</button>
+      <button class="quiz-option" data-val="b">Kubernetes-native CRDs — ConstraintTemplate (reusable policy + parameter schema) and Constraint (a parameterized instance) — plus a webhook that evaluates them through an embedded OPA.</button>
+      <button class="quiz-option" data-val="c">Decision logs and bundle distribution, which bare OPA doesn't otherwise support.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. What does "decoupling policy decision-making from enforcement" actually mean in OPA's architecture?</p>
+      <button class="quiz-option" data-val="a">The service enforcing a decision (API server, proxy, pipeline) just sends OPA a JSON <code>input</code> and acts on the JSON answer it gets back — all the actual policy logic lives centrally in Rego, not scattered across each enforcing service's own code.</button>
+      <button class="quiz-option" data-val="b">OPA always runs on a separate cluster from the services it protects, for network isolation.</button>
+      <button class="quiz-option" data-val="c">Policy decisions are made by a human reviewing a dashboard, while OPA only logs the outcome.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var PRESETS = {
+    clean: {
+      request: {
+        kind: { kind: "Pod" },
+        object: {
+          metadata: { name: "web-7f9d" },
+          spec: {
+            hostNetwork: false,
+            containers: [
+              { name: "app", image: "registry.corp.io/web:1.4", securityContext: { privileged: false } }
+            ]
+          }
+        }
+      }
+    },
+    registry: {
+      request: {
+        kind: { kind: "Pod" },
+        object: {
+          metadata: { name: "checkout-2a1c" },
+          spec: {
+            hostNetwork: false,
+            containers: [
+              { name: "app", image: "docker.io/library/checkout:1.9", securityContext: { privileged: false } }
+            ]
+          }
+        }
+      }
+    },
+    priv: {
+      request: {
+        kind: { kind: "Pod" },
+        object: {
+          metadata: { name: "debug-tools-9f2" },
+          spec: {
+            hostNetwork: false,
+            containers: [
+              { name: "toolbox", image: "registry.corp.io/toolbox:debug", securityContext: { privileged: true } }
+            ]
+          }
+        }
+      }
+    },
+    multi: {
+      request: {
+        kind: { kind: "Pod" },
+        object: {
+          metadata: { name: "sketchy-node-agent" },
+          spec: {
+            hostNetwork: true,
+            containers: [
+              { name: "agent", image: "docker.io/library/agent:latest", securityContext: { privileged: true } },
+              { name: "sidecar", image: "registry.corp.io/sidecar:1.0", securityContext: { privileged: false } }
+            ]
+          }
+        }
+      }
+    }
+  };
+
+  var el = {};
+  ["opaInput", "opaDecisionBadge", "opaViolations",
+   "opaRuleRegistry", "opaRulePrivileged", "opaRuleHostnet",
+   "opaBlockRegistry", "opaBlockPrivileged", "opaBlockHostnet",
+   "opaPresetClean", "opaPresetRegistry", "opaPresetPriv", "opaPresetMulti"
+  ].forEach(function (id) { el[id] = document.getElementById(id); });
+
+  function loadPreset(key) {
+    el.opaInput.value = JSON.stringify(PRESETS[key], null, 2);
+    evaluate();
+  }
+
+  function evaluate() {
+    var raw = el.opaInput.value;
+    var input;
+    try {
+      input = JSON.parse(raw);
+    } catch (e) {
+      el.opaDecisionBadge.textContent = "invalid input";
+      el.opaDecisionBadge.className = "opa-decision-badge err";
+      el.opaViolations.innerHTML = '<div class="opa-empty">Input is not valid JSON — OPA would reject this query outright: ' + e.message + "</div>";
+      return;
+    }
+
+    var containers = (input.request && input.request.object && input.request.object.spec && input.request.object.spec.containers) || [];
+    var spec = input.request && input.request.object && input.request.object.spec;
+    var violations = [];
+
+    if (el.opaRuleRegistry.checked) {
+      containers.forEach(function (c) {
+        if (!c.image || c.image.indexOf("registry.corp.io/") !== 0) {
+          violations.push({ rule: "disallowed-registry", msg: 'container "' + c.name + '" uses disallowed registry: "' + c.image + '"' });
+        }
+      });
+    }
+    if (el.opaRulePrivileged.checked) {
+      containers.forEach(function (c) {
+        if (c.securityContext && c.securityContext.privileged === true) {
+          violations.push({ rule: "privileged-container", msg: 'container "' + c.name + '" must not run privileged' });
+        }
+      });
+    }
+    if (el.opaRuleHostnet.checked) {
+      if (spec && spec.hostNetwork === true) {
+        violations.push({ rule: "hostNetwork", msg: "hostNetwork is not allowed" });
+      }
+    }
+
+    var allow = violations.length === 0;
+    el.opaDecisionBadge.textContent = allow ? "true" : "false";
+    el.opaDecisionBadge.className = "opa-decision-badge " + (allow ? "allow" : "deny");
+
+    el.opaViolations.innerHTML = "";
+    if (violations.length === 0) {
+      el.opaViolations.innerHTML = '<div class="opa-empty">set() — no violations, nothing to show.</div>';
+    } else {
+      violations.forEach(function (v) {
+        var div = document.createElement("div");
+        div.className = "opa-violation";
+        div.innerHTML = '<span class="opa-rule-tag">[' + v.rule + "]</span> " + v.msg;
+        el.opaViolations.appendChild(div);
+      });
+    }
+  }
+
+  function renderRuleBlocks() {
+    el.opaBlockRegistry.className = "opa-rule-block" + (el.opaRuleRegistry.checked ? "" : " disabled");
+    el.opaBlockPrivileged.className = "opa-rule-block" + (el.opaRulePrivileged.checked ? "" : " disabled");
+    el.opaBlockHostnet.className = "opa-rule-block" + (el.opaRuleHostnet.checked ? "" : " disabled");
+  }
+
+  [el.opaRuleRegistry, el.opaRulePrivileged, el.opaRuleHostnet].forEach(function (cb) {
+    cb.addEventListener("change", function () { renderRuleBlocks(); evaluate(); });
+  });
+  el.opaInput.addEventListener("input", evaluate);
+  el.opaPresetClean.addEventListener("click", function () { loadPreset("clean"); });
+  el.opaPresetRegistry.addEventListener("click", function () { loadPreset("registry"); });
+  el.opaPresetPriv.addEventListener("click", function () { loadPreset("priv"); });
+  el.opaPresetMulti.addEventListener("click", function () { loadPreset("multi"); });
+
+  renderRuleBlocks();
+  loadPreset("clean");
+
+  // ---- Quiz ----
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
