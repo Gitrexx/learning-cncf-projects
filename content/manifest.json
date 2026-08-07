@@ -200,7 +200,7 @@
       "summary": "A general-purpose policy engine (Rego) for admission control and beyond.",
       "prerequisites": [],
       "file": "opa.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "kyverno",
