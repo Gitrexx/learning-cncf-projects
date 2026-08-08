@@ -1,0 +1,875 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kyverno — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the validate/mutate/generate policy simulator widget. ---- */
+  .kv-tabs { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-4); }
+  .kv-tabs .btn { font-size: var(--fs-sm); }
+
+  .kv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-5); align-items: start; }
+  @media (max-width: 900px) { .kv-grid { grid-template-columns: 1fr; } }
+
+  .kv-label {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-2);
+    display: block;
+  }
+  .kv-rules { display: flex; flex-direction: column; gap: var(--sp-1); margin-bottom: var(--sp-2); }
+  .kv-rule-toggle {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    cursor: pointer;
+    color: var(--text-muted);
+  }
+  .kv-rule-block {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    margin-bottom: var(--sp-3);
+    white-space: pre;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    line-height: 1.55;
+    transition: opacity .15s, border-left-color .15s;
+  }
+  .kv-rule-block.disabled { opacity: 0.4; border-left-color: var(--text-faint); }
+
+  .kv-textarea { min-height: 200px; resize: vertical; }
+  .kv-presets { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin: var(--sp-3) 0; }
+  .kv-presets .btn { font-size: var(--fs-xs); padding: var(--sp-1) var(--sp-3); }
+
+  .kv-decision {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    margin: var(--sp-4) 0;
+    font-family: var(--font-mono);
+  }
+  .kv-decision-badge {
+    font-size: var(--fs-md);
+    font-weight: 700;
+    padding: var(--sp-2) var(--sp-5);
+    border-radius: var(--r-pill);
+    border: 1px solid var(--border);
+  }
+  .kv-decision-badge.pass { color: var(--signal-green); border-color: color-mix(in srgb, var(--signal-green) 45%, var(--border)); background: color-mix(in srgb, var(--signal-green) 12%, var(--surface)); }
+  .kv-decision-badge.fail { color: var(--signal-red);   border-color: color-mix(in srgb, var(--signal-red) 45%, var(--border));   background: color-mix(in srgb, var(--signal-red) 12%, var(--surface)); }
+  .kv-decision-badge.err  { color: var(--signal-amber); border-color: color-mix(in srgb, var(--signal-amber) 45%, var(--border)); background: color-mix(in srgb, var(--signal-amber) 12%, var(--surface)); }
+
+  .kv-violations { display: flex; flex-direction: column; gap: var(--sp-2); min-height: 2em; }
+  .kv-violation {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    background: color-mix(in srgb, var(--signal-red) 8%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--signal-red) 40%, var(--border));
+    border-radius: var(--r-sm);
+    padding: var(--sp-2) var(--sp-3);
+    color: var(--text);
+  }
+  .kv-violation .kv-rule-tag { color: var(--text-faint); }
+  .kv-empty { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); }
+
+  .kv-diff {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    overflow-x: auto;
+    line-height: 1.6;
+    white-space: pre;
+  }
+  .kv-diff .kv-added { display: block; background: color-mix(in srgb, var(--signal-green) 16%, transparent); color: var(--text); }
+  .kv-diff .kv-added::before { content: "+ "; color: var(--signal-green); }
+  .kv-diff .kv-same { display: block; color: var(--text-muted); }
+  .kv-diff .kv-same::before { content: "  "; }
+
+  .kv-genlist { display: flex; flex-direction: column; gap: var(--sp-3); }
+  .kv-gen-item {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--cloud-cyan);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    overflow: hidden;
+  }
+  .kv-gen-title {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.04em;
+    color: var(--text-faint);
+    padding: var(--sp-2) var(--sp-4);
+    border-bottom: 1px solid var(--border);
+  }
+  .kv-gen-body { font-family: var(--font-mono); font-size: var(--fs-xs); padding: var(--sp-3) var(--sp-4); white-space: pre; overflow-x: auto; line-height: 1.6; }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Security, Policy &amp; Supply Chain · Sub-topic 20 / 36</p>
+  <h1>Kyverno</h1>
+  <p class="lead">
+    The previous deep-dive was OPA: a general-purpose policy engine that pulls "should this be
+    allowed" logic out of your services into Rego, a language built for the job. <strong>Kyverno</strong>
+    solves the exact same Kubernetes admission-control problem — decide whether a Pod, a Deployment,
+    an Ingress should be allowed to exist, mutated on the way in, or trigger creation of something
+    else — but makes a different bet entirely: <strong>no new language at all</strong>. A Kyverno
+    policy is a Kubernetes resource, written in the same YAML you already write for every Deployment
+    and Service, describing what to check against using the shape of the resource itself.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Same slot in the stack as OPA/Gatekeeper — a validating and mutating <span class="term" title="An HTTP callback the Kubernetes API server invokes during admission, after authentication/authorization and before the object is persisted to etcd. A validating webhook can only allow/deny; a mutating webhook can also rewrite the object.">admission webhook</span>
+    that the API server calls before persisting an object. Where OPA is "bring your own enforcement
+    point, write policy in a purpose-built language," Kyverno is "install one controller, write
+    policy as Kubernetes YAML you already know how to read." That trade — less general, much lower
+    adoption friction for a platform team that's fluent in Kubernetes manifests but doesn't want to
+    learn Datalog-family logic programming — is the entire reason both projects coexist as CNCF
+    graduated projects solving the same problem.
+  </div>
+
+  <h2>Why not just use OPA? The YAML bet</h2>
+  <p>
+    Rego is precise and genuinely general-purpose — the same engine enforces policy on Terraform
+    plans, Envoy requests, and CI approvals, not just Kubernetes objects. That generality has a cost:
+    someone on the platform team has to learn a declarative logic language most engineers have never
+    touched, debug partial-set unification when a rule doesn't fire the way they expected, and wire
+    up Gatekeeper's ConstraintTemplate/Constraint CRDs on top before it even talks to Kubernetes.
+  </p>
+  <p>
+    Kyverno's founders (originally at Nirmata, donated to CNCF in 2020) bet that most platform teams
+    only need the Kubernetes case, and that they'd rather express "this field must match this
+    pattern" as a YAML overlay that looks like the resource it's checking, than as a logic query
+    over a JSON document. A Kyverno <code>ClusterPolicy</code> is itself a <span class="term" title="Kyverno's policies are installed as CustomResourceDefinitions — ClusterPolicy and the namespaced Policy — so policy-as-code is stored, versioned, and RBAC-controlled exactly like any other Kubernetes object, and kubectl/GitOps tooling works on it for free.">CRD</span>,
+    so <code>kubectl apply -f policy.yaml</code>, <code>kubectl get clusterpolicy</code>, and a GitOps
+    pipeline all work exactly like they do for any other cluster object — nothing OPA-specific to
+    learn to operate it day to day.
+  </p>
+
+  <h2>Architecture: policies are CRDs, four controllers do the work</h2>
+  <p>
+    Kyverno runs as a set of Deployments in its own namespace (<code>kyverno</code>), split since
+    the 3.0 line into four independently-scalable controllers, each watching the policy CRDs and
+    doing one job:
+  </p>
+  <table>
+    <thead><tr><th>Controller</th><th>Job</th></tr></thead>
+    <tbody>
+      <tr><td><strong>admission-controller</strong></td><td>Serves the actual <code>ValidatingWebhookConfiguration</code>/<code>MutatingWebhookConfiguration</code> HTTP endpoints the API server calls synchronously on every matching request — the real-time enforcement path, and the only one on the critical path of <code>kubectl apply</code>.</td></tr>
+      <tr><td><strong>background-controller</strong></td><td>Periodically scans resources already living in the cluster against <code>validate</code>/<code>verifyImages</code> rules — catches drift and anything created before a policy existed.</td></tr>
+      <tr><td><strong>reports-controller</strong></td><td>Aggregates per-request and per-scan results into <code>PolicyReport</code>/<code>ClusterPolicyReport</code> objects — the queryable compliance record.</td></tr>
+      <tr><td><strong>cleanup-controller</strong></td><td>Runs scheduled <code>CleanupPolicy</code> rules that delete matching resources on a cron-like interval (e.g. expired <code>Job</code>s, stale <code>CertificateSigningRequest</code>s).</td></tr>
+    </tbody>
+  </table>
+  <p>
+    One operational detail worth knowing: Kyverno <strong>manages its own webhook registration
+    dynamically</strong>. It doesn't register one webhook for every resource kind up front — it
+    inspects the <code>match</code> blocks across all installed policies and narrows the
+    webhook's <code>rules</code> to only the kinds actually referenced, so a cluster with policies
+    covering only Pods and Namespaces isn't paying an admission round-trip for every ConfigMap
+    write.
+  </p>
+
+  <h2>One CRD, four rule types</h2>
+  <p>
+    A <code>ClusterPolicy</code> (cluster-scoped) or <code>Policy</code> (namespaced) holds a list
+    of <code>rules</code>. Every rule starts with a <code>match</code> block (kinds, namespaces,
+    label selectors, even the requesting user/service account via <code>subjects</code>) and an
+    optional <code>exclude</code>, then does exactly one of four things:
+  </p>
+  <ul>
+    <li><strong>validate</strong> — accept or reject the request against a <code>pattern</code>
+      (or <code>anyPattern</code> for an OR of patterns, or a raw <code>deny.conditions</code>
+      expression for anything a pattern can't express).</li>
+    <li><strong>mutate</strong> — rewrite the object in place before it's persisted, via
+      <code>patchStrategicMerge</code> (an overlay with special anchors) or
+      <code>patchesJson6902</code> (RFC 6902 JSON Patch, for precision edits).</li>
+    <li><strong>generate</strong> — create (and optionally keep in sync) a <em>different</em>
+      resource in response to the triggering one, e.g. a default <code>NetworkPolicy</code> the
+      moment a <code>Namespace</code> is created.</li>
+    <li><strong>verifyImages</strong> — check container image signatures and attestations
+      (via <span class="term" title="Sigstore's tool for signing and verifying container images and other artifacts, without needing to manage long-lived signing keys yourself (keyless signing via short-lived OIDC-bound certificates).">cosign</span>)
+      before allowing the image to run — Kyverno's native answer to "did this image really come
+      from our CI pipeline," the same supply-chain question the in-toto and TUF deep-dives later in
+      this section approach from different angles.</li>
+  </ul>
+
+  <h3>validate: pattern matching, not a boolean query</h3>
+  <pre><code>apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-labels-and-limits
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: require-team-label
+      match:
+        any:
+        - resources:
+            kinds: ["Pod"]
+      validate:
+        message: "label 'team' is required"
+        pattern:
+          metadata:
+            labels:
+              team: "?*"
+    - name: require-resource-limits
+      match:
+        any:
+        - resources:
+            kinds: ["Pod"]
+      validate:
+        message: "CPU and memory limits are required on every container"
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  limits:
+                    memory: "?*"
+                    cpu: "?*"</code></pre>
+  <p>
+    <code>pattern</code> mirrors the shape of the object it's checking: <code>"?*"</code> means
+    "must exist and be non-empty," <code>"1024"</code> would mean "must equal exactly this,"
+    operators like <code>">1Gi"</code> work on quantities. There's no boolean expression to write —
+    the request passes a rule if the live object's shape matches the pattern, full stop. That's a
+    real trade-off against Rego: pattern matching reads at a glance and needs no new mental model,
+    but it can't express "the sum of all container CPU requests must be under 4 cores" the way an
+    arbitrary Rego expression can (that class of check pushes you toward <code>deny.conditions</code>
+    or, increasingly, a CEL expression — more on that below).
+  </p>
+
+  <h3>mutate: overlays with add-if-missing anchors</h3>
+  <pre><code>    - name: add-default-limits
+      match:
+        any:
+        - resources:
+            kinds: ["Pod"]
+      mutate:
+        patchStrategicMerge:
+          spec:
+            containers:
+              - (name): "*"
+                resources:
+                  +(limits):
+                    memory: "512Mi"
+                    cpu: "500m"
+    - name: add-env-label
+      match:
+        any:
+        - resources:
+            kinds: ["Pod"]
+      mutate:
+        patchStrategicMerge:
+          metadata:
+            +(labels):
+              env: "prod"</code></pre>
+  <p>
+    <code>(name): "*"</code> is a conditional anchor that matches every element of the
+    <code>containers</code> array regardless of name; <code>+(limits)</code> is an
+    <strong>add-if-not-present</strong> anchor — it injects <code>limits</code> only when the field
+    is missing entirely, leaving a container that already sets its own limits untouched. That
+    "don't clobber what's already there" behavior is the default posture for defaults-injection
+    policies, and it's exactly what makes mutate safe to run broadly instead of only against
+    hand-picked resources.
+  </p>
+
+  <h3>generate: clone or author a companion resource</h3>
+  <pre><code>    - name: generate-default-networkpolicy
+      match:
+        any:
+        - resources:
+            kinds: ["Namespace"]
+      generate:
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        name: default-deny-ingress
+        namespace: "{{request.object.metadata.name}}"
+        synchronize: true
+        data:
+          spec:
+            podSelector: {}
+            policyTypes: ["Ingress"]</code></pre>
+  <p>
+    The trigger resource (here, a new <code>Namespace</code>) and the generated resource can be
+    completely different kinds. <code>{{request.object.metadata.name}}</code> is a
+    <span class="term" title="Kyverno resolves {{ }} placeholders using JMESPath expressions against the AdmissionReview request, prior rule results, and cluster-context lookups — the templating layer that lets one rule body work across every matching trigger.">JMESPath</span>
+    variable pulled from the admission request that triggered the rule. <code>data</code> defines
+    the new resource's content inline, the way this example does; a <code>clone</code> source
+    instead copies an existing "golden" resource already in the cluster (e.g. an image-pull
+    <code>Secret</code> a platform team maintains once and fans out to every namespace).
+    <code>synchronize: true</code> means Kyverno keeps watching the source — edit the policy (or the
+    cloned original) and every generated downstream copy updates to match; delete the trigger and the
+    generated resource is deleted too.
+  </p>
+
+  <h2>Autogen: write the rule once, cover every Pod controller</h2>
+  <p>
+    Writing a <code>validate</code> or <code>mutate</code> rule that matches <code>kind: Pod</code>
+    only protects Pods created directly — but almost nothing in a real cluster creates bare Pods.
+    They come from a <code>Deployment</code>'s <code>ReplicaSet</code>, a <code>DaemonSet</code>, a
+    <code>StatefulSet</code>, a <code>Job</code>, a <code>CronJob</code>'s <code>JobTemplate</code>.
+    Rather than making you hand-write five near-identical rules with five different
+    <code>spec.template.spec</code> paths, Kyverno <strong>auto-generates</strong> the equivalent
+    rule for every standard Pod controller kind from the single Pod-scoped rule you wrote,
+    rewriting the JSON path to match each controller's embedded Pod template
+    (<code>spec.jobTemplate.spec.template.spec</code> for <code>CronJob</code>, and so on). The
+    <code>pod-policies.kyverno.io/autogen-controllers</code> annotation lets you narrow or extend
+    which controller kinds get an autogenerated rule, including custom-resource Pod templates like
+    OpenKruise's <code>CloneSet</code>.
+  </p>
+
+  <h2>Enforce vs audit: background scans and Policy Reports</h2>
+  <p>
+    <code>validationFailureAction: Enforce</code> blocks a non-compliant request outright at
+    admission time; <code>Audit</code> lets it through but records the violation — the same
+    enforce/audit split every admission-control system needs to roll out policy without breaking
+    production on day one. But admission time only covers <em>new</em> requests. With
+    <code>spec.background: true</code> (the default), the background-controller periodically
+    re-evaluates <code>validate</code> and <code>verifyImages</code> rules against every matching
+    resource already living in the cluster — catching drift, resources created before the policy
+    existed, or ones a privileged user pushed straight through <code>kubectl</code> bypassing normal
+    review. Results from both paths — live admission requests and background scans — feed
+    <code>PolicyReport</code> (namespaced) and <code>ClusterPolicyReport</code> objects: a
+    continuously-updated, <code>kubectl get policyreport</code>-queryable compliance record, not
+    just a pass/fail gate at creation time.
+  </p>
+
+  <h2>Try it: policy simulator</h2>
+  <p>
+    Below is a single-purpose ClusterPolicy split across its three most common rule types. Switch
+    tabs to see the same kind of input evaluated a different way: <strong>Validate</strong> returns
+    pass/fail with a message per failing rule; <strong>Mutate</strong> shows the object being patched
+    with missing defaults; <strong>Generate</strong> shows a companion resource being authored off a
+    trigger. Toggle rules on/off (standing in for editing the policy) and load presets to see how the
+    outcome changes.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Kyverno policy simulator</div>
+    <div class="kv-tabs">
+      <button class="btn" id="kvTabValidate">Validate</button>
+      <button class="btn ghost" id="kvTabMutate">Mutate</button>
+      <button class="btn ghost" id="kvTabGenerate">Generate</button>
+    </div>
+
+    <!-- Validate panel -->
+    <div id="kvPanelValidate">
+      <div class="kv-grid">
+        <div>
+          <span class="kv-label">Policy (toggle rules to simulate editing it)</span>
+          <div class="kv-rules">
+            <label class="kv-rule-toggle"><input type="checkbox" id="kvRuleLabel" checked /> require-team-label rule</label>
+            <label class="kv-rule-toggle"><input type="checkbox" id="kvRuleLimits" checked /> require-resource-limits rule</label>
+          </div>
+          <div class="kv-rule-block" id="kvBlockLabel">validate:
+  message: "label 'team' is required"
+  pattern:
+    metadata:
+      labels:
+        team: "?*"</div>
+          <div class="kv-rule-block" id="kvBlockLimits">validate:
+  message: "CPU and memory limits are required
+             on every container"
+  pattern:
+    spec:
+      containers:
+        - resources:
+            limits:
+              memory: "?*"
+              cpu: "?*"</div>
+        </div>
+        <div>
+          <span class="kv-label">Input Pod (edit freely, or load a preset)</span>
+          <div class="kv-presets">
+            <button class="btn ghost" id="kvPresetClean">Compliant Pod</button>
+            <button class="btn ghost" id="kvPresetNoLabel">Missing label</button>
+            <button class="btn ghost" id="kvPresetNoLimits">Missing limits</button>
+            <button class="btn ghost" id="kvPresetNeither">Missing both</button>
+          </div>
+          <textarea id="kvValidateInput" class="kv-textarea"></textarea>
+        </div>
+      </div>
+      <div class="kv-decision">
+        <span class="kv-label" style="margin:0;">result =</span>
+        <span class="kv-decision-badge" id="kvDecisionBadge">—</span>
+      </div>
+      <span class="kv-label">rule failures</span>
+      <div class="kv-violations" id="kvViolations"></div>
+    </div>
+
+    <!-- Mutate panel -->
+    <div id="kvPanelMutate" hidden>
+      <div class="kv-grid">
+        <div>
+          <span class="kv-label">Policy (toggle rules to simulate editing it)</span>
+          <div class="kv-rules">
+            <label class="kv-rule-toggle"><input type="checkbox" id="kvRuleAddLimits" checked /> add-default-limits rule</label>
+            <label class="kv-rule-toggle"><input type="checkbox" id="kvRuleAddLabel" checked /> add-env-label rule</label>
+          </div>
+          <div class="kv-rule-block" id="kvBlockAddLimits">mutate:
+  patchStrategicMerge:
+    spec:
+      containers:
+        - (name): "*"
+          resources:
+            +(limits):
+              memory: "512Mi"
+              cpu: "500m"</div>
+          <div class="kv-rule-block" id="kvBlockAddLabel">mutate:
+  patchStrategicMerge:
+    metadata:
+      +(labels):
+        env: "prod"</div>
+        </div>
+        <div>
+          <span class="kv-label">Input Pod (edit freely, or load a preset)</span>
+          <div class="kv-presets">
+            <button class="btn ghost" id="kvPresetMutBare">No limits, no label</button>
+            <button class="btn ghost" id="kvPresetMutLimits">Already has limits</button>
+            <button class="btn ghost" id="kvPresetMutLabel">Already has label</button>
+          </div>
+          <textarea id="kvMutateInput" class="kv-textarea"></textarea>
+        </div>
+      </div>
+      <span class="kv-label">object after admission (patched)</span>
+      <div class="kv-diff" id="kvDiff"></div>
+    </div>
+
+    <!-- Generate panel -->
+    <div id="kvPanelGenerate" hidden>
+      <div class="kv-grid">
+        <div>
+          <span class="kv-label">Policy (toggle rules to simulate editing it)</span>
+          <div class="kv-rules">
+            <label class="kv-rule-toggle"><input type="checkbox" id="kvRuleGenNetpol" checked /> generate-default-networkpolicy rule</label>
+            <label class="kv-rule-toggle"><input type="checkbox" id="kvRuleGenQuota" checked /> generate-default-quota rule</label>
+          </div>
+          <div class="kv-rule-block" id="kvBlockGenNetpol">generate:
+  apiVersion: networking.k8s.io/v1
+  kind: NetworkPolicy
+  name: default-deny-ingress
+  namespace: "{{request.object.metadata.name}}"
+  synchronize: true
+  data:
+    spec:
+      podSelector: {}
+      policyTypes: ["Ingress"]</div>
+          <div class="kv-rule-block" id="kvBlockGenQuota">generate:
+  apiVersion: v1
+  kind: ResourceQuota
+  name: default-quota
+  namespace: "{{request.object.metadata.name}}"
+  synchronize: true
+  data:
+    spec:
+      hard:
+        pods: "20"
+        requests.cpu: "4"</div>
+        </div>
+        <div>
+          <span class="kv-label">Input Namespace (edit freely, or load a preset)</span>
+          <div class="kv-presets">
+            <button class="btn ghost" id="kvPresetGenPayments">payments</button>
+            <button class="btn ghost" id="kvPresetGenAnalytics">analytics-team</button>
+          </div>
+          <textarea id="kvGenerateInput" class="kv-textarea"></textarea>
+        </div>
+      </div>
+      <span class="kv-label">generated companion resources</span>
+      <div class="kv-genlist" id="kvGenerated"></div>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">Notice the contrast with OPA's partial sets</span>
+    Load "Missing both" on the Validate tab: you get exactly <em>two</em> failure messages, one per
+    rule — not one per container the way OPA's <code>deny contains msg if { ... }</code>
+    partial-set rule generated a separate entry for every offending container in the previous
+    deep-dive. A Kyverno <code>validate</code> rule's <code>pattern</code> is matched as a whole
+    against the object; it reports pass/fail plus its one configured <code>message</code>, not a
+    per-instance breakdown, unless you explicitly add a <code>foreach</code> block to iterate. Same
+    underlying question — "did this object satisfy the check" — different level of granularity in
+    the answer.
+  </div>
+
+  <h2>The CEL shift: Kyverno's newer policy types</h2>
+  <p>
+    Kubernetes itself gained an in-tree, webhook-free admission mechanism —
+    <code>ValidatingAdmissionPolicy</code> — built on
+    <span class="term" title="Common Expression Language — a small, fast, sandboxed expression language originally from Google, now embedded directly in the Kubernetes API server for admission and other policy checks.">CEL</span>,
+    evaluated inside the API server process itself rather than over the network to an external
+    webhook. Starting with 1.14 (April 2025) Kyverno leaned into that instead of treating it as a
+    competitor: it shipped a new API group, <code>policies.kyverno.io</code>, with CEL-based
+    <code>ValidatingPolicy</code> and <code>ImageValidatingPolicy</code> types, followed in 1.15
+    (July 2025) by <code>MutatingPolicy</code>, <code>GeneratingPolicy</code>, and
+    <code>DeletingPolicy</code>. These compile down to the same CEL expressions the built-in
+    <code>ValidatingAdmissionPolicy</code> uses — meaning some of them can run in-process in the API
+    server's admission chain instead of round-tripping to Kyverno's webhook — while keeping
+    Kyverno's reporting, background scanning, and exception-handling UX on top. As of this writing
+    the CEL types are <code>v1beta1</code>, with GA targeted for the 1.18 release; the classic
+    YAML-pattern <code>kyverno.io/v1</code> <code>ClusterPolicy</code>/<code>Policy</code> types
+    (everything demonstrated above) remain fully supported and are still what most existing
+    policies in the wild are written in.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>OPA/Gatekeeper</strong> solves the identical admission-control problem in Rego, is
+    domain-agnostic beyond Kubernetes, and can express arbitrary logic Kyverno's pattern matching
+    can't — at the cost of a new language and an extra CRD layer (Gatekeeper) to reach Kubernetes at
+    all. <strong>Kubernetes' built-in <code>ValidatingAdmissionPolicy</code></strong> is a narrower,
+    dependency-free alternative shipped in the API server itself: no controller to install, CEL only,
+    validate-only in its original form, and none of Kyverno's reporting, mutate/generate/verifyImages
+    breadth, or policy exceptions — Kyverno's new CEL-based policy types are best understood as
+    building on top of that primitive rather than replacing it. And Kyverno is not a network policy
+    engine or a Kubernetes-native identity system — <code>generate</code> rules can author a
+    <code>NetworkPolicy</code> as shown above, but Kyverno itself has no opinion about how traffic is
+    actually enforced; that's Cilium's or the CNI's job.
+  </div>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    Kyverno joined CNCF as a sandbox project in 2020 and reached <strong>Graduated</strong> status in
+    March 2026 — the toolchain's growth from roughly 500 GitHub stars at donation to over 9,000, and
+    adoption at organizations including Bloomberg, Coinbase, Deutsche Telekom, LinkedIn, Spotify,
+    Vodafone, and Wayfair, was the graduation case: a policy engine platform teams could actually get
+    their whole organization to write policy for, not just the security team fluent in a new
+    language. You'll meet Kyverno as the admission controller enforcing Pod Security Standards
+    variants, image-provenance checks ahead of production, default-injection for resource limits and
+    labels, and namespace-scaffolding automation (default NetworkPolicies, Quotas, RBAC) on any
+    cluster where "policy" needed to mean "YAML the whole platform team can read," not "Rego the
+    security team maintains alone."
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. A Kyverno <code>validate</code> rule checks a Pod against a <code>pattern</code> block. What's the core difference from how an OPA/Rego rule reaches a decision?</p>
+      <button class="quiz-option" data-val="a">Kyverno can only run in audit mode; it can never block a request outright.</button>
+      <button class="quiz-option" data-val="b">Kyverno's pattern is matched declaratively against the object's shape (e.g. <code>"?*"</code> for "must exist") and yields one pass/fail plus one configured message per rule, rather than Rego's arbitrary logic that can generate a separate message per matching instance via partial sets.</button>
+      <button class="quiz-option" data-val="c">Kyverno policies are compiled to WASM before evaluation, while Rego policies are always interpreted.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. You write one <code>validate</code> rule matching <code>kind: Pod</code>. Why does it also end up protecting Pods created by a Deployment or a CronJob, without you writing separate rules for each?</p>
+      <button class="quiz-option" data-val="a">Kubernetes admission webhooks automatically recurse into every controller that eventually creates a Pod.</button>
+      <button class="quiz-option" data-val="b">It doesn't — you must always hand-write one rule per Pod controller kind in Kyverno.</button>
+      <button class="quiz-option" data-val="c">Kyverno's autogen mechanism rewrites your Pod-scoped rule into an equivalent rule for each standard Pod controller (Deployment, DaemonSet, StatefulSet, Job, CronJob), targeting each one's embedded Pod template path.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. What does setting <code>spec.background: true</code> on a Kyverno policy add on top of admission-time enforcement?</p>
+      <button class="quiz-option" data-val="a">Kyverno's background-controller periodically re-evaluates validate/verifyImages rules against resources already in the cluster — catching drift or pre-existing non-compliant resources — and feeds the results into queryable PolicyReport/ClusterPolicyReport objects.</button>
+      <button class="quiz-option" data-val="b">It switches the policy from Kubernetes YAML to Rego, so it can be shared with an OPA deployment.</button>
+      <button class="quiz-option" data-val="c">It disables the admission webhook and relies purely on periodic scanning for enforcement.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- shared element lookup ---------- */
+  var el = {};
+  [
+    "kvTabValidate", "kvTabMutate", "kvTabGenerate",
+    "kvPanelValidate", "kvPanelMutate", "kvPanelGenerate",
+    "kvRuleLabel", "kvRuleLimits", "kvBlockLabel", "kvBlockLimits",
+    "kvValidateInput", "kvDecisionBadge", "kvViolations",
+    "kvPresetClean", "kvPresetNoLabel", "kvPresetNoLimits", "kvPresetNeither",
+    "kvRuleAddLimits", "kvRuleAddLabel", "kvBlockAddLimits", "kvBlockAddLabel",
+    "kvMutateInput", "kvDiff",
+    "kvPresetMutBare", "kvPresetMutLimits", "kvPresetMutLabel",
+    "kvRuleGenNetpol", "kvRuleGenQuota", "kvBlockGenNetpol", "kvBlockGenQuota",
+    "kvGenerateInput", "kvGenerated",
+    "kvPresetGenPayments", "kvPresetGenAnalytics"
+  ].forEach(function (id) { el[id] = document.getElementById(id); });
+
+  /* ---------- tabs ---------- */
+  var tabs = [
+    { btn: el.kvTabValidate, panel: el.kvPanelValidate },
+    { btn: el.kvTabMutate, panel: el.kvPanelMutate },
+    { btn: el.kvTabGenerate, panel: el.kvPanelGenerate }
+  ];
+  function selectTab(active) {
+    tabs.forEach(function (t) {
+      var isActive = t === active;
+      t.panel.hidden = !isActive;
+      t.btn.className = isActive ? "btn" : "btn ghost";
+    });
+  }
+  tabs.forEach(function (t) { t.btn.addEventListener("click", function () { selectTab(t); }); });
+
+  /* ---------- Validate ---------- */
+  var VALIDATE_PRESETS = {
+    clean: { apiVersion: "v1", kind: "Pod", metadata: { name: "web-7f9d", labels: { team: "checkout" } },
+      spec: { containers: [{ name: "app", image: "registry.corp.io/web:1.4", resources: { limits: { memory: "256Mi", cpu: "250m" } } }] } },
+    noLabel: { apiVersion: "v1", kind: "Pod", metadata: { name: "web-7f9d", labels: {} },
+      spec: { containers: [{ name: "app", image: "registry.corp.io/web:1.4", resources: { limits: { memory: "256Mi", cpu: "250m" } } }] } },
+    noLimits: { apiVersion: "v1", kind: "Pod", metadata: { name: "web-7f9d", labels: { team: "checkout" } },
+      spec: { containers: [{ name: "app", image: "registry.corp.io/web:1.4", resources: {} }] } },
+    neither: { apiVersion: "v1", kind: "Pod", metadata: { name: "web-7f9d", labels: {} },
+      spec: { containers: [{ name: "app", image: "registry.corp.io/web:1.4", resources: {} }] } }
+  };
+
+  function loadValidatePreset(key) {
+    el.kvValidateInput.value = JSON.stringify(VALIDATE_PRESETS[key], null, 2);
+    evaluateValidate();
+  }
+
+  function evaluateValidate() {
+    var input;
+    try {
+      input = JSON.parse(el.kvValidateInput.value);
+    } catch (e) {
+      el.kvDecisionBadge.textContent = "invalid input";
+      el.kvDecisionBadge.className = "kv-decision-badge err";
+      el.kvViolations.innerHTML = '<div class="kv-empty">Input is not valid JSON: ' + e.message + "</div>";
+      return;
+    }
+
+    var failures = [];
+    var labels = (input.metadata && input.metadata.labels) || {};
+    var containers = (input.spec && input.spec.containers) || [];
+
+    if (el.kvRuleLabel.checked) {
+      if (!labels.team) {
+        failures.push({ rule: "require-team-label", msg: "label 'team' is required" });
+      }
+    }
+    if (el.kvRuleLimits.checked) {
+      var allHaveLimits = containers.length > 0 && containers.every(function (c) {
+        return c.resources && c.resources.limits && c.resources.limits.memory && c.resources.limits.cpu;
+      });
+      if (!allHaveLimits) {
+        failures.push({ rule: "require-resource-limits", msg: "CPU and memory limits are required on every container" });
+      }
+    }
+
+    var pass = failures.length === 0;
+    el.kvDecisionBadge.textContent = pass ? "pass" : "fail";
+    el.kvDecisionBadge.className = "kv-decision-badge " + (pass ? "pass" : "fail");
+
+    el.kvViolations.innerHTML = "";
+    if (failures.length === 0) {
+      el.kvViolations.innerHTML = '<div class="kv-empty">No rule failures — request admitted.</div>';
+    } else {
+      failures.forEach(function (f) {
+        var div = document.createElement("div");
+        div.className = "kv-violation";
+        div.innerHTML = '<span class="kv-rule-tag">[' + f.rule + "]</span> " + f.msg;
+        el.kvViolations.appendChild(div);
+      });
+    }
+  }
+
+  function renderValidateBlocks() {
+    el.kvBlockLabel.className = "kv-rule-block" + (el.kvRuleLabel.checked ? "" : " disabled");
+    el.kvBlockLimits.className = "kv-rule-block" + (el.kvRuleLimits.checked ? "" : " disabled");
+  }
+
+  [el.kvRuleLabel, el.kvRuleLimits].forEach(function (cb) {
+    cb.addEventListener("change", function () { renderValidateBlocks(); evaluateValidate(); });
+  });
+  el.kvValidateInput.addEventListener("input", evaluateValidate);
+  el.kvPresetClean.addEventListener("click", function () { loadValidatePreset("clean"); });
+  el.kvPresetNoLabel.addEventListener("click", function () { loadValidatePreset("noLabel"); });
+  el.kvPresetNoLimits.addEventListener("click", function () { loadValidatePreset("noLimits"); });
+  el.kvPresetNeither.addEventListener("click", function () { loadValidatePreset("neither"); });
+
+  /* ---------- Mutate ---------- */
+  var MUTATE_PRESETS = {
+    bare: { apiVersion: "v1", kind: "Pod", metadata: { name: "worker-1a2b", labels: {} },
+      spec: { containers: [{ name: "app", image: "registry.corp.io/worker:2.1", resources: {} }] } },
+    hasLimits: { apiVersion: "v1", kind: "Pod", metadata: { name: "worker-1a2b", labels: {} },
+      spec: { containers: [{ name: "app", image: "registry.corp.io/worker:2.1", resources: { limits: { memory: "1Gi", cpu: "1" } } }] } },
+    hasLabel: { apiVersion: "v1", kind: "Pod", metadata: { name: "worker-1a2b", labels: { env: "staging" } },
+      spec: { containers: [{ name: "app", image: "registry.corp.io/worker:2.1", resources: {} }] } }
+  };
+
+  function loadMutatePreset(key) {
+    el.kvMutateInput.value = JSON.stringify(MUTATE_PRESETS[key], null, 2);
+    evaluateMutate();
+  }
+
+  function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
+
+  function evaluateMutate() {
+    var input;
+    try {
+      input = JSON.parse(el.kvMutateInput.value);
+    } catch (e) {
+      el.kvDiff.innerHTML = '<div class="kv-empty">Input is not valid JSON: ' + e.message + "</div>";
+      return;
+    }
+
+    var before = deepClone(input);
+    var after = deepClone(input);
+
+    if (el.kvRuleAddLimits.checked) {
+      (after.spec && after.spec.containers || []).forEach(function (c) {
+        c.resources = c.resources || {};
+        if (!c.resources.limits) {
+          c.resources.limits = { memory: "512Mi", cpu: "500m" };
+        }
+      });
+    }
+    if (el.kvRuleAddLabel.checked) {
+      after.metadata = after.metadata || {};
+      after.metadata.labels = after.metadata.labels || {};
+      if (!after.metadata.labels.env) {
+        after.metadata.labels.env = "prod";
+      }
+    }
+
+    renderDiff(before, after);
+  }
+
+  function renderDiff(before, after) {
+    var beforeLines = JSON.stringify(before, null, 2).split("\n").map(function (l) { return l.trim(); });
+    var beforeSet = {};
+    beforeLines.forEach(function (l) { beforeSet[l] = true; });
+
+    var afterLines = JSON.stringify(after, null, 2).split("\n");
+    var html = afterLines.map(function (line) {
+      var trimmed = line.trim();
+      var added = !beforeSet[trimmed];
+      var esc = line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      return '<span class="' + (added ? "kv-added" : "kv-same") + '">' + esc + "</span>";
+    }).join("");
+    el.kvDiff.innerHTML = html;
+  }
+
+  [el.kvRuleAddLimits, el.kvRuleAddLabel].forEach(function (cb) {
+    cb.addEventListener("change", function () {
+      el.kvBlockAddLimits.className = "kv-rule-block" + (el.kvRuleAddLimits.checked ? "" : " disabled");
+      el.kvBlockAddLabel.className = "kv-rule-block" + (el.kvRuleAddLabel.checked ? "" : " disabled");
+      evaluateMutate();
+    });
+  });
+  el.kvMutateInput.addEventListener("input", evaluateMutate);
+  el.kvPresetMutBare.addEventListener("click", function () { loadMutatePreset("bare"); });
+  el.kvPresetMutLimits.addEventListener("click", function () { loadMutatePreset("hasLimits"); });
+  el.kvPresetMutLabel.addEventListener("click", function () { loadMutatePreset("hasLabel"); });
+
+  /* ---------- Generate ---------- */
+  var GENERATE_PRESETS = {
+    payments: { apiVersion: "v1", kind: "Namespace", metadata: { name: "payments" } },
+    analytics: { apiVersion: "v1", kind: "Namespace", metadata: { name: "analytics-team" } }
+  };
+
+  function loadGeneratePreset(key) {
+    el.kvGenerateInput.value = JSON.stringify(GENERATE_PRESETS[key], null, 2);
+    evaluateGenerate();
+  }
+
+  function evaluateGenerate() {
+    var input;
+    try {
+      input = JSON.parse(el.kvGenerateInput.value);
+    } catch (e) {
+      el.kvGenerated.innerHTML = '<div class="kv-empty">Input is not valid JSON: ' + e.message + "</div>";
+      return;
+    }
+
+    var ns = (input.metadata && input.metadata.name) || "{{request.object.metadata.name}}";
+    var items = [];
+
+    if (el.kvRuleGenNetpol.checked) {
+      items.push({
+        title: "NetworkPolicy/default-deny-ingress  (namespace: " + ns + ")",
+        body: JSON.stringify({
+          apiVersion: "networking.k8s.io/v1",
+          kind: "NetworkPolicy",
+          metadata: { name: "default-deny-ingress", namespace: ns },
+          spec: { podSelector: {}, policyTypes: ["Ingress"] }
+        }, null, 2)
+      });
+    }
+    if (el.kvRuleGenQuota.checked) {
+      items.push({
+        title: "ResourceQuota/default-quota  (namespace: " + ns + ")",
+        body: JSON.stringify({
+          apiVersion: "v1",
+          kind: "ResourceQuota",
+          metadata: { name: "default-quota", namespace: ns },
+          spec: { hard: { pods: "20", "requests.cpu": "4" } }
+        }, null, 2)
+      });
+    }
+
+    el.kvGenerated.innerHTML = "";
+    if (items.length === 0) {
+      el.kvGenerated.innerHTML = '<div class="kv-empty">No generate rules enabled — nothing created.</div>';
+    } else {
+      items.forEach(function (item) {
+        var wrap = document.createElement("div");
+        wrap.className = "kv-gen-item";
+        var title = document.createElement("div");
+        title.className = "kv-gen-title";
+        title.textContent = item.title;
+        var body = document.createElement("div");
+        body.className = "kv-gen-body";
+        body.textContent = item.body;
+        wrap.appendChild(title);
+        wrap.appendChild(body);
+        el.kvGenerated.appendChild(wrap);
+      });
+    }
+  }
+
+  [el.kvRuleGenNetpol, el.kvRuleGenQuota].forEach(function (cb) {
+    cb.addEventListener("change", function () {
+      el.kvBlockGenNetpol.className = "kv-rule-block" + (el.kvRuleGenNetpol.checked ? "" : " disabled");
+      el.kvBlockGenQuota.className = "kv-rule-block" + (el.kvRuleGenQuota.checked ? "" : " disabled");
+      evaluateGenerate();
+    });
+  });
+  el.kvGenerateInput.addEventListener("input", evaluateGenerate);
+  el.kvPresetGenPayments.addEventListener("click", function () { loadGeneratePreset("payments"); });
+  el.kvPresetGenAnalytics.addEventListener("click", function () { loadGeneratePreset("analytics"); });
+
+  /* ---------- init ---------- */
+  renderValidateBlocks();
+  loadValidatePreset("clean");
+  loadMutatePreset("bare");
+  loadGeneratePreset("payments");
+  selectTab(tabs[0]);
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
