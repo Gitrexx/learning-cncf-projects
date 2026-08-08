@@ -210,7 +210,7 @@
       "summary": "Kubernetes-native policy as YAML: validate, mutate, and generate resources.",
       "prerequisites": ["kubernetes"],
       "file": "kyverno.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "cert-manager",
