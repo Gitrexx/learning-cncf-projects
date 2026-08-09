@@ -1,0 +1,544 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>cert-manager — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the issuance-flow step-through and renewal timeline. ---- */
+  .cm-tabs { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-4); }
+  .cm-tabs .btn { font-size: var(--fs-sm); }
+
+  .cm-flow-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: var(--sp-5); align-items: start; }
+  @media (max-width: 900px) { .cm-flow-grid { grid-template-columns: 1fr; } }
+
+  .cm-steps { display: flex; flex-direction: column; gap: 0; }
+  .cm-step {
+    position: relative;
+    display: flex;
+    gap: var(--sp-3);
+    padding: var(--sp-2) 0 var(--sp-4) 0;
+    opacity: 0.4;
+    transition: opacity .2s;
+  }
+  .cm-step.active, .cm-step.done { opacity: 1; }
+  .cm-step:not(:last-child)::before {
+    content: "";
+    position: absolute;
+    left: 11px;
+    top: 28px;
+    bottom: -4px;
+    width: 2px;
+    background: var(--border-strong);
+  }
+  .cm-step.done:not(:last-child)::before { background: var(--signal-green); }
+  .cm-step-dot {
+    flex: none;
+    width: 24px; height: 24px;
+    border-radius: var(--r-pill);
+    border: 2px solid var(--border-strong);
+    background: var(--surface);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-faint);
+    z-index: 1;
+  }
+  .cm-step.active .cm-step-dot { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent); }
+  .cm-step.done .cm-step-dot { border-color: var(--signal-green); background: var(--signal-green); color: var(--on-accent); }
+  .cm-step-body { padding-top: 1px; }
+  .cm-step-title { font-family: var(--font-mono); font-size: var(--fs-sm); font-weight: 700; color: var(--text); }
+  .cm-step-desc { font-size: var(--fs-sm); color: var(--text-muted); margin-top: 2px; }
+
+  .cm-controls { display: flex; gap: var(--sp-2); margin-top: var(--sp-4); flex-wrap: wrap; }
+
+  .cm-resource {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    white-space: pre;
+    overflow-x: auto;
+    line-height: 1.6;
+    min-height: 280px;
+  }
+  .cm-resource .cm-hl { background: color-mix(in srgb, var(--cloud-cyan) 20%, transparent); }
+
+  .cm-timeline-wrap { margin-top: var(--sp-3); }
+  .cm-timeline {
+    position: relative;
+    height: 34px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    overflow: hidden;
+  }
+  .cm-timeline-fill {
+    position: absolute; inset: 0;
+    width: 0%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    opacity: 0.35;
+  }
+  .cm-timeline-renew {
+    position: absolute; top: 0; bottom: 0;
+    width: 2px;
+    background: var(--signal-amber);
+  }
+  .cm-timeline-renew::after {
+    content: "renewBefore";
+    position: absolute;
+    top: -1.6em;
+    right: -0.4em;
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--signal-amber);
+    white-space: nowrap;
+  }
+  .cm-timeline-marker {
+    position: absolute; top: -6px; bottom: -6px;
+    width: 4px;
+    border-radius: 2px;
+    background: var(--text);
+    transform: translateX(-50%);
+    box-shadow: 0 0 0 3px var(--surface);
+  }
+  .cm-timeline-labels { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); margin-top: var(--sp-2); }
+  .cm-timeline-status { margin-top: var(--sp-3); font-family: var(--font-mono); font-size: var(--fs-sm); }
+  .cm-timeline-status .badge { margin-left: var(--sp-2); }
+
+  .cm-issuer-table td code { white-space: nowrap; }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Security, Policy &amp; Supply Chain · Sub-topic 21 / 36</p>
+  <h1>cert-manager</h1>
+  <p class="lead">
+    The last three deep-dives (Falco, OPA, Kyverno) were all about the same question: <em>should this
+    object be allowed to exist?</em> <strong>cert-manager</strong> is a sideways move into a different
+    corner of cluster security — not "is this request allowed," but "does every service that needs a
+    TLS certificate actually have a valid, unexpired one, right now, without a human copying files
+    around." It turns X.509 certificate issuance and renewal — historically a slow, manual, easy-to-
+    forget-until-an-outage process — into a Kubernetes-native, declarative, self-renewing control loop.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    cert-manager sits underneath almost everything else in this landscape that needs
+    <span class="term" title="Transport Layer Security — the protocol that encrypts and authenticates network connections using X.509 certificates. mTLS (mutual TLS) is the two-way variant where both sides present a certificate.">TLS</span>:
+    Ingress controllers terminating HTTPS, Istio/Linkerd sidecars doing mTLS, internal APIs that want
+    encrypted service-to-service traffic. Where Kyverno and OPA decide whether an object is admitted,
+    cert-manager keeps a completely different kind of promise running in the background — that a
+    <code>Secret</code> full of certificate material stays valid — with no admission webhook involved
+    at all. It's the plumbing every other security control quietly depends on.
+  </div>
+
+  <h2>The problem: certificates rot, and humans forget</h2>
+  <p>
+    Before cert-manager, getting HTTPS onto a Kubernetes-hosted service meant someone manually
+    requesting a certificate from a CA (internal or public), pasting the key material into a
+    <code>Secret</code>, and — critically — remembering to repeat that whole process before the
+    certificate expired. Public CAs and Let's Encrypt in particular push toward <strong>short-lived
+    certificates</strong> (Let's Encrypt's default is 90 days) specifically to shrink the blast radius
+    of a compromised key, which only makes the manual-renewal problem worse: the shorter the validity
+    window, the more often a human has to remember to act, and the more often "outage caused by an
+    expired cert nobody rotated" shows up in a postmortem.
+  </p>
+  <p>
+    cert-manager's answer is to make a certificate a <strong>Kubernetes resource with a reconciling
+    controller behind it</strong>, exactly like a <code>Deployment</code> keeps N replicas running. You
+    declare the certificate you want; cert-manager continuously drives reality toward that declaration
+    — requesting it, storing it in a <code>Secret</code>, and re-requesting it automatically as the
+    expiry approaches — for as long as the resource exists.
+  </p>
+
+  <h2>Five CRDs, one reconciliation loop</h2>
+  <p>
+    cert-manager runs as a controller (plus a webhook component for CRD validation/defaulting, and a
+    CA-injector for other components' webhook bundles) watching a small family of custom resources.
+    Only two of them are ones you typically write by hand — the rest are generated and driven by the
+    controller itself:
+  </p>
+  <table>
+    <thead><tr><th>Resource</th><th>Scope</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Issuer</strong> / <strong>ClusterIssuer</strong></td><td>namespaced / cluster-wide</td><td>You write this. Represents a certificate authority cert-manager can talk to — ACME, an internal CA keypair, HashiCorp Vault, Venafi, self-signed, or an out-of-tree issuer. <code>Issuer</code> can only be referenced by <code>Certificate</code>s in its own namespace; <code>ClusterIssuer</code> can be referenced from anywhere.</td></tr>
+      <tr><td><strong>Certificate</strong></td><td>namespaced</td><td>You write this. Declares the certificate you want — DNS names, duration, renewal window, target <code>Secret</code> name, and a reference to an Issuer/ClusterIssuer. The thing you actually manage day to day.</td></tr>
+      <tr><td><strong>CertificateRequest</strong></td><td>namespaced</td><td>Generated by cert-manager for you. A single, immutable signing request — a CSR plus an issuer reference — that a given Issuer implementation fulfills. Also usable directly by other tooling (e.g. <code>kubectl cert-manager</code> CLI, cert-manager's CSI drivers) that wants a cert without a full <code>Certificate</code> object.</td></tr>
+      <tr><td><strong>Order</strong></td><td>namespaced</td><td>ACME issuers only. Tracks one ACME order — the set of DNS names to prove ownership of before the ACME server will sign.</td></tr>
+      <tr><td><strong>Challenge</strong></td><td>namespaced</td><td>ACME issuers only. One per DNS name in an Order — represents proving ownership of that single name via HTTP-01, DNS-01, or TLS-ALPN-01.</td></tr>
+    </tbody>
+  </table>
+  <p>
+    The chain is strictly one-directional: <code>Certificate</code> → <code>CertificateRequest</code> →
+    (for ACME) <code>Order</code> → one or more <code>Challenge</code>s. You never create a
+    <code>CertificateRequest</code>, <code>Order</code>, or <code>Challenge</code> yourself when using
+    the normal <code>Certificate</code> workflow — cert-manager's controllers own their entire
+    lifecycle, including deleting them once they've served their purpose.
+  </p>
+
+  <h2>Issuer types: same CRD shape, very different backends</h2>
+  <p>
+    An <code>Issuer</code>/<code>ClusterIssuer</code>'s <code>spec</code> holds exactly one issuer
+    backend. Which one you pick determines how a <code>CertificateRequest</code> actually gets signed:
+  </p>
+  <table class="cm-issuer-table">
+    <thead><tr><th>Issuer type</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><code>acme</code></td><td>Talks to any RFC 8555 ACME server (Let's Encrypt, ZeroSSL, Google Trust Services, a private ACME CA like <span class="term" title="A private, internal Certificate Authority server that speaks the ACME protocol — lets an organization run its own automated CA using the same client workflow as Let's Encrypt.">step-ca</span> or Smallstep). Drives the Order/Challenge dance below. Free, publicly trusted, short-lived certs — the default choice for anything internet-facing.</td></tr>
+      <tr><td><code>ca</code></td><td>Signs directly using a keypair you already hold in a <code>Secret</code> (e.g. your org's internal root or intermediate CA). No network round trip, no ACME challenges — fastest and simplest option for internal-only trust.</td></tr>
+      <tr><td><code>selfSigned</code></td><td>Each certificate signs itself — no CA at all. Mostly for bootstrapping (e.g. minting the CA keypair that a <code>ca</code>-type Issuer will then use) or throwaway dev/test TLS.</td></tr>
+      <tr><td><code>vault</code></td><td>Delegates signing to a HashiCorp Vault PKI secrets engine — Vault stays the CA of record and source of audit trail; cert-manager just automates the request/renew cycle against it.</td></tr>
+      <tr><td><code>venafi</code></td><td>Integrates with Venafi's enterprise certificate lifecycle platform — for organizations whose CA governance already runs through Venafi.</td></tr>
+      <tr><td>external / out-of-tree</td><td>Any controller implementing cert-manager's <code>CertificateRequest</code> approval/signing contract — cloud-provider CAs like AWS Private CA or Google CAS ship as separate external issuer controllers rather than built-ins.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>The ACME path in detail: Order, Challenge, self-check</h2>
+  <p>
+    ACME is the interesting case because, unlike a <code>ca</code> issuer, cert-manager can't just sign
+    — it has to <em>prove domain ownership</em> to a third party first. When a
+    <code>CertificateRequest</code> references an ACME issuer, cert-manager:
+  </p>
+  <ol>
+    <li>Creates an <code>Order</code>, which registers the request with the ACME server and gets back
+      one "authorization" per DNS name that needs proving.</li>
+    <li>Creates one <code>Challenge</code> per authorization, each picking a solver — <strong>HTTP-01</strong>
+      or <strong>DNS-01</strong> — based on your Issuer's <code>solvers</code> config (which can vary
+      per DNS name via selectors).</li>
+    <li><strong>Presents</strong> the challenge: for HTTP-01, cert-manager spins up a temporary Pod +
+      Service + Ingress path that serves a computed token at
+      <code>http://&lt;domain&gt;/.well-known/acme-challenge/&lt;token&gt;</code>; for DNS-01, it calls
+      your configured DNS provider's API (Route53, Cloud DNS, Cloudflare, and 15+ others out of the
+      box, plus a webhook interface for any provider without native support) to create a
+      <code>_acme-challenge.&lt;domain&gt;</code> TXT record with the computed value.</li>
+    <li><strong>Self-checks</strong> — cert-manager itself polls the HTTP path or does the DNS lookup,
+      retrying on a fixed interval, before ever telling the ACME server to look. This avoids wasting
+      one of the ACME server's (rate-limited) validation attempts on a record that hasn't propagated
+      yet. (For networks where cert-manager can't observe the same path the ACME server will — NAT,
+      split-horizon DNS — <code>waitInsteadOfSelfCheck</code> swaps this for a fixed wait instead.)</li>
+    <li>Once the self-check passes, cert-manager tells the ACME server the challenge is ready; the ACME
+      server independently re-checks the same HTTP path or DNS record from the outside — this
+      out-of-band verification is the actual proof of domain ownership.</li>
+    <li>With every authorization valid, cert-manager <strong>finalizes</strong> the Order — submits the
+      CSR — and the ACME server returns a signed certificate chain.</li>
+    <li>The HTTP-01 solver Pod/Ingress or DNS-01 TXT record is cleaned up, and the signed chain flows
+      back up into the <code>CertificateRequest</code>, then into the target <code>Secret</code>.</li>
+  </ol>
+
+  <h2>Try it: certificate issuance flow</h2>
+  <p>
+    Pick an issuer type, then step forward through what cert-manager actually does between you applying
+    a <code>Certificate</code> and a valid <code>tls.crt</code>/<code>tls.key</code> landing in a
+    <code>Secret</code>.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Issuance flow step-through</div>
+    <div class="cm-tabs">
+      <button class="btn" id="cmTabHttp">ACME · HTTP-01</button>
+      <button class="btn ghost" id="cmTabDns">ACME · DNS-01</button>
+      <button class="btn ghost" id="cmTabCa">CA issuer</button>
+    </div>
+    <div class="cm-flow-grid">
+      <div>
+        <div class="cm-steps" id="cmSteps"></div>
+        <div class="cm-controls">
+          <button class="btn" id="cmNext">Step forward →</button>
+          <button class="btn ghost" id="cmReset">Reset</button>
+        </div>
+      </div>
+      <div>
+        <span class="kv-label" style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint);display:block;margin-bottom:var(--sp-2);">cluster state at this step</span>
+        <div class="cm-resource" id="cmResource"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">Notice what changes between HTTP-01 and DNS-01</span>
+    Both solve the exact same problem — "prove you control this DNS name" — via completely different
+    mechanics: HTTP-01 needs a publicly reachable path on port 80 for that domain (so it can't validate
+    a wildcard like <code>*.example.com</code>, and it fails behind most NAT/firewall setups), while
+    DNS-01 only needs API credentials for your DNS provider (so it works for wildcards and fully private
+    services with no public endpoint at all, at the cost of granting cert-manager write access to your
+    DNS zone). This is the same trade-off you'll see again with SPIFFE/SPIRE's node vs. workload
+    attestation later in this section: different evidence, same underlying question of "prove who you
+    are."
+  </div>
+
+  <h2>Renewal: a percentage, not a date</h2>
+  <p>
+    A <code>Certificate</code>'s <code>spec.renewBefore</code> (an absolute duration like
+    <code>360h</code>) or <code>spec.renewBeforePercentage</code> (e.g. <code>33</code>, meaning
+    "renew once two-thirds of the way through the validity window") tells cert-manager how early to
+    start the whole issuance flow again — <em>before</em> the current certificate actually expires.
+    <code>renewBeforePercentage</code> is the recommended default because a fixed absolute duration can
+    misfire if the CA hands back a shorter validity period than you requested (a real risk with some
+    ACME CAs), while a percentage always scales correctly to whatever duration was actually issued.
+  </p>
+  <p>
+    Renewal reuses the identical Certificate → CertificateRequest → (Order/Challenge) pipeline shown
+    above — there's no separate "renewal" code path. The one variable is
+    <code>spec.privateKey.rotationPolicy</code>: <code>Never</code> reuses the existing private key
+    across reissuance (new cert, same key), while <code>Always</code> generates a fresh key every time.
+    As of cert-manager v1.18, <code>Always</code> is the default, precisely because a key that never
+    rotates is a key whose exposure — even years after a leak nobody noticed — silently compounds; a
+    fresh key on every reissuance bounds how long any single leaked key stays useful. Either way, the
+    target <code>Secret</code>'s <code>tls.crt</code>/<code>tls.key</code> are overwritten in place —
+    cert-manager also enforces any <code>secretTemplate</code> labels/annotations you configured,
+    re-reconciling them if something else edits the Secret.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Renewal timeline</div>
+    <p style="margin-bottom:var(--sp-3);">
+      Drag to move through a 90-day Let's Encrypt-style certificate lifetime with
+      <code>renewBeforePercentage: 33</code> (renew with a third of the validity window left).
+    </p>
+    <input type="range" id="cmDaySlider" min="0" max="90" value="10" />
+    <div class="cm-timeline-wrap">
+      <div class="cm-timeline">
+        <div class="cm-timeline-fill" id="cmTimelineFill"></div>
+        <div class="cm-timeline-renew" id="cmTimelineRenew"></div>
+        <div class="cm-timeline-marker" id="cmTimelineMarker"></div>
+      </div>
+      <div class="cm-timeline-labels"><span>day 0 — issued</span><span>day 90 — expires</span></div>
+    </div>
+    <div class="cm-timeline-status" id="cmTimelineStatus"></div>
+  </div>
+
+  <h2>Beyond the plain Secret: trust distribution and short-lived workload certs</h2>
+  <p>
+    A few sibling projects extend cert-manager past "one Secret per Certificate":
+  </p>
+  <ul>
+    <li><strong>trust-manager</strong> — reconciles a <code>Bundle</code> CRD that assembles trusted CA
+      certificates from multiple sources and distributes the combined trust bundle as a
+      <code>ConfigMap</code>/<code>Secret</code> into every namespace that needs it — the "everyone
+      needs to trust our internal CA" problem cert-manager itself doesn't solve.</li>
+    <li><strong>csi-driver</strong> / <strong>csi-driver-spiffe</strong> — mount a live, auto-renewing
+      certificate straight into a Pod as an ephemeral volume instead of a <code>Secret</code>, so the
+      key material never touches the Kubernetes API or etcd at all; <code>csi-driver-spiffe</code>
+      specifically issues <span class="term" title="A workload's cryptographic identity document, as defined by the SPIFFE standard, encoding a SPIFFE ID and signed by a trust domain's CA.">SVIDs</span> in SPIFFE's format, previewing the identity model the SPIFFE/SPIRE deep-dives cover next.</li>
+    <li><strong>istio-csr</strong> — plugs cert-manager in as the CA backing Istio's mTLS, so the same
+      Issuer infrastructure (Vault, an internal CA, ACME) that issues your Ingress certificates can
+      also issue the short-lived workload certs Istio's sidecars use for mesh mTLS.</li>
+  </ul>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>HashiCorp Vault</strong> can itself act as a full PKI CA — but cert-manager isn't competing
+    with it; a <code>vault</code>-type Issuer lets cert-manager <em>drive</em> Vault's PKI engine the
+    same declarative way it drives Let's Encrypt. <strong>SPIFFE/SPIRE</strong> (next in this section)
+    solve workload identity specifically — short-lived SVIDs issued via attestation, no ACME-style
+    domain-ownership proof involved — while cert-manager is CA-agnostic and general-purpose,
+    happy to issue a public-facing Ingress cert, an internal mTLS cert, or (via
+    <code>csi-driver-spiffe</code>) a SPIFFE-shaped one. And cert-manager only ever <em>issues and
+    renews</em> certificates — it has no opinion on how they're used at the network layer; that's
+    Envoy/Istio/Linkerd's job (all covered earlier in this section).
+  </div>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    cert-manager was accepted into CNCF (as jetstack/cert-manager, its originating company) in November
+    2020, reached Incubating in September 2022, and reached <strong>Graduated</strong> status on
+    September 29, 2024 — announced that November at KubeCon NA. The graduation case leaned heavily on
+    sheer ubiquity: over 500 million downloads a month, and CNCF's own end-user research finding it
+    deployed on roughly 86% of newly created production clusters. You'll meet cert-manager as the thing
+    quietly renewing the Let's Encrypt certificate behind almost every ingress-nginx or cloud load
+    balancer TLS setup, as the CA backing internal mTLS for a service mesh, and — increasingly — as
+    infrastructure other CNCF projects build on rather than reimplement, exactly the role trust-manager
+    and istio-csr play above.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">1. You create a <code>Certificate</code> referencing an ACME <code>ClusterIssuer</code>. Which resources does cert-manager create on your behalf, and in what order?</p>
+      <button class="quiz-option" data-val="a">Only a Secret — ACME issuers skip CertificateRequest entirely since the CSR is generated by the ACME server.</button>
+      <button class="quiz-option" data-val="b">A ClusterIssuer, then a Certificate, then a Secret — you only ever write the Order and Challenge yourself.</button>
+      <button class="quiz-option" data-val="c">A CertificateRequest (holding the CSR), then an Order, then one Challenge per DNS name — all generated and owned by cert-manager, culminating in the signed cert landing in the target Secret.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">2. Why can't the HTTP-01 solver issue a certificate for a wildcard name like <code>*.example.com</code>, while DNS-01 can?</p>
+      <button class="quiz-option" data-val="a">HTTP-01 is deprecated by the ACME protocol and cert-manager only keeps it for backward compatibility.</button>
+      <button class="quiz-option" data-val="b">HTTP-01 proves ownership of one specific hostname's HTTP path, which doesn't exist for a wildcard pattern; DNS-01 proves ownership of the DNS zone itself via a TXT record, which covers every name under it.</button>
+      <button class="quiz-option" data-val="c">Wildcard certificates require a paid ACME account, and cert-manager's free-tier integration only supports HTTP-01.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. Why does cert-manager recommend <code>renewBeforePercentage</code> over a fixed <code>renewBefore</code> duration, and what does <code>rotationPolicy: Always</code> (the default since v1.18) add on top?</p>
+      <button class="quiz-option" data-val="a">A percentage scales correctly even if the CA issues a shorter validity period than requested, avoiding renewal-loop bugs a fixed duration can hit; rotationPolicy: Always additionally generates a brand-new private key on every reissuance, bounding how long any single leaked key stays useful.</button>
+      <button class="quiz-option" data-val="b">renewBeforePercentage is required for ACME issuers and unsupported for CA issuers; rotationPolicy only affects self-signed certificates.</button>
+      <button class="quiz-option" data-val="c">They're unrelated settings — renewBeforePercentage controls DNS-01 propagation timing, and rotationPolicy controls whether trust-manager redistributes the bundle.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- Issuance flow step-through ---------- */
+  var FLOWS = {
+    http: {
+      label: "ACME · HTTP-01",
+      steps: [
+        { title: "Certificate applied", desc: "You kubectl apply a Certificate for app.example.com referencing an ACME ClusterIssuer.",
+          res: "apiVersion: cert-manager.io/v1\nkind: Certificate\nmetadata:\n  name: app-tls\n  namespace: web\nspec:\n  secretName: app-tls\n  dnsNames: [\"app.example.com\"]\n  issuerRef:\n    name: letsencrypt-prod\n    kind: ClusterIssuer" },
+        { title: "CertificateRequest created", desc: "cert-manager generates a private key + CSR and writes a CertificateRequest for the ACME issuer to fulfill.",
+          res: "apiVersion: cert-manager.io/v1\nkind: CertificateRequest\nmetadata:\n  name: app-tls-8f2k1\n  ownerReferences:\n  - kind: Certificate\n    name: app-tls\nspec:\n  issuerRef: { name: letsencrypt-prod, kind: ClusterIssuer }\n  request: <base64 CSR for app.example.com>\nstatus:\n  conditions:\n  - type: Ready\n    status: \"False\"\n    reason: Pending" },
+        { title: "Order + Challenge created", desc: "cert-manager registers an Order with the ACME server, gets back one authorization for app.example.com, and creates a matching Challenge using the HTTP-01 solver.",
+          res: "apiVersion: acme.cert-manager.io/v1\nkind: Order\nmetadata: { name: app-tls-8f2k1-1 }\nstatus: { state: pending }\n---\nkind: Challenge\nmetadata: { name: app-tls-8f2k1-1-0 }\nspec:\n  dnsName: app.example.com\n  type: HTTP-01\n  token: xJ4q...\n  key: xJ4q...9fa2\nstatus: { state: pending }" },
+        { title: "Challenge presented", desc: "cert-manager spins up a temporary Pod + Service + Ingress path that serves the key at the well-known ACME path over plain HTTP.",
+          res: "GET http://app.example.com\n    /.well-known/acme-challenge/xJ4q...\n\n200 OK\nxJ4q...9fa2\n\n(served by a cert-manager-managed\n cm-acme-http-solver Pod/Ingress,\n cleaned up once the challenge resolves)" },
+        { title: "Self-check, then ACME validates", desc: "cert-manager polls that URL itself first (retrying on a fixed interval) before telling the ACME server the challenge is ready. The ACME server then independently fetches the same URL from the outside — that external fetch is the actual proof.", res: "cert-manager self-check: GET .../xJ4q... -> 200 (match) ✓\n\nACME server -> GET http://app.example.com/.well-known/acme-challenge/xJ4q...\nACME server -> 200, value matches -> authorization: valid" },
+        { title: "Order finalized, cert issued", desc: "With the authorization valid, cert-manager finalizes the Order — submits the CSR — and the ACME server returns a signed certificate chain.", res: "kind: Order\nstatus:\n  state: valid\n  certificate: <base64 signed chain>\n\nkind: CertificateRequest\nstatus:\n  certificate: <base64 signed chain>\n  conditions:\n  - type: Ready\n    status: \"True\"" },
+        { title: "Secret written, solver cleaned up", desc: "The signed chain flows into the target Secret as tls.crt/tls.key/ca.crt. The temporary HTTP-01 solver Pod/Ingress and the Order/Challenge objects are deleted.", res: "apiVersion: v1\nkind: Secret\nmetadata: { name: app-tls, namespace: web }\ntype: kubernetes.io/tls\ndata:\n  tls.crt: <base64 cert chain>\n  tls.key: <base64 private key>\n  ca.crt: <base64 issuing CA>\n\n# solver Pod/Ingress: deleted\n# Order, Challenge: deleted" }
+      ]
+    },
+    dns: {
+      label: "ACME · DNS-01",
+      steps: [
+        { title: "Certificate applied", desc: "You kubectl apply a Certificate for a wildcard name — only DNS-01 can prove ownership of a wildcard.",
+          res: "apiVersion: cert-manager.io/v1\nkind: Certificate\nmetadata:\n  name: wildcard-tls\n  namespace: web\nspec:\n  secretName: wildcard-tls\n  dnsNames: [\"*.example.com\"]\n  issuerRef:\n    name: letsencrypt-prod\n    kind: ClusterIssuer" },
+        { title: "CertificateRequest created", desc: "Same as HTTP-01: cert-manager generates a key + CSR and writes a CertificateRequest.",
+          res: "apiVersion: cert-manager.io/v1\nkind: CertificateRequest\nmetadata:\n  name: wildcard-tls-9c31a\nspec:\n  issuerRef: { name: letsencrypt-prod, kind: ClusterIssuer }\n  request: <base64 CSR for *.example.com>\nstatus:\n  conditions:\n  - type: Ready\n    status: \"False\"\n    reason: Pending" },
+        { title: "Order + Challenge created", desc: "Same Order step, but this time the Challenge picks the DNS-01 solver — the only type that can validate a wildcard name.",
+          res: "apiVersion: acme.cert-manager.io/v1\nkind: Order\nmetadata: { name: wildcard-tls-9c31a-1 }\nstatus: { state: pending }\n---\nkind: Challenge\nmetadata: { name: wildcard-tls-9c31a-1-0 }\nspec:\n  dnsName: \"*.example.com\"\n  type: DNS-01\n  key: b91f...c02e\nstatus: { state: pending }" },
+        { title: "Challenge presented", desc: "cert-manager calls your configured DNS provider's API (Route53, Cloud DNS, Cloudflare, ...) to create a TXT record with the computed value.",
+          res: "cert-manager -> Route53 API:\n  CREATE TXT\n  _acme-challenge.example.com\n  \"b91f...c02e\"\n\n(record propagates across your\n DNS provider's nameservers)" },
+        { title: "Self-check, then ACME validates", desc: "cert-manager does its own DNS lookup, retrying until the TXT record resolves, before telling the ACME server. The ACME server then does its own independent DNS lookup as the real proof.", res: "cert-manager self-check:\n  dig TXT _acme-challenge.example.com\n  -> \"b91f...c02e\" (match) ✓\n\nACME server -> dig TXT _acme-challenge.example.com\nACME server -> match -> authorization: valid" },
+        { title: "Order finalized, cert issued", desc: "Identical to the HTTP-01 path from here: cert-manager finalizes the Order and the ACME server returns a signed chain covering the wildcard name.", res: "kind: Order\nstatus:\n  state: valid\n  certificate: <base64 signed chain for *.example.com>\n\nkind: CertificateRequest\nstatus:\n  certificate: <base64 signed chain>\n  conditions:\n  - type: Ready\n    status: \"True\"" },
+        { title: "Secret written, solver cleaned up", desc: "The signed wildcard chain lands in the target Secret. The TXT record and the Order/Challenge objects are deleted.", res: "apiVersion: v1\nkind: Secret\nmetadata: { name: wildcard-tls, namespace: web }\ntype: kubernetes.io/tls\ndata:\n  tls.crt: <base64 wildcard cert chain>\n  tls.key: <base64 private key>\n\n# TXT record: deleted\n# Order, Challenge: deleted" }
+      ]
+    },
+    ca: {
+      label: "CA issuer",
+      steps: [
+        { title: "Certificate applied", desc: "You kubectl apply a Certificate referencing an internal ca-type Issuer — no public DNS proof needed, since you already hold the CA's private key in-cluster.",
+          res: "apiVersion: cert-manager.io/v1\nkind: Certificate\nmetadata:\n  name: internal-api-tls\n  namespace: platform\nspec:\n  secretName: internal-api-tls\n  dnsNames: [\"internal-api.svc.cluster.local\"]\n  issuerRef:\n    name: internal-ca\n    kind: ClusterIssuer" },
+        { title: "CertificateRequest created", desc: "cert-manager generates a key + CSR and writes a CertificateRequest, same as any other issuer type.",
+          res: "apiVersion: cert-manager.io/v1\nkind: CertificateRequest\nmetadata:\n  name: internal-api-tls-2b7e0\nspec:\n  issuerRef: { name: internal-ca, kind: ClusterIssuer }\n  request: <base64 CSR>\nstatus:\n  conditions:\n  - type: Ready\n    status: \"False\"\n    reason: Pending" },
+        { title: "No Order or Challenge — signed directly", desc: "A CA issuer has nothing to prove to a third party. cert-manager's CA controller reads the CA keypair straight out of the Issuer's referenced Secret and signs the CSR in-process. No Order, no Challenge, no network round trip at all.",
+          res: "internal-ca Issuer spec:\n  ca:\n    secretName: internal-ca-keypair\n\n(Secret internal-ca-keypair holds\n the CA's tls.crt + tls.key —\n cert-manager signs locally, in-cluster)" },
+        { title: "CertificateRequest signed", desc: "The signed certificate is written straight back onto the CertificateRequest — this whole path typically completes in well under a second.",
+          res: "kind: CertificateRequest\nstatus:\n  certificate: <base64 signed chain>\n  ca: <base64 CA cert>\n  conditions:\n  - type: Ready\n    status: \"True\"" },
+        { title: "Secret written", desc: "The signed chain lands in the target Secret, ca.crt included so downstream clients can validate the chain of trust against the internal CA.", res: "apiVersion: v1\nkind: Secret\nmetadata: { name: internal-api-tls, namespace: platform }\ntype: kubernetes.io/tls\ndata:\n  tls.crt: <base64 signed cert>\n  tls.key: <base64 private key>\n  ca.crt: <base64 internal CA cert>" }
+      ]
+    }
+  };
+
+  var el = {};
+  ["cmTabHttp", "cmTabDns", "cmTabCa", "cmSteps", "cmResource", "cmNext", "cmReset",
+   "cmDaySlider", "cmTimelineFill", "cmTimelineRenew", "cmTimelineMarker", "cmTimelineStatus"
+  ].forEach(function (id) { el[id] = document.getElementById(id); });
+
+  var tabs = [
+    { key: "http", btn: el.cmTabHttp },
+    { key: "dns", btn: el.cmTabDns },
+    { key: "ca", btn: el.cmTabCa }
+  ];
+  var currentFlow = "http";
+  var currentStep = 0;
+
+  function renderSteps() {
+    var flow = FLOWS[currentFlow];
+    el.cmSteps.innerHTML = "";
+    flow.steps.forEach(function (step, i) {
+      var div = document.createElement("div");
+      var state = i < currentStep ? "done" : (i === currentStep ? "active" : "");
+      div.className = "cm-step" + (state ? " " + state : "");
+      div.innerHTML =
+        '<div class="cm-step-dot">' + (i < currentStep ? "✓" : (i + 1)) + '</div>' +
+        '<div class="cm-step-body">' +
+          '<div class="cm-step-title">' + step.title + '</div>' +
+          '<div class="cm-step-desc">' + step.desc + '</div>' +
+        '</div>';
+      el.cmSteps.appendChild(div);
+    });
+    el.cmResource.textContent = flow.steps[currentStep].res;
+    el.cmNext.disabled = currentStep >= flow.steps.length - 1;
+    el.cmNext.textContent = currentStep >= flow.steps.length - 1 ? "Done" : "Step forward →";
+  }
+
+  function selectFlow(key) {
+    currentFlow = key;
+    currentStep = 0;
+    tabs.forEach(function (t) { t.btn.className = t.key === key ? "btn" : "btn ghost"; });
+    renderSteps();
+  }
+
+  tabs.forEach(function (t) { t.btn.addEventListener("click", function () { selectFlow(t.key); }); });
+  el.cmNext.addEventListener("click", function () {
+    var flow = FLOWS[currentFlow];
+    if (currentStep < flow.steps.length - 1) { currentStep++; renderSteps(); }
+  });
+  el.cmReset.addEventListener("click", function () { currentStep = 0; renderSteps(); });
+
+  selectFlow("http");
+
+  /* ---------- Renewal timeline ---------- */
+  var TOTAL_DAYS = 90;
+  var RENEW_BEFORE_PCT = 33; // renew with 33% of validity remaining
+  var renewDay = TOTAL_DAYS * (1 - RENEW_BEFORE_PCT / 100); // day renewal triggers
+
+  function renderTimeline() {
+    var day = parseInt(el.cmDaySlider.value, 10);
+    var pct = (day / TOTAL_DAYS) * 100;
+    var renewPct = (renewDay / TOTAL_DAYS) * 100;
+
+    el.cmTimelineFill.style.width = pct + "%";
+    el.cmTimelineRenew.style.left = renewPct + "%";
+    el.cmTimelineMarker.style.left = pct + "%";
+
+    var daysRemaining = TOTAL_DAYS - day;
+    var status, badgeClass;
+    if (day >= TOTAL_DAYS) {
+      status = "EXPIRED — cert-manager should have renewed well before this point.";
+      badgeClass = "badge";
+    } else if (day >= renewDay) {
+      status = "In the renewal window (" + Math.round(daysRemaining) + "d of validity left, under the " + RENEW_BEFORE_PCT + "% threshold) — the Trigger controller marks this Certificate for reissue, and the full issuance flow above runs again automatically.";
+      badgeClass = "badge planned";
+    } else {
+      status = "Valid, outside the renewal window (" + Math.round(daysRemaining) + "d of validity left) — no action taken.";
+      badgeClass = "badge done";
+    }
+    el.cmTimelineStatus.innerHTML = "day " + day + " / " + TOTAL_DAYS + '<span class="' + badgeClass + '">' +
+      (day >= renewDay ? (day >= TOTAL_DAYS ? "expired" : "renewal triggered") : "valid") + "</span>";
+    var statusText = document.createElement("div");
+    statusText.style.marginTop = "4px";
+    statusText.style.fontFamily = "var(--font-sans)";
+    statusText.style.color = "var(--text-muted)";
+    statusText.textContent = status;
+    el.cmTimelineStatus.appendChild(statusText);
+  }
+
+  el.cmDaySlider.addEventListener("input", renderTimeline);
+  renderTimeline();
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>

@@ -220,7 +220,7 @@
       "summary": "Automated X.509 certificates in Kubernetes: Issuers, ACME, auto-renewal.",
       "prerequisites": ["kubernetes"],
       "file": "cert-manager.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "spiffe",
