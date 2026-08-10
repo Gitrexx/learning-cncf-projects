@@ -230,7 +230,7 @@
       "summary": "A standard for workload identity: SPIFFE IDs, trust domains, and SVIDs.",
       "prerequisites": [],
       "file": "spiffe.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "spire",
