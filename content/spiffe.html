@@ -1,0 +1,532 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SPIFFE — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the identity explorer widget. ---- */
+  .sp-explorer-grid { display: grid; grid-template-columns: 1fr 1.1fr; gap: var(--sp-5); align-items: start; }
+  @media (max-width: 900px) { .sp-explorer-grid { grid-template-columns: 1fr; } }
+
+  .sp-field { margin-bottom: var(--sp-3); }
+  .sp-field label {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-1);
+  }
+  .sp-field input[type=text] {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    color: var(--text);
+  }
+  .sp-field input[type=text]:focus { outline: none; border-color: var(--accent); }
+  .sp-field-hint { font-size: var(--fs-xs); color: var(--text-faint); margin-top: 2px; }
+  .sp-field-error { font-size: var(--fs-xs); color: var(--signal-red); margin-top: 2px; display: none; }
+
+  .sp-id-out {
+    font-family: var(--font-mono);
+    font-size: var(--fs-md);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    word-break: break-all;
+    margin-top: var(--sp-2);
+  }
+  .sp-id-out .sp-scheme { color: var(--text-faint); }
+  .sp-id-out .sp-td { color: var(--accent); font-weight: 700; }
+  .sp-id-out .sp-path { color: var(--signal-green); font-weight: 700; }
+
+  .sp-svid-tabs { display: flex; gap: var(--sp-2); margin-bottom: var(--sp-3); flex-wrap: wrap; }
+  .sp-svid-tabs .btn { font-size: var(--fs-sm); }
+  .sp-svid-body {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    white-space: pre;
+    overflow-x: auto;
+    line-height: 1.6;
+    min-height: 220px;
+  }
+  .sp-svid-note { font-size: var(--fs-sm); color: var(--text-muted); margin-top: var(--sp-2); }
+
+  .sp-trust-map { display: flex; flex-direction: column; gap: var(--sp-4); margin-top: var(--sp-3); }
+  .sp-domain {
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--surface);
+  }
+  .sp-domain-title {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: var(--sp-2);
+  }
+  .sp-workload-row { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+  .sp-workload {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-pill);
+    padding: var(--sp-1) var(--sp-3);
+    background: var(--surface-2);
+    cursor: pointer;
+    user-select: none;
+  }
+  .sp-workload.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--surface-2)); color: var(--accent-strong); }
+  .sp-trust-verdict { margin-top: var(--sp-4); font-family: var(--font-mono); font-size: var(--fs-sm); }
+  .sp-trust-verdict .badge { margin-left: var(--sp-2); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Security, Policy &amp; Supply Chain · Sub-topic 22 / 36</p>
+  <h1>SPIFFE</h1>
+  <p class="lead">
+    Every deep-dive so far in this section answered "is this allowed" (Falco, OPA, Kyverno) or "does
+    this certificate stay valid" (cert-manager). <strong>SPIFFE</strong> — the Secure Production
+    Identity Framework For Everyone — answers a question underneath all of those:
+    <em>how does a workload prove who it is in the first place</em>, without embedding a shared secret
+    (an API key, a password, a static token) that can leak, get checked into a repo, or outlive the
+    workload it was minted for?
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    SPIFFE is a <strong>standard</strong>, not software you install — think of it the way you'd think
+    of the OCI image spec or OpenTelemetry's data model: a set of RFC-style specification documents
+    that define what a workload identity <em>looks like</em> and how it's verified, so that different
+    identity providers, service meshes, and platforms can all speak the same language. cert-manager
+    (previous deep-dive) issues X.509 certs generically for any purpose; SPIFFE narrows the question to
+    specifically <em>workload</em> identity and defines the shape that identity must take. The next
+    deep-dive, <strong>SPIRE</strong>, is the production system that actually implements SPIFFE and
+    hands workloads real identity documents — this one is about the shape of the problem and the
+    format of the answer.
+  </div>
+
+  <h2>The problem: proving identity without a shared secret</h2>
+  <p>
+    Picture a payments service calling an inventory service inside a cluster. Before either side does
+    anything sensitive, inventory needs to know: <em>is this really payments calling, and not something
+    impersonating it?</em> The traditional answers all leave something to be desired:
+  </p>
+  <ul>
+    <li><strong>API keys / static tokens</strong> — a secret both sides must provision, store, and
+      rotate by hand. If it leaks, it's valid until someone notices and revokes it — which could be
+      months.</li>
+    <li><strong>IP allow-lists</strong> — in Kubernetes, Pod IPs are recycled constantly as Pods are
+      rescheduled; an IP identifies a network location, not a workload's identity, and says nothing
+      about whether the process behind it is really what it claims to be.</li>
+    <li><strong>Bespoke per-platform identity</strong> — cloud provider A's instance-metadata identity,
+      cloud provider B's service-account tokens, a VM's SSH host key — none of them speak to each
+      other, so a workload that spans clouds, VMs, and containers ends up with three unrelated identity
+      systems and no way to reason about trust between them uniformly.
+    </li>
+  </ul>
+  <p>
+    SPIFFE's answer: give every workload a cryptographically verifiable identity document, issued
+    automatically by something that already knows the workload is legitimate (a platform like
+    Kubernetes, which already knows which Pod is running which service account), <strong>short-lived</strong>
+    so a leaked credential expires fast, and expressed in a <strong>uniform format</strong> so any two
+    SPIFFE-aware systems can verify each other regardless of what platform either one runs on.
+  </p>
+
+  <h2>The SPIFFE ID: a URI, not a name</h2>
+  <p>
+    The core primitive is the <strong>SPIFFE ID</strong> — a URI of the fixed form:
+  </p>
+  <pre><code>spiffe://&lt;trust domain&gt;/&lt;workload path&gt;</code></pre>
+  <p>
+    The <span class="term" title="A trust domain is the SPIFFE identity namespace corresponding to one root of trust — one issuing authority. Everything under a trust domain is verified against the same trust bundle (root public keys).">trust domain</span>
+    (e.g. <code>example.org</code> or <code>prod.us-east.example.internal</code>) identifies which
+    identity provider — which root of trust — issued and vouches for this ID. Two workloads in the
+    <em>same</em> trust domain can verify each other by checking the ID against one shared trust
+    bundle; workloads in <em>different</em> trust domains need an explicit
+    <span class="term" title="A configured, mutual trust relationship between two SPIFFE trust domains, letting workloads in one domain verify SVIDs issued by the other — SPIFFE's mechanism for cross-organization or cross-cluster identity.">federation</span>
+    relationship before they'll trust each other at all — trust is scoped and explicit by design, never
+    ambient.
+  </p>
+  <p>
+    The <strong>workload path</strong> after the trust domain is entirely up to whoever operates that
+    trust domain — SPIFFE deliberately does not standardize it, because different platforms need
+    different amounts of detail baked into the identity itself (a namespace and service account name on
+    Kubernetes; a region and role name in a VM fleet). What SPIFFE does standardize is the URI shape
+    around it, so any SPIFFE-aware verifier can always find the trust domain and treat the rest as an
+    opaque, comparable identifier.
+  </p>
+
+  <h2>Try it: build a SPIFFE ID</h2>
+  <p>
+    Fill in a trust domain and a workload path the way a platform like Kubernetes would derive them —
+    typically <code>ns/&lt;namespace&gt;/sa/&lt;service-account&gt;</code> — and watch the resulting URI
+    assemble.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">SPIFFE ID builder</div>
+    <div class="sp-explorer-grid">
+      <div>
+        <div class="sp-field">
+          <label for="spTrustDomain">Trust domain</label>
+          <input type="text" id="spTrustDomain" value="prod.example.org" />
+          <div class="sp-field-hint">The identity provider's root of trust — a DNS-style name, no scheme, no port.</div>
+          <div class="sp-field-error" id="spTrustDomainErr">Trust domain can't contain a scheme, port, query, or fragment.</div>
+        </div>
+        <div class="sp-field">
+          <label for="spNamespace">Kubernetes namespace</label>
+          <input type="text" id="spNamespace" value="payments" />
+        </div>
+        <div class="sp-field">
+          <label for="spServiceAccount">Service account</label>
+          <input type="text" id="spServiceAccount" value="checkout-api" />
+        </div>
+      </div>
+      <div>
+        <span class="sp-field-hint" style="display:block;margin-bottom:var(--sp-2);">resulting SPIFFE ID</span>
+        <div class="sp-id-out" id="spIdOut"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">Why a URI and not, say, a UUID</span>
+    A URI keeps the trust domain human-legible and lets standard URI parsing extract it — any verifier
+    can split on the first <code>/</code> after the authority and know exactly which trust bundle to
+    check against, without needing an out-of-band lookup table mapping opaque IDs to issuers.
+  </div>
+
+  <h2>The SVID: an identity document, in two flavors</h2>
+  <p>
+    A SPIFFE ID is just a name — it isn't, by itself, verifiable proof of anything. The proof is the
+    <span class="term" title="SPIFFE Verifiable Identity Document — a document that cryptographically binds a SPIFFE ID to a workload, signed by a trust domain's certificate authority, so any holder of the trust bundle can verify it.">SVID</span>
+    (SPIFFE Verifiable Identity Document): a signed credential that binds a SPIFFE ID to a workload and
+    lets any relying party verify it against the trust domain's public key material. SPIFFE defines two
+    interoperable SVID formats:
+  </p>
+  <table>
+    <thead><tr><th>Format</th><th>Carries the SPIFFE ID as</th><th>Typical use</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>X.509-SVID</strong></td>
+        <td>a URI <span class="term" title="Subject Alternative Name — an X.509 certificate extension listing additional identities the certificate is valid for, beyond the traditional Common Name. SPIFFE stores the SPIFFE ID here as a URI SAN.">SAN</span> in a standard X.509 certificate</td>
+        <td>mutual TLS between workloads — the SPIFFE ID rides inside the same handshake that
+          establishes an encrypted channel, so authentication and transport security happen in one
+          step. This is the SVID Istio, Linkerd, and Envoy's SDS-based mTLS all consume.</td>
+      </tr>
+      <tr>
+        <td><strong>JWT-SVID</strong></td>
+        <td>the <code>sub</code> claim of a signed JSON Web Token</td>
+        <td>identity that needs to travel through layers that don't terminate TLS themselves — an
+          API gateway forwarding a token, a message queue, a context where you want to assert identity
+          in a request/message rather than at the connection level.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Both formats carry the <em>same</em> SPIFFE ID and are backed by the <em>same</em> trust domain —
+    they're two encodings of one identity, chosen based on where in the stack you need to present it.
+    Both are deliberately <strong>short-lived</strong> (X.509-SVIDs commonly rotate hourly; JWT-SVIDs
+    are typically minutes) so that even a leaked SVID has a short shelf life, in the same spirit as
+    cert-manager's push toward short-lived certificates in the previous deep-dive — except here the
+    identity, not just the transport, is what's rotating.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">X.509-SVID vs. JWT-SVID</div>
+    <div class="sp-svid-tabs">
+      <button class="btn" id="spTabX509">X.509-SVID</button>
+      <button class="btn ghost" id="spTabJwt">JWT-SVID</button>
+    </div>
+    <div class="sp-svid-body" id="spSvidBody"></div>
+    <div class="sp-svid-note" id="spSvidNote"></div>
+  </div>
+
+  <h2>Trust bundles and trust domains: who you believe, and about what</h2>
+  <p>
+    A <span class="term" title="A trust bundle is the set of root public keys / CA certificates for a trust domain, distributed to every party that needs to verify SVIDs issued by that domain.">trust bundle</span>
+    is the set of root public keys for a trust domain — hand a workload the trust bundle for
+    <code>prod.example.org</code>, and it can verify any SVID claiming to be from that trust domain,
+    without contacting anything else at verification time. Two workloads can only mutually authenticate
+    if each holds the other's trust domain's bundle: same trust domain, automatic (they share one
+    bundle by construction); different trust domains, only after an explicit
+    <strong>federation</strong> relationship is configured to exchange bundles. Kubernetes namespaces
+    give you soft, RBAC-enforced isolation within one API server; SPIFFE trust domains give you a hard
+    cryptographic boundary that can span multiple clusters, clouds, or even organizations — a trust
+    domain is a bigger, more deliberate unit of trust than a namespace, and typically one trust domain
+    covers many namespaces across many clusters, not the other way around.
+  </p>
+
+  <h2>Try it: which workloads can verify each other?</h2>
+  <p>
+    Two trust domains, three workloads. Select any two workloads to see whether they can verify each
+    other's SVIDs out of the box, and why.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Trust domain map</div>
+    <div class="sp-trust-map">
+      <div class="sp-domain">
+        <div class="sp-domain-title">spiffe://prod.example.org</div>
+        <div class="sp-workload-row">
+          <span class="sp-workload" data-id="prod-payments" data-domain="prod.example.org">spiffe://prod.example.org/ns/payments/sa/checkout-api</span>
+          <span class="sp-workload" data-id="prod-inventory" data-domain="prod.example.org">spiffe://prod.example.org/ns/inventory/sa/stock-svc</span>
+        </div>
+      </div>
+      <div class="sp-domain">
+        <div class="sp-domain-title">spiffe://partner.example.com <span class="badge" id="spFederationBadge" style="font-size:var(--fs-xs);"></span></div>
+        <div class="sp-workload-row">
+          <span class="sp-workload" data-id="partner-billing" data-domain="partner.example.com">spiffe://partner.example.com/ns/billing/sa/invoice-svc</span>
+        </div>
+      </div>
+    </div>
+    <div class="sp-controls" style="margin-top:var(--sp-3);">
+      <label style="font-family:var(--font-mono);font-size:var(--fs-sm);"><input type="checkbox" id="spFederationToggle" /> federation configured between the two trust domains</label>
+    </div>
+    <div class="sp-trust-verdict" id="spTrustVerdict">Select two workloads above.</div>
+  </div>
+
+  <h2>What SPIFFE deliberately doesn't define</h2>
+  <p>
+    A recurring theme in this section: a graduated CNCF project usually solves one layer of a problem
+    precisely and leaves the rest to something else. SPIFFE is unusually narrow on purpose — it defines
+    the ID format, the two SVID document formats, a workload API for fetching SVIDs, and a federation
+    protocol for exchanging trust bundles. It does <strong>not</strong> define:
+  </p>
+  <ul>
+    <li><strong>How to decide whether a workload deserves a given SPIFFE ID</strong> — that's
+      <span class="term" title="The process of collecting evidence about a workload — the process tree it runs in, the Kubernetes Pod/ServiceAccount it belongs to, an instance-metadata document — and using that evidence to decide which identity it's entitled to. SPIRE implements this; SPIFFE only specifies the resulting document format.">attestation</span>,
+      entirely left to an implementation — covered in depth in the SPIRE deep-dive next.</li>
+    <li><strong>How SVIDs are actually issued, stored, or rotated</strong> — again, an implementation
+      concern. SPIRE is the reference implementation; other systems (Istio's own CA, some service mesh
+      vendors) also issue SPIFFE-shaped SVIDs.</li>
+    <li><strong>Authorization</strong> — SPIFFE proves <em>who</em> a workload is, not what it's allowed
+      to do. Pairing a verified SPIFFE ID with an authorization decision is OPA/Kyverno's kind of job
+      (or a mesh's authorization policy), layered on top.</li>
+  </ul>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>mTLS</strong> is a transport-security mechanism; SPIFFE is an identity format that happens
+    to have an X.509 encoding that <em>plugs into</em> mTLS — Istio and Linkerd both use X.509-SVIDs
+    under the hood for their sidecar mTLS, but SPIFFE itself says nothing about TLS handshakes.
+    <strong>OAuth2/OIDC tokens</strong> also assert identity as signed JSON, but they're built for
+    end-user and application-to-API authentication with human-facing flows (redirects, consent
+    screens, long-lived refresh tokens); SPIFFE is purpose-built for workload-to-workload identity with
+    no human in the loop and identities that rotate continuously. And as noted above, SPIFFE is a
+    <em>specification</em> — for the thing that actually issues SVIDs day to day in production, see the
+    next deep-dive, <strong>SPIRE</strong>.
+  </div>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    SPIFFE (together with SPIRE) joined CNCF as a Sandbox project in March 2018, moved to Incubating in
+    September 2020, and reached <strong>Graduated</strong> status in January 2022 — one of the earlier
+    graduations, reflecting how foundational identity is to everything built on top of it. You'll meet
+    SPIFFE IDs directly in Istio and Linkerd's mTLS certificates (both encode a SPIFFE-shaped identity
+    in the SAN), in Envoy's SDS-based workload identity, in HashiCorp Vault and various secrets managers
+    that accept a SPIFFE-verified identity as an authentication method, and increasingly as the identity
+    layer platform teams reach for whenever they need workload identity that works uniformly across
+    Kubernetes, VMs, and multiple clouds at once.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. Two workloads present valid SVIDs, but from different trust domains, and no federation has been configured between those domains. What happens?</p>
+      <button class="quiz-option" data-val="a">They authenticate successfully — SPIFFE trust domains are global by default, so any two valid SVIDs verify against each other automatically.</button>
+      <button class="quiz-option" data-val="b">Verification fails — each workload only holds its own trust domain's trust bundle, so it has no root key to check the other's SVID against, until an explicit federation relationship exchanges bundles.</button>
+      <button class="quiz-option" data-val="c">It depends only on whether both SVIDs are X.509-SVIDs rather than JWT-SVIDs — format match is what SPIFFE checks, not trust domain.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">2. What does SPIFFE deliberately leave undefined, pushing it to an implementation like SPIRE instead?</p>
+      <button class="quiz-option" data-val="a">How a workload's identity is attested (what evidence proves it deserves a given SPIFFE ID) and how SVIDs are actually issued, stored, and rotated day to day.</button>
+      <button class="quiz-option" data-val="b">The URI format of the SPIFFE ID itself, which each implementation is free to change.</button>
+      <button class="quiz-option" data-val="c">Whether an X.509-SVID or a JWT-SVID carries the SPIFFE ID as a URI — SPIFFE leaves the encoding entirely up to the relying party.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">3. Why does SPIFFE define two separate SVID formats (X.509 and JWT) instead of just one?</p>
+      <button class="quiz-option" data-val="a">JWT-SVIDs are the newer, recommended format and X.509-SVIDs are being deprecated in favor of it.</button>
+      <button class="quiz-option" data-val="b">X.509-SVIDs are for humans and JWT-SVIDs are for service accounts — the two formats target different kinds of principals.</button>
+      <button class="quiz-option" data-val="c">They fit different layers of the stack: X.509-SVIDs bind identity to the mTLS handshake itself for direct workload-to-workload connections, while JWT-SVIDs can be carried inside a request or message through intermediaries that don't terminate TLS.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- SPIFFE ID builder ---------- */
+  var el = {};
+  ["spTrustDomain", "spNamespace", "spServiceAccount", "spIdOut", "spTrustDomainErr",
+   "spTabX509", "spTabJwt", "spSvidBody", "spSvidNote",
+   "spFederationToggle", "spFederationBadge", "spTrustVerdict"
+  ].forEach(function (id) { el[id] = document.getElementById(id); });
+
+  function escapeHtml(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function renderId() {
+    var td = el.spTrustDomain.value.trim();
+    var ns = el.spNamespace.value.trim() || "default";
+    var sa = el.spServiceAccount.value.trim() || "default";
+    var invalid = /[:\/\?\#@]/.test(td) || td === "";
+    el.spTrustDomainErr.style.display = invalid ? "block" : "none";
+    var safeTd = invalid ? "&lt;invalid trust domain&gt;" : escapeHtml(td);
+    el.spIdOut.innerHTML =
+      '<span class="sp-scheme">spiffe://</span>' +
+      '<span class="sp-td">' + safeTd + '</span>' +
+      '<span class="sp-scheme">/</span>' +
+      '<span class="sp-path">ns/' + escapeHtml(ns) + '/sa/' + escapeHtml(sa) + '</span>';
+  }
+  [el.spTrustDomain, el.spNamespace, el.spServiceAccount].forEach(function (input) {
+    input.addEventListener("input", renderId);
+  });
+  renderId();
+
+  /* ---------- SVID tabs ---------- */
+  var SVIDS = {
+    x509: {
+      body:
+        "Certificate:\n" +
+        "  Version: 3\n" +
+        "  Serial Number: 7a:3f:9c:...\n" +
+        "  Signature Algorithm: ecdsa-with-SHA256\n" +
+        "  Issuer: CN=prod.example.org\n" +
+        "  Validity\n" +
+        "    Not Before: 2026-08-10T09:00:00Z\n" +
+        "    Not After:  2026-08-10T10:00:00Z   (1 hour TTL)\n" +
+        "  Subject: (blank — identity lives in the SAN, not the DN)\n" +
+        "  X509v3 Subject Alternative Name:\n" +
+        "    URI:spiffe://prod.example.org/ns/payments/sa/checkout-api\n" +
+        "  X509v3 Basic Constraints: CA:FALSE\n" +
+        "  X509v3 Key Usage: Digital Signature\n" +
+        "  Signature: ...(signed by the trust domain's CA)...",
+      note: "Presented during a TLS handshake — the peer reads the SPIFFE ID straight out of the SAN and verifies the signature chain against the trust bundle, all in one round trip that also sets up the encrypted channel."
+    },
+    jwt: {
+      body:
+        "// header\n" +
+        "{\n" +
+        '  "alg": "ES256",\n' +
+        '  "kid": "spiffe-jwt-key-1",\n' +
+        '  "typ": "JWT"\n' +
+        "}\n\n" +
+        "// payload\n" +
+        "{\n" +
+        '  "sub": "spiffe://prod.example.org/ns/payments/sa/checkout-api",\n' +
+        '  "aud": ["spiffe://prod.example.org/ns/inventory/sa/stock-svc"],\n' +
+        '  "exp": 1786435500,\n' +
+        '  "iat": 1786435200\n' +
+        "}\n\n" +
+        "// signature\n" +
+        "...(signed with the trust domain's JWT signing key)...",
+      note: "Carried as a bearer token — e.g. an Authorization header — through anything that forwards requests without terminating TLS itself. The audience (aud) claim scopes which relying party the token is meant for, so it can't be replayed against a different service."
+    }
+  };
+  var svidTabs = [
+    { key: "x509", btn: el.spTabX509 },
+    { key: "jwt", btn: el.spTabJwt }
+  ];
+  function selectSvid(key) {
+    svidTabs.forEach(function (t) { t.btn.className = t.key === key ? "btn" : "btn ghost"; });
+    el.spSvidBody.textContent = SVIDS[key].body;
+    el.spSvidNote.textContent = SVIDS[key].note;
+  }
+  svidTabs.forEach(function (t) { t.btn.addEventListener("click", function () { selectSvid(t.key); }); });
+  selectSvid("x509");
+
+  /* ---------- Trust domain map ---------- */
+  var workloads = Array.prototype.slice.call(document.querySelectorAll(".sp-workload"));
+  var selected = [];
+
+  function updateFederationBadge() {
+    el.spFederationBadge.className = "badge " + (el.spFederationToggle.checked ? "done" : "planned");
+    el.spFederationBadge.textContent = el.spFederationToggle.checked ? "federated" : "not federated";
+  }
+
+  function updateVerdict() {
+    if (selected.length < 2) {
+      el.spTrustVerdict.textContent = "Select two workloads above.";
+      return;
+    }
+    var a = selected[0], b = selected[1];
+    var sameDomain = a.dataset.domain === b.dataset.domain;
+    var federated = el.spFederationToggle.checked;
+    var canVerify = sameDomain || federated;
+    var reason;
+    if (sameDomain) {
+      reason = "Both workloads belong to the same trust domain (" + a.dataset.domain + "), so they already share one trust bundle — verification works out of the box.";
+    } else if (federated) {
+      reason = "Different trust domains (" + a.dataset.domain + " and " + b.dataset.domain + "), but federation is configured — each side has exchanged and now holds the other's trust bundle.";
+    } else {
+      reason = "Different trust domains (" + a.dataset.domain + " and " + b.dataset.domain + ") with no federation configured — neither side holds a trust bundle to verify the other's SVID against.";
+    }
+    el.spTrustVerdict.innerHTML =
+      (canVerify ? "Can verify each other" : "Cannot verify each other") +
+      '<span class="badge ' + (canVerify ? "done" : "") + '">' + (canVerify ? "trusted" : "untrusted") + '</span>' +
+      '<div style="margin-top:4px;font-family:var(--font-sans);color:var(--text-muted);font-weight:400;">' + reason + '</div>';
+  }
+
+  workloads.forEach(function (w) {
+    w.addEventListener("click", function () {
+      var idx = selected.indexOf(w);
+      if (idx !== -1) {
+        selected.splice(idx, 1);
+        w.classList.remove("selected");
+      } else {
+        if (selected.length === 2) {
+          selected.shift().classList.remove("selected");
+        }
+        selected.push(w);
+        w.classList.add("selected");
+      }
+      updateVerdict();
+    });
+  });
+  el.spFederationToggle.addEventListener("change", function () {
+    updateFederationBadge();
+    updateVerdict();
+  });
+  updateFederationBadge();
+  updateVerdict();
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
