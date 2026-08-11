@@ -1,0 +1,507 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SPIRE — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the attestation step-through & selector matcher. ---- */
+  .sr-toggle-group { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-4); }
+  .sr-toggle-group .btn { font-size: var(--fs-sm); }
+
+  .sr-steps {
+    display: flex;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+    margin-bottom: var(--sp-4);
+  }
+  .sr-step-dot {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    padding: var(--sp-1) var(--sp-3);
+    border-radius: var(--r-pill);
+    border: 1px solid var(--border-strong);
+    background: var(--surface-2);
+    color: var(--text-faint);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .sr-step-dot.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--surface-2)); color: var(--accent-strong); font-weight: 700; }
+  .sr-step-dot.past { color: var(--signal-green); border-color: color-mix(in srgb, var(--signal-green) 40%, var(--border)); }
+
+  .sr-step-panel {
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    padding: var(--sp-4) var(--sp-5);
+  }
+  .sr-step-title { font-weight: 700; color: var(--accent-strong); margin-bottom: var(--sp-2); }
+  .sr-step-evidence {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3) var(--sp-4);
+    white-space: pre-wrap;
+    margin: var(--sp-3) 0;
+  }
+  .sr-step-nav { display: flex; justify-content: space-between; margin-top: var(--sp-4); }
+
+  .sr-match-grid { display: grid; grid-template-columns: 1fr; gap: var(--sp-4); }
+  .sr-workload-card {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--surface);
+  }
+  .sr-selector-chip {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-pill);
+    padding: var(--sp-1) var(--sp-3);
+    background: var(--surface-2);
+    margin: 2px 4px 2px 0;
+  }
+  .sr-entries { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-3); }
+  .sr-entry {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--surface);
+    cursor: pointer;
+  }
+  .sr-entry:hover { border-color: var(--accent); }
+  .sr-entry-id { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--accent-strong); font-weight: 700; }
+  .sr-entry-result { margin-top: var(--sp-2); font-size: var(--fs-sm); font-family: var(--font-mono); display: none; }
+  .sr-entry.evaluated .sr-entry-result { display: block; }
+  .sr-entry.match { border-color: var(--signal-green); }
+  .sr-entry.nomatch { border-color: var(--signal-red); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Security, Policy &amp; Supply Chain · Sub-topic 23 / 36</p>
+  <h1>SPIRE</h1>
+  <p class="lead">
+    The <a href="./spiffe.html">SPIFFE</a> deep-dive covered the <em>shape</em> of a workload identity —
+    the SPIFFE ID, the X.509-SVID and JWT-SVID formats — and pointedly left two questions unanswered:
+    <em>how does anything decide a workload deserves a given identity</em>, and <em>who actually signs
+    and hands out the credential</em>? <strong>SPIRE</strong> (the SPIFFE Runtime Environment) is the
+    production system that answers both: it's the reference implementation that turns the SPIFFE spec
+    into a running service issuing real, rotating identity documents to real workloads.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    If SPIFFE is the spec for what an identity document looks like, SPIRE is the software that
+    <strong>decides who gets one and issues it</strong>. It does this through
+    <span class="term" title="The process of collecting verifiable evidence about something — a node's cloud instance metadata, a workload's Kubernetes Pod spec — and using it to decide what identity, if any, it's entitled to.">attestation</span>:
+    first attesting the <em>node</em> a workload runs on, then attesting the <em>workload</em> itself,
+    before ever handing out a credential. No shared secret is bootstrapped by a human at any point —
+    the platform SPIRE is embedded in (Kubernetes, AWS, GCP, bare metal) supplies the evidence.
+  </div>
+
+  <h2>Two servers, two attestation problems</h2>
+  <p>
+    SPIRE has exactly two components, and each solves a different half of the trust problem:
+  </p>
+  <table>
+    <thead><tr><th>Component</th><th>Runs where</th><th>Job</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>SPIRE Server</strong></td>
+        <td>Centrally, one (logical) instance per trust domain</td>
+        <td>Holds the trust domain's signing authority (a root or intermediate CA), stores
+          <strong>registration entries</strong> (the policy describing which identities exist and who
+          qualifies), and attests <em>nodes</em> before trusting the agent running on them.</td>
+      </tr>
+      <tr>
+        <td><strong>SPIRE Agent</strong></td>
+        <td>One per node (host, VM, or Kubernetes node)</td>
+        <td>Proves its own node's identity to the server (node attestation), then locally attests
+          <em>workloads</em> on that node and serves them SVIDs over the
+          <span class="term" title="A local API — a Unix domain socket by convention — that a workload calls to fetch its own X.509-SVID or JWT-SVID and the current trust bundle, with no credential needed to make the call itself; the caller's identity is established by the kernel, not a token.">Workload API</span>.
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Splitting the two matters: a compromised node should only be able to obtain identities for
+    workloads legitimately scheduled <em>on that node</em>, never mint identities for anything else in
+    the trust domain. Node attestation draws that boundary before workload attestation ever runs.
+  </p>
+
+  <h2>Node attestation: the agent earns its own identity first</h2>
+  <p>
+    An agent can't vouch for workloads until the server trusts the agent itself. On startup, the agent
+    gathers platform-specific evidence via a <strong>Node Attestor</strong> plugin and presents it to the
+    server, which validates it with the matching server-side plugin — the check happens against the
+    platform's own APIs, not against anything the agent can fabricate:
+  </p>
+  <ul>
+    <li><strong>Kubernetes (<code>k8s_psat</code>)</strong> — the agent presents a
+      <span class="term" title="Projected Service Account Token — a short-lived, audience-scoped Kubernetes service account token mounted into a Pod by the kubelet, distinct from the old long-lived, unbounded default service account token.">projected service account token (PSAT)</span>
+      for its own Pod; the server validates it against the Kubernetes API server's
+      <code>TokenReview</code> API.</li>
+    <li><strong>Cloud instance identity (<code>aws_iid</code>, <code>gcp_iit</code>, <code>azure_msi</code>)</strong>
+      — the agent presents a cloud-signed instance identity document; the server checks its signature
+      against the cloud provider's public key and cross-checks the instance is actually running.</li>
+    <li><strong>Join token</strong> — a one-time, out-of-band secret pre-registered with the server;
+      the fallback for platforms with no ambient evidence to attest against (e.g. bare VMs).</li>
+  </ul>
+  <p>
+    Once verified, the server derives <strong>selectors</strong> for the node (e.g. which cluster, which
+    node UID) and checks them against registration entries scoped to that agent, then issues the agent
+    its own X.509-SVID — something like
+    <code>spiffe://example.org/spire/agent/k8s_psat/mycluster/&lt;node-uid&gt;</code>. Every later
+    exchange between that agent and the server happens over mTLS using this SVID.
+  </p>
+
+  <h2>Try it: walk the attestation flow, hop by hop</h2>
+  <p>
+    Pick a node platform, then step through what happens from agent startup to a workload finally
+    holding a usable SVID — the same five-hop flow regardless of platform, but the evidence at each hop
+    differs.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Attestation flow step-through</div>
+    <div class="sr-toggle-group" id="srPlatformToggle">
+      <button class="btn" data-platform="k8s">Kubernetes node</button>
+      <button class="btn ghost" data-platform="aws">AWS EC2 node</button>
+      <button class="btn ghost" data-platform="join">Bare VM (join token)</button>
+    </div>
+    <div class="sr-steps" id="srSteps"></div>
+    <div class="sr-step-panel">
+      <div class="sr-step-title" id="srStepTitle"></div>
+      <div id="srStepBody"></div>
+      <div class="sr-step-evidence" id="srStepEvidence"></div>
+    </div>
+    <div class="sr-step-nav">
+      <button class="btn ghost" id="srPrev">&larr; back</button>
+      <button class="btn" id="srNext">next &rarr;</button>
+    </div>
+  </div>
+
+  <h2>Workload attestation: selectors and registration entries</h2>
+  <p>
+    Once the agent is trusted, workloads on its node authenticate to it for free — not with a
+    credential, but because the <strong>kernel</strong> tells the agent who's calling. A workload
+    connects to the Workload API socket; the agent reads the caller's process ID straight off the
+    socket connection (<code>SO_PEERCRED</code> on Linux) and hands that PID to its configured
+    <strong>Workload Attestor</strong> plugins — <code>k8s</code> (queries the kubelet for the owning
+    Pod's namespace, service account, labels, and image), <code>docker</code>, or <code>unix</code>
+    (UID/GID/binary path). Each plugin returns <strong>selectors</strong>: verified facts like
+    <code>k8s:ns:payments</code> or <code>k8s:sa:checkout-api</code>.
+  </p>
+  <p>
+    Separately, an operator (or, on Kubernetes, the <code>spire-controller-manager</code> reconciling
+    CRDs) has pre-created <strong>registration entries</strong> on the server — the policy layer that
+    SPIFFE deliberately leaves undefined. Each entry says, in effect: <em>"any workload presenting
+    <u>these</u> selectors, scheduled under <u>this</u> agent, gets <u>this</u> SPIFFE ID."</em> The
+    agent caches the entries relevant to it and, for each Workload API call, checks whether an entry's
+    required selectors are all present among the ones it just discovered for that process. A match mints
+    the SVID; no match means no identity — the workload gets nothing to present, which is the SPIRE
+    equivalent of a default-deny.
+  </p>
+
+  <h2>Try it: does this workload match a registration entry?</h2>
+  <p>
+    A Pod's kubelet-verified selectors are fixed below. Click each registration entry to check whether
+    <em>all</em> of its required selectors are present among the workload's — that subset check is the
+    entire matching rule.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Selector matcher</div>
+    <div class="sr-match-grid">
+      <div class="sr-workload-card">
+        <div class="sp-field-hint" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--text-faint);text-transform:uppercase;letter-spacing:.06em;margin-bottom:var(--sp-2);">selectors discovered for this process</div>
+        <span class="sr-selector-chip">k8s:ns:payments</span><span class="sr-selector-chip">k8s:sa:checkout-api</span><span class="sr-selector-chip">k8s:pod-label:app:checkout-api</span><span class="sr-selector-chip">k8s:container-name:api</span>
+      </div>
+      <div class="sr-entries" id="srEntries"></div>
+    </div>
+  </div>
+
+  <h2>Issuance and rotation: no polling, no restarts</h2>
+  <p>
+    The Workload API isn't a request/response call a workload polls — it's a long-lived streaming gRPC
+    call. The agent pushes an SVID down the stream immediately, then proactively pushes a
+    <strong>replacement</strong> before the old one expires (X.509-SVIDs commonly default to a
+    ~1&nbsp;hour TTL, rotated well before that) or whenever the underlying registration entry changes.
+    The workload never restarts, never re-authenticates, never even asks — it just always has a current
+    SVID sitting in memory, refreshed underneath it. This is what makes short-lived credentials tolerable
+    operationally: the rotation is invisible to the application.
+  </p>
+
+  <h2>Trust bundles, federation, and nested SPIRE</h2>
+  <p>
+    The server holds (or chains to) the trust domain's signing key, distributes the public
+    <strong>trust bundle</strong> to agents over the same Workload API, and keeps it current as keys
+    roll. Two extensions scale this beyond one server:
+  </p>
+  <ul>
+    <li><strong>Federation</strong> — two SPIRE servers in different trust domains each publish a
+      bundle endpoint and periodically fetch the other's bundle; once configured, workloads in each
+      domain receive the peer's bundle through their local Workload API and can verify SVIDs from the
+      other domain — the concrete mechanism behind the federation toggle in the SPIFFE deep-dive.</li>
+    <li><strong>Nested SPIRE</strong> — a downstream SPIRE Server registers with an upstream one like
+      any other workload and receives an <strong>intermediate CA</strong> instead of a leaf SVID,
+      letting it sign SVIDs for its own local agents without a direct connection back to the root
+      server for every request. Useful for multi-cluster or edge deployments where every cluster gets
+      its own server, but all identities still chain to one trust domain's root of trust.</li>
+  </ul>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>A Kubernetes ServiceAccount token</strong> already proves "which ServiceAccount" to the
+    Kubernetes API server — SPIRE's <code>k8s_psat</code> node attestor actually consumes one as
+    evidence, but the SVID it produces is a portable, cross-platform identity usable far beyond the
+    Kubernetes API, including mTLS between services and cross-cluster or cross-cloud verification.
+    <strong>Vault's identity/secrets engine</strong> also issues short-lived credentials, but from a
+    request Vault must authenticate first; SPIRE issues credentials proactively, streamed continuously,
+    with no request needed once the Workload API connection is open. And remember the layering from the
+    SPIFFE deep-dive: SPIRE decides <em>who a workload is</em>; it says nothing about what that workload
+    is <em>authorized</em> to do — that's still OPA, Kyverno, or a mesh's authorization policy, consuming
+    the SPIFFE ID SPIRE just proved.
+  </div>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    SPIRE moved through CNCF's maturity levels in lockstep with SPIFFE — Sandbox in March 2018,
+    Incubating in September 2020, <strong>Graduated in January 2022</strong> — reflecting that the spec
+    alone wasn't enough; the ecosystem needed a trusted, production-hardened implementation before
+    workload identity could be treated as solved infrastructure. You'll run into SPIRE directly as
+    Istio's pluggable CA backend (via its Envoy SDS integration), inside HashiCorp Vault and Teleport
+    integrations that accept a SPIRE-issued SVID as an authentication method, in multi-cluster and
+    multi-cloud platforms that need one uniform identity system spanning Kubernetes, VMs, and bare
+    metal at once, and increasingly as the identity layer under service-to-service auth for AI agent and
+    MCP-style systems that need workload identity beyond just human/API-key auth.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. Why does SPIRE attest the <em>node</em> before it ever attests a workload running on it?</p>
+      <button class="quiz-option" data-val="a">Node attestation is optional — SPIRE only needs to attest workloads, but most deployments enable it anyway for defense in depth.</button>
+      <button class="quiz-option" data-val="b">The agent has to earn the server's trust for its own identity first, so that a compromised or rogue node can only ever be handed identities for workloads legitimately scheduled on it — never anything else in the trust domain.</button>
+      <button class="quiz-option" data-val="c">Node attestation is how SPIRE distributes the trust bundle; workload attestation only happens after the bundle is present.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. A registration entry requires selectors <code>k8s:ns:payments</code> and <code>k8s:sa:checkout-api</code>. A workload's process attests with selectors <code>k8s:ns:payments</code>, <code>k8s:sa:checkout-api</code>, and <code>k8s:pod-label:app:checkout-api</code>. Does it match?</p>
+      <button class="quiz-option" data-val="a">No — the workload's selector set must be exactly equal to the entry's, and it has one extra selector the entry doesn't list.</button>
+      <button class="quiz-option" data-val="b">No — registration entries can only ever specify one selector, so this entry is invalid.</button>
+      <button class="quiz-option" data-val="c">Yes — the matching rule is that the entry's required selectors must all be present among the workload's discovered selectors; extra selectors on the workload's side don't break the match.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. How does a workload get a rotated SVID before its current one expires, without polling or restarting?</p>
+      <button class="quiz-option" data-val="a">The Workload API connection is a long-lived stream; the agent proactively pushes a replacement SVID down that same stream before expiry or whenever the relevant registration entry changes.</button>
+      <button class="quiz-option" data-val="b">The workload must re-call the Workload API on a fixed interval (typically every few seconds) to check whether a new SVID is available.</button>
+      <button class="quiz-option" data-val="c">SPIRE Agents automatically restart every workload process shortly before SVID expiry so it picks up a freshly issued credential.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- Attestation flow step-through ---------- */
+  var PLATFORM_LABEL = { k8s: "Kubernetes node", aws: "AWS EC2 node", join: "Bare VM (join token)" };
+
+  var STEPS = {
+    k8s: [
+      {
+        title: "1. Agent starts and gathers node evidence",
+        body: "On startup, the SPIRE Agent (running as a DaemonSet Pod) asks its node attestor plugin (<code>k8s_psat</code>) for evidence proving which node it's running on.",
+        evidence: "Evidence gathered:\n  A projected service account token (PSAT)\n  mounted into the agent's own Pod by the kubelet,\n  audience-scoped to the SPIRE server."
+      },
+      {
+        title: "2. Server verifies the evidence against the platform",
+        body: "The agent sends the PSAT to the SPIRE Server. The server's <code>k8s_psat</code> plugin calls the Kubernetes API server's <code>TokenReview</code> endpoint — it can't be forged, because only the real cluster's API server can validate it.",
+        evidence: "Server -> Kubernetes API server\n  TokenReview(token=<PSAT>)\n  <- valid, bound to Pod spire-agent-x7k2n, node ip-10-0-3-12"
+      },
+      {
+        title: "3. Server issues the agent its own SVID",
+        body: "With the node's identity confirmed, the server checks registration entries scoped to this agent and issues it an X.509-SVID. Every future agent&harr;server exchange now happens over mTLS using this SVID.",
+        evidence: "Issued: spiffe://example.org/spire/agent/k8s_psat/mycluster/ip-10-0-3-12\nTTL: 1h, auto-rotated by the agent before expiry"
+      },
+      {
+        title: "4. A workload calls the Workload API",
+        body: "The checkout-api Pod's process opens a connection to the agent's Workload API Unix domain socket. No token, header, or credential is presented — the connection itself is the request.",
+        evidence: "Workload -> unix:///run/spire/sockets/agent.sock\n  FetchX509SVID() [streaming]"
+      },
+      {
+        title: "5. Agent attests the workload and matches selectors",
+        body: "The agent reads the caller's PID off the socket (kernel-verified, unspoofable by the workload), asks its <code>k8s</code> workload attestor plugin to resolve that PID to a Pod via the kubelet, and checks the resulting selectors against its cached registration entries. A match mints and streams back the SVID.",
+        evidence: "PID 48213 -> kubelet -> Pod checkout-api-7f9, ns payments, sa checkout-api\nSelectors: k8s:ns:payments, k8s:sa:checkout-api\nMatched entry -> issuing spiffe://example.org/ns/payments/sa/checkout-api"
+      }
+    ],
+    aws: [
+      {
+        title: "1. Agent starts and gathers node evidence",
+        body: "The SPIRE Agent (running directly on the EC2 instance) asks its node attestor plugin (<code>aws_iid</code>) for evidence — AWS's own signed statement of what this instance is.",
+        evidence: "Evidence gathered:\n  Instance Identity Document (IID) + PKCS#7 signature,\n  fetched from the EC2 instance metadata service."
+      },
+      {
+        title: "2. Server verifies the evidence against the platform",
+        body: "The agent sends the signed IID to the server. The server's <code>aws_iid</code> plugin verifies the PKCS#7 signature against AWS's published public certificate, then optionally cross-checks the instance is actually running via the EC2 API.",
+        evidence: "Server -> verify PKCS#7 signature against AWS public cert\n  <- valid: instance i-0a1b2c3d4e5f, account 111122223333, region us-east-1"
+      },
+      {
+        title: "3. Server issues the agent its own SVID",
+        body: "With the instance identity confirmed, the server checks registration entries scoped to this agent and issues it an X.509-SVID for all future mTLS with the server.",
+        evidence: "Issued: spiffe://example.org/spire/agent/aws_iid/111122223333/i-0a1b2c3d4e5f\nTTL: 1h, auto-rotated by the agent before expiry"
+      },
+      {
+        title: "4. A workload calls the Workload API",
+        body: "A process on the instance opens a connection to the agent's Workload API Unix domain socket — same local mechanism regardless of the underlying cloud.",
+        evidence: "Workload -> unix:///run/spire/sockets/agent.sock\n  FetchX509SVID() [streaming]"
+      },
+      {
+        title: "5. Agent attests the workload and matches selectors",
+        body: "The agent reads the caller's PID and asks its <code>unix</code> (or <code>docker</code>) workload attestor plugin to resolve identity locally — UID, binary path, or container labels — then matches selectors against cached registration entries.",
+        evidence: "PID 5521 -> uid 1000, path /opt/checkout/bin/api\nSelectors: unix:uid:1000, unix:path:/opt/checkout/bin/api\nMatched entry -> issuing spiffe://example.org/ec2/checkout-api"
+      }
+    ],
+    join: [
+      {
+        title: "1. Agent starts with a pre-shared join token",
+        body: "On a platform with no ambient, verifiable evidence (a bare VM with no cloud metadata service), an operator generates a one-time join token on the server ahead of time and provisions it to the agent out of band.",
+        evidence: "Operator -> spire-server token generate\n  <- token: 2c1a9e...(one-time use, short expiry)"
+      },
+      {
+        title: "2. Server verifies the evidence against the platform",
+        body: "The agent presents the join token. The server checks it against the exact token it generated — valid once, then invalidated, so it can't be replayed even if the agent's startup logs leak.",
+        evidence: "Server: token 2c1a9e... found, unused, not expired\n  -> consume token (single use)"
+      },
+      {
+        title: "3. Server issues the agent its own SVID",
+        body: "The token check stands in for platform evidence here — trust is rooted in the operator having securely delivered the token, not in a cloud-signed document.",
+        evidence: "Issued: spiffe://example.org/spire/agent/join_token/2c1a9e\nTTL: 1h, auto-rotated by the agent before expiry"
+      },
+      {
+        title: "4. A workload calls the Workload API",
+        body: "A process on the VM opens a connection to the agent's Workload API Unix domain socket.",
+        evidence: "Workload -> unix:///run/spire/sockets/agent.sock\n  FetchX509SVID() [streaming]"
+      },
+      {
+        title: "5. Agent attests the workload and matches selectors",
+        body: "The agent reads the caller's PID and asks its <code>unix</code> workload attestor plugin for local process facts, then matches against cached registration entries — same mechanism as any other platform from this point on.",
+        evidence: "PID 9040 -> uid 1002, path /srv/legacy-billing/run\nSelectors: unix:uid:1002\nMatched entry -> issuing spiffe://example.org/legacy/billing"
+      }
+    ]
+  };
+
+  var srEl = {};
+  ["srPlatformToggle", "srSteps", "srStepTitle", "srStepBody", "srStepEvidence", "srPrev", "srNext"]
+    .forEach(function (id) { srEl[id] = document.getElementById(id); });
+
+  var srPlatform = "k8s";
+  var srIndex = 0;
+
+  function renderSrDots() {
+    srEl.srSteps.innerHTML = "";
+    STEPS[srPlatform].forEach(function (step, i) {
+      var dot = document.createElement("span");
+      dot.className = "sr-step-dot" + (i === srIndex ? " active" : i < srIndex ? " past" : "");
+      dot.textContent = (i + 1) + "";
+      dot.addEventListener("click", function () { srIndex = i; renderSr(); });
+      srEl.srSteps.appendChild(dot);
+    });
+  }
+
+  function renderSr() {
+    renderSrDots();
+    var step = STEPS[srPlatform][srIndex];
+    srEl.srStepTitle.textContent = step.title;
+    srEl.srStepBody.innerHTML = "<p style='margin-bottom:0;'>" + step.body + "</p>";
+    srEl.srStepEvidence.textContent = step.evidence;
+    srEl.srPrev.disabled = srIndex === 0;
+    srEl.srNext.textContent = srIndex === STEPS[srPlatform].length - 1 ? "restart ↺" : "next →";
+  }
+
+  srEl.srPrev.addEventListener("click", function () { if (srIndex > 0) { srIndex--; renderSr(); } });
+  srEl.srNext.addEventListener("click", function () {
+    if (srIndex === STEPS[srPlatform].length - 1) { srIndex = 0; } else { srIndex++; }
+    renderSr();
+  });
+  Array.prototype.forEach.call(srEl.srPlatformToggle.querySelectorAll(".btn"), function (btn) {
+    btn.addEventListener("click", function () {
+      srPlatform = btn.getAttribute("data-platform");
+      srIndex = 0;
+      Array.prototype.forEach.call(srEl.srPlatformToggle.querySelectorAll(".btn"), function (b) {
+        b.className = b === btn ? "btn" : "btn ghost";
+      });
+      renderSr();
+    });
+  });
+  renderSr();
+
+  /* ---------- Selector matcher ---------- */
+  var DISCOVERED = ["k8s:ns:payments", "k8s:sa:checkout-api", "k8s:pod-label:app:checkout-api", "k8s:container-name:api"];
+
+  var ENTRIES = [
+    {
+      id: "spiffe://example.org/ns/payments/sa/checkout-api",
+      selectors: ["k8s:ns:payments", "k8s:sa:checkout-api"]
+    },
+    {
+      id: "spiffe://example.org/ns/payments/sa/checkout-api/admin",
+      selectors: ["k8s:ns:payments", "k8s:sa:checkout-api", "k8s:pod-label:tier:admin"]
+    },
+    {
+      id: "spiffe://example.org/ns/inventory/sa/stock-svc",
+      selectors: ["k8s:ns:inventory", "k8s:sa:stock-svc"]
+    }
+  ];
+
+  var entriesEl = document.getElementById("srEntries");
+  ENTRIES.forEach(function (entry) {
+    var card = document.createElement("div");
+    card.className = "sr-entry";
+    var selectorsHtml = entry.selectors.map(function (s) { return '<span class="sr-selector-chip">' + s + "</span>"; }).join("");
+    card.innerHTML =
+      '<div class="sr-entry-id">' + entry.id + "</div>" +
+      '<div style="margin-top:6px;">' + selectorsHtml + "</div>" +
+      '<div class="sr-entry-result"></div>';
+    card.addEventListener("click", function () {
+      var missing = entry.selectors.filter(function (s) { return DISCOVERED.indexOf(s) === -1; });
+      var isMatch = missing.length === 0;
+      card.classList.add("evaluated");
+      card.classList.toggle("match", isMatch);
+      card.classList.toggle("nomatch", !isMatch);
+      var result = card.querySelector(".sr-entry-result");
+      result.textContent = isMatch
+        ? "MATCH — every required selector is present. This entry's SPIFFE ID would be issued to the workload."
+        : "NO MATCH — missing: " + missing.join(", ") + " (present on this entry, absent on the workload).";
+    });
+    entriesEl.appendChild(card);
+  });
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
