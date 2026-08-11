@@ -240,7 +240,7 @@
       "summary": "The production implementation of SPIFFE: attestation and SVID issuance.",
       "prerequisites": ["spiffe"],
       "file": "spire.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "in-toto",
