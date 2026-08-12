@@ -1,0 +1,492 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>in-toto — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the pipeline chain-of-custody widget. ---- */
+  .it-pipeline { display: flex; align-items: stretch; gap: var(--sp-3); flex-wrap: wrap; margin-top: var(--sp-3); }
+  .it-step {
+    flex: 1 1 200px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--surface);
+    position: relative;
+  }
+  .it-step-name {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: var(--sp-2);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-2);
+  }
+  .it-row { font-size: var(--fs-xs); font-family: var(--font-mono); color: var(--text-muted); margin: 2px 0; }
+  .it-row .it-hash { color: var(--accent-strong); font-weight: 700; }
+  .it-row .it-hash.bad { color: var(--signal-red); }
+  .it-arrow {
+    align-self: center;
+    font-family: var(--font-mono);
+    color: var(--text-faint);
+    font-size: var(--fs-lg);
+    padding: 0 var(--sp-1);
+  }
+  .it-controls { display: flex; flex-wrap: wrap; gap: var(--sp-4); margin-top: var(--sp-4); align-items: center; }
+  .it-controls label { font-family: var(--font-mono); font-size: var(--fs-sm); display: flex; align-items: center; gap: var(--sp-2); cursor: pointer; }
+  .it-verdict {
+    margin-top: var(--sp-4);
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+  }
+  .it-verdict .badge { margin-left: var(--sp-2); }
+  .it-verdict-line { margin: 2px 0; }
+  .it-verdict-line.fail { color: var(--signal-red); }
+  .it-verdict-line.ok { color: var(--signal-green); }
+  .it-key-note { font-size: var(--fs-xs); color: var(--text-faint); margin-top: var(--sp-1); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Security, Policy &amp; Supply Chain · Sub-topic 24 / 36</p>
+  <h1>in-toto</h1>
+  <p class="lead">
+    SPIFFE and SPIRE (the last two deep-dives) answer <em>"is this running workload really who it
+    claims to be, right now?"</em> <strong>in-toto</strong> asks a different question about the same
+    software, earlier in its life: <em>did this artifact actually go through the process I think it
+    went through</em> — the right steps, in the right order, each one done by someone authorized to do
+    it — before it ever became a running workload at all?
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    in-toto is a <strong>framework and toolset</strong> for instrumenting a software supply chain —
+    clone, build, test, package, sign, deploy — so that every step leaves behind a signed, verifiable
+    record of what it did and what files it touched. A separate <strong>layout</strong>, authored once
+    by whoever owns the pipeline, says who is allowed to perform each step and how the steps must chain
+    together. Anyone downstream — a CI gate, a package registry, an end user — can later run
+    <strong>verification</strong> against that layout and the accumulated records, without re-running
+    the pipeline or trusting any single step in isolation.
+  </div>
+
+  <h2>The problem: a pipeline is only as trustworthy as its weakest, unverified link</h2>
+  <p>
+    A typical release goes through many hands and many machines: a developer pushes code, a CI runner
+    checks it out, a build step compiles it, a test step runs a suite, a packaging step bundles the
+    artifact, and a deploy step ships it. Each individual tool in that chain might be perfectly secure.
+    The failure mode in real incidents — the <code>event-stream</code> npm package compromise, the
+    Codecov Bash uploader tampering, the SolarWinds build-server injection, the <code>xz</code> backdoor
+    smuggled into a release tarball that never matched its source — is almost never "one tool got
+    hacked and everyone noticed." It's that <strong>nothing was checking the seams between steps</strong>:
+    a compromised build server can silently substitute a different binary than the one the source
+    actually produced, or an attacker can skip straight to packaging a step that should have required a
+    code review first, and nothing downstream would know, because nothing was recording — and later
+    checking — that the whole sequence actually happened as intended.
+  </p>
+  <p>
+    in-toto's approach: make every step <strong>attest</strong> to what it consumed and produced, tie
+    those attestations to a specific authorized identity, and give whoever owns the pipeline a way to
+    define, in advance, exactly what a legitimate run is supposed to look like — then let anyone verify
+    an actual run against that definition after the fact.
+  </p>
+
+  <h2>The layout: the pipeline's contract, signed before anything runs</h2>
+  <p>
+    A <span class="term" title="A layout is a signed file, authored by the project owner, that defines a supply chain's expected steps, who is authorized to perform each one, how artifacts must flow between steps, and optional inspection commands to run at verification time.">layout</span>
+    is written once, by whoever owns the project — think of it as playing the same role the offline
+    <span class="term" title="In TUF and similar systems, the root key is the ultimate, rarely-used signing key at the top of a trust hierarchy, used to authorize which other keys are trusted for day-to-day operations.">root key</span>
+    plays in TUF (a later deep-dive): it's the one thing every other check is anchored to. A layout
+    specifies, for each expected step:
+  </p>
+  <ul>
+    <li><strong>Functionaries</strong> — the public keys of whoever is authorized to perform this step.
+      A step can require agreement from more than one functionary; the layout sets a
+      <strong>threshold</strong> (e.g. "2 of these 3 keys must sign off") so no single compromised
+      credential can forge a step alone.</li>
+    <li><strong>Artifact rules</strong> — constraints tying this step's inputs (materials) and outputs
+      (products) to other steps, e.g. "this step's materials must MATCH the previous step's products" —
+      this is what actually chains the pipeline together and is what catches tampering between steps.</li>
+    <li><strong>Inspections</strong> (optional) — commands the verifier itself runs against the final
+      artifacts at verification time, e.g. re-running a linter or diffing an unpacked archive.</li>
+  </ul>
+  <p>
+    The layout itself is signed by the project owner's key and typically has a short expiration, so a
+    stale or leaked layout can't authorize a stale set of functionaries forever.
+  </p>
+
+  <h2>Link metadata: proof that a step actually happened</h2>
+  <p>
+    Each functionary runs their step through <code>in-toto-run</code> (a thin wrapper around the actual
+    command) instead of running it bare. The wrapper:
+  </p>
+  <ol>
+    <li>Hashes every file matching the step's declared <strong>materials</strong> pattern <em>before</em>
+      running the command.</li>
+    <li>Runs the actual command (a build script, a test suite, whatever the step really does).</li>
+    <li>Hashes every file matching the step's declared <strong>products</strong> pattern <em>after</em>
+      the command finishes.</li>
+    <li>Bundles materials, products, the command run, and some environment metadata into a
+      <span class="term" title="Link metadata is the signed record, produced by in-toto-run, of one supply-chain step: which files it started with (materials), which files it ended with (products), the command that ran, and who ran it.">link</span>,
+      and signs it with the functionary's private key.</li>
+  </ol>
+  <p>
+    A link is deliberately <em>not</em> a claim about intent or correctness — it doesn't say "this build
+    succeeded" or "this code is safe." It only says, cryptographically: <em>this specific key hashed
+    these exact input bytes, ran this exact command, and produced these exact output bytes.</em> That
+    narrow, mechanical claim is precisely what lets independent links from independent steps be checked
+    against each other without any of them having to trust one another directly.
+  </p>
+
+  <h2>Try it: run a pipeline, then tamper with it</h2>
+  <p>
+    Below is a three-step pipeline — <code>clone → build → package</code> — each producing a product
+    artifact that the next step consumes as its material. Run it once to generate signed link metadata
+    for every step, then try each failure mode and re-verify to see exactly which check catches it and
+    why. (Hashes here are a simplified illustrative digest, not real SHA-256 — the mechanism is
+    otherwise faithful to how <code>in-toto-verify</code> actually works.)
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Supply-chain layout: clone → build → package</div>
+    <div class="it-pipeline" id="itPipeline"></div>
+    <div class="it-controls">
+      <button class="btn" id="itRun">Run pipeline (generate links)</button>
+      <button class="btn ghost" id="itVerify">Verify against layout</button>
+    </div>
+    <div class="it-controls">
+      <label><input type="checkbox" id="itTamperArtifact" /> attacker swaps <code>app.bin</code> for a different binary after <code>build</code> finishes, before <code>package</code> runs</label>
+    </div>
+    <div class="it-controls">
+      <label><input type="checkbox" id="itUnauthorizedKey" /> <code>package</code> is run by an unauthorized key not listed in the layout's functionaries</label>
+    </div>
+    <div class="it-verdict" id="itVerdict">Click "Run pipeline" to generate link metadata, then "Verify".</div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">What just got caught, and how</span>
+    Notice that verification never re-executes the build or inspects file contents for "maliciousness" —
+    it only compares independently-signed numbers. When the artifact is swapped, <code>package</code>'s
+    own link honestly records the hash of whatever it actually received, which simply no longer matches
+    the product hash <code>build</code>'s link recorded — an artifact rule violation. When an
+    unauthorized key signs a step, the signature check fails independently of whether the hashes agree
+    at all. Two orthogonal checks, catching two orthogonal attacks.
+  </div>
+
+  <h2>From links to attestations: the in-toto Attestation Framework</h2>
+  <p>
+    The original link format was purpose-built for exactly one job: proving a supply-chain step
+    happened. As the ecosystem grew, people wanted to attach other kinds of signed claims to an artifact
+    too — an SBOM, a vulnerability scan result, a SLSA provenance record — using the same trust
+    machinery. The <strong>in-toto Attestation Framework</strong> (specified as ITE-6, <em>in-toto
+    Enhancement</em> #6) generalizes the link into a layered, extensible envelope:
+  </p>
+  <table>
+    <thead><tr><th>Layer</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Envelope</strong></td>
+        <td>The outermost signed wrapper (a <span class="term" title="Dead Simple Signing Envelope — a minimal, unambiguous format for signing an arbitrary payload plus its type, avoiding the ambiguity bugs found in some earlier signature formats like raw JWS.">DSSE</span>
+          envelope) — carries the signature(s) and the payload type, independent of what's inside.</td>
+      </tr>
+      <tr>
+        <td><strong>Statement</strong></td>
+        <td>The payload: binds one or more <strong>subjects</strong> (an artifact, identified by digest)
+          to a <strong>predicate</strong>, tagged with a <code>predicateType</code> URI.</td>
+      </tr>
+      <tr>
+        <td><strong>Predicate</strong></td>
+        <td>The actual claim, whose shape depends entirely on <code>predicateType</code> — a
+          <code>link</code> predicate (the original model, now just one option), a SLSA
+          <strong>Provenance</strong> predicate, an SPDX or CycloneDX SBOM, or a
+          <span class="term" title="Verification Summary Attestation — a predicate type stating that some verifier already checked other attestations against a policy and reached a pass/fail verdict, so downstream consumers can trust the summary instead of re-verifying everything themselves.">VSA</span>
+          summarizing the result of someone else's verification.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    This is why you'll see "in-toto attestation" used as a general term today, well beyond the original
+    step-by-step layout-and-link model — it's the same signed-envelope machinery, generalized so any
+    supply-chain tool can publish structured, verifiable claims in one common format.
+  </p>
+
+  <h2>Where in-toto sits next to SLSA, Sigstore, and TUF</h2>
+  <p>
+    These four names get used almost interchangeably in supply-chain-security talks, but each answers a
+    different part of the question:
+  </p>
+  <table>
+    <thead><tr><th>Project</th><th>Answers</th><th>Is it software you run?</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>SLSA</strong> (Supply-chain Levels for Software Artifacts)</td>
+        <td>"What properties should a trustworthy build process have?" — a checklist/maturity model
+          (source integrity, isolated build, provenance) with graduated levels.</td>
+        <td>No — a specification and set of requirements, not a tool.</td>
+      </tr>
+      <tr>
+        <td><strong>in-toto</strong></td>
+        <td>"How do I encode, sign, and verify a claim that a specific supply-chain step happened
+          correctly?" — the attestation format plus the layout/link toolchain that produces and checks
+          those claims. A SLSA Provenance predicate is typically carried inside an in-toto attestation.</td>
+        <td>Yes — CLI tools (<code>in-toto-run</code>, <code>in-toto-verify</code>) and libraries.</td>
+      </tr>
+      <tr>
+        <td><strong>Sigstore</strong></td>
+        <td>"How do I sign things without managing long-lived keys, and how do I make signatures
+          publicly auditable?" — keyless signing (Fulcio) backed by an OIDC identity and a public
+          transparency log (Rekor).</td>
+        <td>Yes — infrastructure often used underneath in-toto to actually sign and publish
+          attestations (e.g. <code>cosign attest</code>).</td>
+      </tr>
+      <tr>
+        <td><strong>TUF</strong> <span class="badge planned">next deep-dive</span></td>
+        <td>"How do clients safely fetch and trust software <em>updates</em> from a repository, even if
+          some of the repository's keys are later compromised?" — a role hierarchy and trust
+          delegation model focused specifically on the distribution/update step.</td>
+        <td>Yes — a specification with reference implementations, focused downstream of where
+          in-toto's pipeline ends.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    In short: SLSA sets the bar, in-toto is how you prove you cleared it during the build pipeline,
+    Sigstore is often the signing infrastructure underneath in-toto's attestations, and TUF picks up
+    specifically at the "how do I trust what I'm downloading" step that comes after the pipeline in-toto
+    just verified.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    in-toto is easy to conflate with the things it complements rather than replaces. It doesn't sign
+    things itself the way <strong>Sigstore/cosign</strong> does — it defines what gets signed and lets
+    you plug in any signer. It doesn't define required build properties the way <strong>SLSA</strong>
+    does — SLSA tells you what a Level 3 build must guarantee; in-toto is how that guarantee gets
+    recorded and checked. And unlike <strong>SPIFFE/SPIRE</strong> (previous two deep-dives), which
+    prove the identity of a <em>running workload</em> right now, in-toto proves facts about a
+    <em>process that already finished</em> — the build that produced the artifact you're about to run,
+    long before it becomes a workload with an identity of its own.
+  </div>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    in-toto joined CNCF as a Sandbox project on August 14, 2019, moved to Incubating on March 10, 2022,
+    and reached <strong>Graduated</strong> status on February 10, 2025 (announced that April) — CNCF
+    specifically credited it with giving organizations "verifiable and auditable" supply chains after a
+    string of high-profile build-pipeline compromises made this problem impossible to ignore. In
+    production you'll meet its attestation format underneath <strong>GitHub's artifact attestations</strong>
+    and <strong>SLSA provenance generators</strong> for GitHub Actions, inside <strong>Tekton Chains</strong>
+    (which automatically wraps Tekton pipeline runs in signed in-toto attestations), in
+    <strong>witness</strong> (a CLI that wraps arbitrary CI steps the same way <code>in-toto-run</code>
+    does), and as the attestation format package registries like <strong>PyPI</strong> use for build
+    provenance on published packages. Datadog, Autodesk, and much of the broader Sigstore/SLSA tooling
+    ecosystem build directly on top of it.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. An attacker swaps a build's output binary for a malicious one before the packaging step runs. How does in-toto verification catch this, given that the packaging step's own link metadata honestly records whatever it actually received?</p>
+      <button class="quiz-option" data-val="a">It doesn't — in-toto only checks signatures, not artifact content, so a swap between two legitimately-signed steps goes undetected.</button>
+      <button class="quiz-option" data-val="b">The layout's artifact rule requires the packaging step's recorded materials hash to match the build step's recorded products hash; since the packaging step actually hashed the swapped file, the two independently-signed links disagree, and verification fails.</button>
+      <button class="quiz-option" data-val="c">in-toto re-runs the build step during verification and compares the freshly rebuilt binary's hash to the packaged one.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. What does a single in-toto link file actually assert?</p>
+      <button class="quiz-option" data-val="a">That the step's output is free of vulnerabilities and safe to deploy.</button>
+      <button class="quiz-option" data-val="b">That the functionary who signed it is authorized under the current layout — link files carry authorization decisions directly.</button>
+      <button class="quiz-option" data-val="c">That a specific key hashed a specific set of input files, ran a specific command, and produced a specific set of output files — a narrow, mechanical, signed fact, with no judgment about correctness or safety.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. Which statement best distinguishes SLSA from in-toto?</p>
+      <button class="quiz-option" data-val="a">SLSA is a specification defining what properties a trustworthy build process should have (its levels); in-toto is the toolkit and attestation format commonly used to record and verify evidence that those properties actually held for a given build.</button>
+      <button class="quiz-option" data-val="b">SLSA and in-toto are two competing, incompatible attestation formats maintained by different foundations.</button>
+      <button class="quiz-option" data-val="c">in-toto is the specification of required build properties, and SLSA is the CLI toolkit that signs and verifies attestations against it.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- Toy hash: deterministic, illustrative only, NOT cryptographic ---------- */
+  function toyHash(str) {
+    var h = 0;
+    for (var i = 0; i < str.length; i++) {
+      h = (h * 31 + str.charCodeAt(i)) >>> 0;
+    }
+    return h.toString(16).padStart(8, "0");
+  }
+
+  var AUTHORIZED_KEYS = {
+    clone:   "key-ci-runner-1",
+    build:   "key-ci-runner-2",
+    package: "key-ci-runner-3"
+  };
+  var UNAUTHORIZED_KEY = "key-mystery-actor";
+
+  var el = {};
+  ["itPipeline", "itRun", "itVerify", "itTamperArtifact", "itUnauthorizedKey", "itVerdict"]
+    .forEach(function (id) { el[id] = document.getElementById(id); });
+
+  var STEPS = [
+    { name: "clone",   materialLabel: null,        productLabel: "source.tar" },
+    { name: "build",   materialLabel: "source.tar", productLabel: "app.bin" },
+    { name: "package", materialLabel: "app.bin",    productLabel: "app.tar.gz" }
+  ];
+
+  var links = null; /* filled by runPipeline(): { clone: {...}, build: {...}, package: {...} } */
+
+  function renderPipeline() {
+    var html = "";
+    STEPS.forEach(function (step, idx) {
+      if (idx > 0) html += '<div class="it-arrow">&rarr;</div>';
+      var link = links ? links[step.name] : null;
+      html += '<div class="it-step"><div class="it-step-name">' + step.name +
+        '<span class="badge">' + AUTHORIZED_KEYS[step.name] + '</span></div>';
+      if (step.materialLabel) {
+        html += '<div class="it-row">materials: ' + step.materialLabel +
+          (link ? ' <span class="it-hash">#' + link.materialHash + '</span>' : "") + '</div>';
+      }
+      html += '<div class="it-row">products: ' + step.productLabel +
+        (link ? ' <span class="it-hash">#' + link.productHash + '</span>' : "") + '</div>';
+      html += '<div class="it-row">signed by: ' + (link ? link.signer : "&mdash;") + '</div>';
+      html += '</div>';
+    });
+    el.itPipeline.innerHTML = html;
+  }
+
+  function runPipeline() {
+    var tamper = el.itTamperArtifact.checked;
+    var unauthorized = el.itUnauthorizedKey.checked;
+
+    var sourceContent = "source-v1";
+    var sourceHash = toyHash(sourceContent);
+
+    var builtContent = "app.bin-built-from-" + sourceHash;
+    var builtHash = toyHash(builtContent);
+
+    /* The attacker swaps the artifact on disk between build and package. */
+    var artifactPackageReceives = tamper ? "app.bin-MALICIOUS-PAYLOAD" : builtContent;
+    var packageMaterialHash = toyHash(artifactPackageReceives);
+
+    var packagedContent = "app.tar.gz-from-" + packageMaterialHash;
+    var packagedHash = toyHash(packagedContent);
+
+    links = {
+      clone:   { materialHash: null, productHash: sourceHash, signer: AUTHORIZED_KEYS.clone },
+      build:   { materialHash: sourceHash, productHash: builtHash, signer: AUTHORIZED_KEYS.build },
+      package: {
+        materialHash: packageMaterialHash,
+        productHash: packagedHash,
+        signer: unauthorized ? UNAUTHORIZED_KEY : AUTHORIZED_KEYS.package
+      }
+    };
+    renderPipeline();
+    el.itVerdict.textContent = "Links generated. Click \"Verify against layout\".";
+    el.itVerdict.className = "it-verdict";
+  }
+
+  function verifyPipeline() {
+    if (!links) {
+      el.itVerdict.textContent = "Run the pipeline first to generate link metadata.";
+      return;
+    }
+    var lines = [];
+    var pass = true;
+
+    /* Check 1: every step signed by an authorized functionary. */
+    STEPS.forEach(function (step) {
+      var link = links[step.name];
+      var authorized = link.signer === AUTHORIZED_KEYS[step.name];
+      lines.push({
+        ok: authorized,
+        text: (authorized ? "PASS " : "FAIL ") + step.name + ": signed by " + link.signer +
+          (authorized ? " (authorized functionary)." : ", which is NOT in the layout's functionaries for this step.")
+      });
+      if (!authorized) pass = false;
+    });
+
+    /* Check 2: artifact rules — each step's materials must MATCH the previous step's products. */
+    for (var i = 1; i < STEPS.length; i++) {
+      var prev = STEPS[i - 1], cur = STEPS[i];
+      var prevProduct = links[prev.name].productHash;
+      var curMaterial = links[cur.name].materialHash;
+      var match = prevProduct === curMaterial;
+      lines.push({
+        ok: match,
+        text: (match ? "PASS " : "FAIL ") + cur.name + "'s materials (#" + curMaterial +
+          ") vs " + prev.name + "'s products (#" + prevProduct + "): " +
+          (match ? "artifact rule MATCH satisfied." : "MISMATCH — the artifact " + cur.name +
+           " actually received is not the one " + prev.name + " produced.")
+      });
+      if (!match) pass = false;
+    }
+
+    var html = '<div style="margin-bottom:var(--sp-2);">' +
+      (pass ? "Verification PASSED" : "Verification FAILED") +
+      '<span class="badge ' + (pass ? "done" : "") + '">' + (pass ? "trusted" : "rejected") + '</span></div>';
+    lines.forEach(function (l) {
+      html += '<div class="it-verdict-line ' + (l.ok ? "ok" : "fail") + '">' + l.text + '</div>';
+    });
+    el.itVerdict.innerHTML = html;
+
+    /* Reflect mismatch hashes in red in the pipeline view. */
+    renderPipeline();
+    if (!pass) {
+      var badges = el.itPipeline.querySelectorAll(".it-hash");
+      /* Recolor package's material hash red if it mismatches build's product hash. */
+      var buildProduct = links.build.productHash, pkgMaterial = links.package.materialHash;
+      if (buildProduct !== pkgMaterial) {
+        Array.prototype.forEach.call(el.itPipeline.querySelectorAll(".it-step"), function (stepEl) {
+          if (stepEl.textContent.indexOf("package") === 0) {
+            var rows = stepEl.querySelectorAll(".it-hash");
+            if (rows[0]) rows[0].classList.add("bad");
+          }
+        });
+      }
+    }
+  }
+
+  el.itRun.addEventListener("click", runPipeline);
+  el.itVerify.addEventListener("click", verifyPipeline);
+  [el.itTamperArtifact, el.itUnauthorizedKey].forEach(function (cb) {
+    cb.addEventListener("change", function () {
+      links = null;
+      renderPipeline();
+      el.itVerdict.textContent = "Layout changed — click \"Run pipeline\" again to regenerate link metadata.";
+      el.itVerdict.className = "it-verdict";
+    });
+  });
+  renderPipeline();
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>

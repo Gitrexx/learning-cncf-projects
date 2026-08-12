@@ -250,7 +250,7 @@
       "summary": "Cryptographic integrity for every step of the software supply chain.",
       "prerequisites": [],
       "file": "in-toto.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "tuf",
