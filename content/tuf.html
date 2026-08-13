@@ -1,0 +1,464 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>The Update Framework (TUF) — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the attack/defense simulator. ---- */
+  .tf-attack-picker { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
+  .tf-attack-btn {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    padding: var(--sp-2) var(--sp-4);
+    border-radius: 999px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .tf-attack-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .tf-attack-desc { margin-top: var(--sp-3); font-size: var(--fs-sm); color: var(--text-muted); }
+  .tf-roles { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--sp-3); margin-top: var(--sp-4); }
+  .tf-role {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--surface);
+  }
+  .tf-role-name { font-family: var(--font-mono); font-weight: 700; color: var(--accent); margin-bottom: var(--sp-1); }
+  .tf-role label { display: flex; align-items: flex-start; gap: var(--sp-2); font-size: var(--fs-sm); cursor: pointer; }
+  .tf-role .tf-role-hint { font-size: var(--fs-xs); color: var(--text-faint); margin-top: 2px; }
+  .tf-controls { margin-top: var(--sp-4); }
+  .tf-verdict {
+    margin-top: var(--sp-4);
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+  }
+  .tf-verdict-line { margin: 2px 0; }
+  .tf-verdict-line.fail { color: var(--signal-red); }
+  .tf-verdict-line.ok { color: var(--signal-green); }
+  .tf-verdict-line.warn { color: var(--signal-amber); }
+  .badge.warn   { color: var(--signal-amber); border-color: color-mix(in srgb, var(--signal-amber) 40%, var(--border)); background: color-mix(in srgb, var(--signal-amber) 10%, var(--surface)); }
+  .badge.danger { color: var(--signal-red);   border-color: color-mix(in srgb, var(--signal-red) 40%, var(--border));   background: color-mix(in srgb, var(--signal-red) 10%, var(--surface)); }
+
+  .tf-flow { display: flex; align-items: stretch; gap: var(--sp-2); flex-wrap: wrap; margin-top: var(--sp-3); }
+  .tf-flow-step {
+    flex: 1 1 150px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-3);
+    background: var(--surface);
+    font-size: var(--fs-sm);
+  }
+  .tf-flow-step .tf-step-name { font-family: var(--font-mono); font-weight: 700; color: var(--accent-2); display: block; margin-bottom: var(--sp-1); }
+  .tf-flow-arrow { align-self: center; font-family: var(--font-mono); color: var(--text-faint); font-size: var(--fs-lg); padding: 0 var(--sp-1); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Security, Policy &amp; Supply Chain · Sub-topic 25 / 36</p>
+  <h1>The Update Framework (TUF)</h1>
+  <p class="lead">
+    in-toto (the last deep-dive) proves that a specific artifact came out of a pipeline that ran the
+    right steps, in the right order, signed by the right people. <strong>TUF</strong> picks up exactly
+    where that leaves off, and asks a question that never stops being relevant: <em>months or years
+    after that artifact was published, can a client safely fetch it — and every update after it —
+    from a repository whose signing keys might, by then, be partially compromised?</em>
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    TUF is not a tool you run once — it's a <strong>specification and reference implementation</strong>
+    for structuring a software repository's metadata and a client's update logic so that the whole
+    system stays secure even when some of its signing keys leak, get stolen, or go stale. Where
+    in-toto is about trusting a <em>process</em> that already finished, TUF is about trusting an
+    <em>ongoing relationship</em> between a client and a repository that will keep publishing updates
+    indefinitely — and it's built around a blunt assumption: eventually, some key in that repository
+    <em>will</em> be compromised, and the system has to keep working anyway.
+  </div>
+
+  <h2>The problem: one signing key is one point of total failure</h2>
+  <p>
+    Before TUF, the typical way a package manager secured downloads was: the repository has one
+    GPG key, every package/index file gets signed with it, and the client checks the signature. This
+    is much better than nothing, but it has a structural weakness that has nothing to do with the
+    strength of the cryptography — it's about what a client is (and isn't) checking:
+  </p>
+  <ul>
+    <li><strong>Rollback attacks</strong> — an attacker (or a compromised/malicious mirror) serves an
+      <em>old</em>, validly-signed index pointing at an old, vulnerable version of a package. Nothing
+      about a valid signature says "and this is the newest one" — so downgrade attacks sail through
+      naive signature checks.</li>
+    <li><strong>Freeze attacks</strong> — an attacker simply stops forwarding new updates and keeps
+      re-serving the last legitimate, validly-signed snapshot forever. The client has no way to know
+      it's being frozen in time, because everything it receives is genuinely, correctly signed.</li>
+    <li><strong>Mix-and-match attacks</strong> — an attacker combines individually-valid, validly-signed
+      files from <em>different points in time</em> into a combination that was never actually released
+      together, e.g. pairing an old, vulnerable version of one dependency with the current version of
+      another.</li>
+    <li><strong>Single-key compromise</strong> — with one repository-wide key, stealing that one key is
+      "game over": the attacker can sign literally anything and every client will accept it.</li>
+  </ul>
+  <p>
+    These aren't hypothetical: the research that became TUF grew out of work securing the Tor Browser's
+    updater and, later, a systematic security review of software update systems by Justin Cappos and
+    collaborators, and its most consequential real-world deployment decision followed the 2013
+    discovery that PyPI (Python's package index) had exactly this single-key structural weakness —
+    which led directly to PEP 458 and PEP 480 proposing TUF as PyPI's update-security model.
+  </p>
+
+  <h2>The core idea: separate roles, separate keys, separate blast radii</h2>
+  <p>
+    TUF's answer isn't "use a stronger key" — it's "don't let any single key's compromise be fatal, and
+    make every client check freshness and consistency, not just signatures." It does this by splitting
+    repository metadata into <strong>roles</strong>, each with its own keys, its own responsibility, and
+    its own signing frequency — so a key that's compromised can only do the narrow job that role was
+    ever allowed to do.
+  </p>
+  <table>
+    <thead><tr><th>Role</th><th>Signs / lists</th><th>Key online?</th><th>Defends against</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Root</strong></td>
+        <td>Which keys are trusted for every other role, and the signature threshold required for each.
+          The anchor everything else is verified against.</td>
+        <td>No — kept offline (often on hardware tokens, held by multiple maintainers), used only to
+          rotate/revoke other roles' keys.</td>
+        <td>Total takeover: even a fully compromised online key can't rewrite who's trusted, because
+          Root's own key never touched the internet.</td>
+      </tr>
+      <tr>
+        <td><strong>Targets</strong></td>
+        <td>The actual files available for download: their paths, sizes, and cryptographic hashes.</td>
+        <td>Usually semi-offline; can delegate subsets of paths to other Targets roles with their own
+          keys (see delegation, below).</td>
+        <td>Arbitrary/malicious files — a client only trusts a file whose hash matches what a
+          sufficiently-signed Targets role recorded.</td>
+      </tr>
+      <tr>
+        <td><strong>Snapshot</strong></td>
+        <td>The exact version number of every Targets metadata file on the repository right now, as one
+          signed, consistent bundle.</td>
+        <td>Online (needs to be regenerated whenever Targets changes).</td>
+        <td>Rollback and mix-and-match — a client rejects any Targets file whose version doesn't match
+          what the current, freshly-fetched Snapshot says it should be, so files from different points
+          in time can't be recombined.</td>
+      </tr>
+      <tr>
+        <td><strong>Timestamp</strong></td>
+        <td>The hash and version of the current Snapshot file, in a small metadata file with a
+          <strong>short expiration</strong> (often hours to days).</td>
+        <td>Online (signed automatically, frequently).</td>
+        <td>Freeze attacks — once Timestamp's stated expiry passes, clients refuse to trust <em>any</em>
+          metadata from the repo, forcing a fresh, current signature to exist before updates resume.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Notice the shape of the design: the role most likely to need an <em>online</em>, frequently-used key
+    (Timestamp) is also the role with the <em>narrowest</em> possible job — it can't point clients at a
+    malicious file, only refuse to vouch for freshness. The role with the most power (Root) has the
+    <em>least</em> exposure, because it's used the least. Compromising a highly-exposed key still leaves
+    an attacker boxed into what that specific role is allowed to say.
+  </p>
+
+  <h2>What a client actually checks, in order</h2>
+  <p>
+    A TUF client already trusts some previous root.json (bootstrapped once, out of band, like an SSH
+    <code>known_hosts</code> first connection). Every update check then walks the same four files, from
+    smallest/most-current to largest/most-specific, verifying signatures, version numbers, and
+    expiration at <em>every</em> hop:
+  </p>
+  <div class="tf-flow">
+    <div class="tf-flow-step"><span class="tf-step-name">1. timestamp.json</span>Tiny, fetched every
+      time. Expired? Stop — don't trust anything else from this repo right now.</div>
+    <div class="tf-flow-arrow">&rarr;</div>
+    <div class="tf-flow-step"><span class="tf-step-name">2. snapshot.json</span>Only re-fetched if
+      timestamp says its hash changed. Lists every Targets file's exact version.</div>
+    <div class="tf-flow-arrow">&rarr;</div>
+    <div class="tf-flow-step"><span class="tf-step-name">3. targets.json</span>(or a delegated targets
+      role) Only re-fetched if its version in snapshot changed. Lists the file's hash.</div>
+    <div class="tf-flow-arrow">&rarr;</div>
+    <div class="tf-flow-step"><span class="tf-step-name">4. the actual file</span>Downloaded, then
+      hashed and compared against what targets.json recorded, before it's ever used.</div>
+  </div>
+  <p>
+    This is also a bandwidth win, not just a security one: on a repository where nothing changed since
+    the client's last check, a client only ever needs to fetch the small timestamp.json to confirm
+    that — it never has to re-download full Targets metadata unless a version bump says something
+    actually moved.
+  </p>
+
+  <h2>Delegation: how one root doesn't have to know every publisher</h2>
+  <p>
+    A registry the size of PyPI has hundreds of thousands of projects; it would be both a bottleneck and
+    a security risk if a single Targets key had to co-sign every maintainer's release. TUF's
+    <span class="term" title="Delegation lets a Targets role hand off trust for a subset of file paths to another Targets role with its own keys and threshold, so that role's compromise only affects the paths it was delegated.">delegation</span>
+    mechanism lets a Targets role say "for paths matching <code>packages/requests/*</code>, trust this
+    other role's keys instead" — recursively, to arbitrary depth. PyPI's real deployment delegates
+    trust for each project's releases toward that project's own maintainers, so a compromised maintainer
+    key can forge malicious releases only for <em>that one project's namespace</em>, never for PyPI as
+    a whole, and the central keys never have to know about (or manually approve) every one of PyPI's
+    projects.
+  </p>
+
+  <h2>Try it: pick an attack, then toggle TUF's defenses off one at a time</h2>
+  <p>
+    Below is a simplified TUF-protected repository. Pick an attack, decide which roles are actually
+    enforcing their checks (all four are ON by default, i.e. a fully correct TUF deployment), and
+    simulate. Then switch roles off to see exactly which one was standing between the client and each
+    attack.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Attack vs. defense simulator</div>
+    <div class="tf-attack-picker" id="tfAttackPicker">
+      <button class="tf-attack-btn active" data-attack="rollback">Rollback attack</button>
+      <button class="tf-attack-btn" data-attack="freeze">Freeze attack</button>
+      <button class="tf-attack-btn" data-attack="mixmatch">Mix-and-match attack</button>
+      <button class="tf-attack-btn" data-attack="keycompromise">Online key compromise</button>
+    </div>
+    <p class="tf-attack-desc" id="tfAttackDesc"></p>
+
+    <div class="tf-roles" id="tfRoles">
+      <div class="tf-role">
+        <div class="tf-role-name">Root</div>
+        <label><input type="checkbox" id="tfRoot" checked />
+          <span>Enforced — clients only trust keys Root vouches for; Root's own key stays offline.</span>
+        </label>
+        <div class="tf-role-hint">Off = pretend there's no anchored root of trust at all.</div>
+      </div>
+      <div class="tf-role">
+        <div class="tf-role-name">Targets threshold</div>
+        <label><input type="checkbox" id="tfThreshold" checked />
+          <span>Enforced — publishing a Targets update requires 2-of-3 independent signatures.</span>
+        </label>
+        <div class="tf-role-hint">Off = a single Targets key alone is enough to sign a release.</div>
+      </div>
+      <div class="tf-role">
+        <div class="tf-role-name">Snapshot</div>
+        <label><input type="checkbox" id="tfSnapshot" checked />
+          <span>Enforced — client rejects any Targets file whose version disagrees with the current,
+            freshly-fetched Snapshot.</span>
+        </label>
+        <div class="tf-role-hint">Off = client trusts whatever version of Targets it's handed.</div>
+      </div>
+      <div class="tf-role">
+        <div class="tf-role-name">Timestamp</div>
+        <label><input type="checkbox" id="tfTimestamp" checked />
+          <span>Enforced — client refuses metadata once Timestamp's short expiration has passed.</span>
+        </label>
+        <div class="tf-role-hint">Off = client never checks for staleness.</div>
+      </div>
+    </div>
+
+    <div class="tf-controls">
+      <button class="btn" id="tfSimulate">Simulate attack</button>
+    </div>
+    <div class="tf-verdict" id="tfVerdict">Pick an attack above, then click "Simulate attack".</div>
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    TUF, in-toto, Sigstore, and Notary all show up in the same supply-chain-security conversations, but
+    they're not substitutes for each other. <strong>in-toto</strong> (previous deep-dive) verifies a
+    <em>build pipeline already ran correctly</em>; TUF verifies that a <em>client can keep trusting an
+    update repository over the following months and years</em>, even as some of its keys turn over or
+    leak. <strong>Sigstore</strong> is signing infrastructure (keyless signing plus a public transparency
+    log) — and, notably, Sigstore uses a TUF repository under the hood to securely distribute the root of
+    trust for its <em>own</em> Fulcio/Rekor keys, so TUF ends up underneath Sigstore rather than
+    competing with it. <strong>Docker Notary</strong> was an early, container-specific TUF implementation
+    (behind Docker Content Trust); it predates and is largely superseded by newer Sigstore-based signing
+    flows, but it's the reason many engineers first met TUF's role model without knowing the name.
+  </div>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    TUF was accepted into CNCF at the Incubating level on October 24, 2017, and reached
+    <strong>Graduated</strong> status on December 18, 2019 — notably the <em>first specification</em>
+    (rather than a piece of runnable infrastructure) and the first security-focused project to graduate,
+    which CNCF pointed to as validation that a rigorously-reviewed, academically-grounded spec belongs
+    in the same tier as Kubernetes and Prometheus. In production you'll meet it directly inside
+    <strong>PyPI</strong> (via the reference implementation, python-tuf), <strong>Uptane</strong> — a TUF
+    variant purpose-built for over-the-air automotive ECU updates, used by manufacturers including Toyota
+    and GM, where a rollback or freeze attack could mean a vehicle never receives a safety-critical
+    firmware fix — <strong>Flatcar Container Linux</strong> and <strong>Bottlerocket</strong> for OS
+    image updates, <strong>Datadog</strong> and <strong>VMware</strong> for agent/software distribution,
+    and quietly underneath <strong>Sigstore</strong>'s own trust-root distribution.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. A mirror keeps re-serving a repository's last legitimate, validly-signed
+        metadata bundle forever, silently hiding the fact that new, patched releases exist. Which TUF
+        mechanism is specifically designed to catch this?</p>
+      <button class="quiz-option" data-val="a">Root's offline key, because only Root can detect a stalled mirror.</button>
+      <button class="quiz-option" data-val="b">Timestamp's short expiration — once it passes without a fresh, current signature, the client refuses to trust the repository at all, so staleness can't hide indefinitely.</button>
+      <button class="quiz-option" data-val="c">Targets' file hashes, because a hash mismatch would reveal the frozen files.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">2. Why does TUF deliberately keep the Root role's key offline while Timestamp's key stays online and signs frequently?</p>
+      <button class="quiz-option" data-val="a">To shape blast radius: the least-exposed key (Root) holds the most power (who's trusted at all), while the most-exposed, most-frequently-used key (Timestamp) is scoped to a narrow job it can't abuse into a full takeover.</button>
+      <button class="quiz-option" data-val="b">Because Root's metadata is too large to sign quickly, unlike Timestamp's small file.</button>
+      <button class="quiz-option" data-val="c">It's arbitrary — any role's key could be made offline or online with no security difference.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">3. A registry the size of PyPI has hundreds of thousands of maintainers. How does TUF avoid requiring one central key to co-sign every single project's release?</p>
+      <button class="quiz-option" data-val="a">It doesn't — every release still needs a central Targets key's signature, which is a known scaling bottleneck.</button>
+      <button class="quiz-option" data-val="b">Snapshot automatically re-signs on behalf of any maintainer, so no per-project key is needed.</button>
+      <button class="quiz-option" data-val="c">Delegation — a Targets role hands off trust for a path (e.g. one project's namespace) to another role with its own keys, so a compromised maintainer key can only forge releases within that project's own delegated namespace.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var ATTACKS = {
+    rollback: {
+      label: "Rollback attack",
+      desc: "The attacker serves an old, validly-signed Targets metadata file pointing at a vulnerable, previously-current version of a package — trying to trick the client into \"upgrading\" backwards.",
+      evaluate: function (s) {
+        if (s.snapshot) {
+          return { verdict: "BLOCKED", cls: "done", lines: [
+            { ok: true, text: "Snapshot enforced: the freshly-fetched Snapshot states the current version number; the attacker's old Targets file doesn't match it, so the client rejects it before ever looking at its contents." }
+          ]};
+        }
+        return { verdict: "SUCCEEDED", cls: "danger", lines: [
+          { ok: false, text: "Snapshot disabled: nothing checks the Targets file's version against what's actually current, so a validly-signed old file is accepted as if it were new." }
+        ]};
+      }
+    },
+    freeze: {
+      label: "Freeze attack",
+      desc: "The attacker (or a stalled/malicious mirror) keeps re-serving the last legitimate, validly-signed bundle indefinitely, hiding the existence of any newer, patched release.",
+      evaluate: function (s) {
+        if (s.timestamp) {
+          return { verdict: "BLOCKED", cls: "done", lines: [
+            { ok: true, text: "Timestamp enforced: its short expiration passes, and the client refuses to trust any metadata from the repo until a fresh, currently-signed Timestamp shows up." }
+          ]};
+        }
+        return { verdict: "SUCCEEDED", cls: "danger", lines: [
+          { ok: false, text: "Timestamp disabled: there's no expiry check, so the client happily keeps trusting the same stale bundle forever, never learning a newer release exists." }
+        ]};
+      }
+    },
+    mixmatch: {
+      label: "Mix-and-match attack",
+      desc: "The attacker combines two individually valid, validly-signed Targets files from different points in time — e.g. an old, vulnerable dependency alongside an unrelated component's current version — into a combination that was never actually released together.",
+      evaluate: function (s) {
+        if (s.snapshot) {
+          return { verdict: "BLOCKED", cls: "done", lines: [
+            { ok: true, text: "Snapshot enforced: it pins the exact version of every Targets file as one consistent, signed bundle, so a client can't be handed two Targets files that never co-existed at the same repository state." }
+          ]};
+        }
+        return { verdict: "SUCCEEDED", cls: "danger", lines: [
+          { ok: false, text: "Snapshot disabled: each Targets file is only checked in isolation, so nothing stops the attacker assembling a combination that was never actually published together." }
+        ]};
+      }
+    },
+    keycompromise: {
+      label: "Online key compromise",
+      desc: "The attacker steals the Targets role's online signing key (the one used most often, and therefore most exposed) and tries to publish a malicious release using it.",
+      evaluate: function (s) {
+        if (s.threshold) {
+          return { verdict: "BLOCKED", cls: "done", lines: [
+            { ok: true, text: "Threshold enforced: publishing requires 2-of-3 independent signatures. The attacker holds only one compromised key, so their forged release never accumulates enough valid signatures to be accepted." }
+          ]};
+        }
+        if (s.root) {
+          return { verdict: "CONTAINED", cls: "warn", lines: [
+            { ok: false, text: "Threshold disabled: one stolen Targets key is enough by itself, so the attacker successfully signs a malicious release." },
+            { ok: true, text: "Root still enforced, though: Root's own key never touched the network, so the attacker can't rewrite who's trusted. The legitimate owners revoke the stolen key and rotate Targets via a new, Root-signed update, capping the damage." }
+          ]};
+        }
+        return { verdict: "SUCCEEDED", cls: "danger", lines: [
+          { ok: false, text: "Threshold disabled and Root disabled: nothing limits what the stolen key can do, and there's no offline anchor to revoke it from. The attacker can rewrite trust itself and the compromise is total." }
+        ]};
+      }
+    }
+  };
+
+  var el = {};
+  ["tfAttackPicker", "tfAttackDesc", "tfRoles", "tfSimulate", "tfVerdict",
+   "tfRoot", "tfThreshold", "tfSnapshot", "tfTimestamp"]
+    .forEach(function (id) { el[id] = document.getElementById(id); });
+
+  var currentAttack = "rollback";
+
+  function renderDesc() {
+    el.tfAttackDesc.textContent = ATTACKS[currentAttack].desc;
+  }
+
+  function getState() {
+    return {
+      root: el.tfRoot.checked,
+      threshold: el.tfThreshold.checked,
+      snapshot: el.tfSnapshot.checked,
+      timestamp: el.tfTimestamp.checked
+    };
+  }
+
+  function simulate() {
+    var result = ATTACKS[currentAttack].evaluate(getState());
+    var html = '<div style="margin-bottom:var(--sp-2);">' + ATTACKS[currentAttack].label + ": " + result.verdict +
+      '<span class="badge ' + result.cls + '">' + result.verdict.toLowerCase() + '</span></div>';
+    result.lines.forEach(function (l) {
+      html += '<div class="tf-verdict-line ' + (l.ok ? "ok" : (result.cls === "warn" && !l.ok ? "warn" : "fail")) + '">' + l.text + '</div>';
+    });
+    el.tfVerdict.innerHTML = html;
+  }
+
+  el.tfAttackPicker.addEventListener("click", function (e) {
+    var btn = e.target.closest(".tf-attack-btn");
+    if (!btn) return;
+    currentAttack = btn.getAttribute("data-attack");
+    Array.prototype.forEach.call(el.tfAttackPicker.querySelectorAll(".tf-attack-btn"), function (b) {
+      b.classList.toggle("active", b === btn);
+    });
+    renderDesc();
+    el.tfVerdict.textContent = 'Click "Simulate attack" to see the outcome.';
+    el.tfVerdict.className = "tf-verdict";
+  });
+
+  [el.tfRoot, el.tfThreshold, el.tfSnapshot, el.tfTimestamp].forEach(function (cb) {
+    cb.addEventListener("change", function () {
+      el.tfVerdict.textContent = 'Roles changed — click "Simulate attack" again to re-check.';
+      el.tfVerdict.className = "tf-verdict";
+    });
+  });
+
+  el.tfSimulate.addEventListener("click", simulate);
+
+  renderDesc();
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
