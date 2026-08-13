@@ -260,7 +260,7 @@
       "summary": "Securing software update systems against key compromise, rollback, and more.",
       "prerequisites": [],
       "file": "tuf.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "dapr",
