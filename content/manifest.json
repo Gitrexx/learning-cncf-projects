@@ -270,7 +270,7 @@
       "summary": "A sidecar runtime with building-block APIs for distributed applications.",
       "prerequisites": ["kubernetes"],
       "file": "dapr.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "knative",

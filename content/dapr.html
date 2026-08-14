@@ -1,0 +1,446 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dapr — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring for the building-blocks explorer. ---- */
+  .dp-diagram {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-3);
+    flex-wrap: wrap;
+    margin-top: var(--sp-3);
+  }
+  .dp-box {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
+    background: var(--surface);
+    text-align: center;
+    min-width: 150px;
+    font-size: var(--fs-sm);
+    transition: border-color .2s, box-shadow .2s;
+  }
+  .dp-box .dp-box-label { font-family: var(--font-mono); font-weight: 700; display: block; margin-bottom: 2px; }
+  .dp-box.app { color: var(--text); }
+  .dp-box.sidecar { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+  .dp-box.sidecar .dp-box-label { color: var(--accent); }
+  .dp-box.backend { color: var(--text-muted); }
+  .dp-box.backend .dp-box-label { color: var(--accent-2); }
+  .dp-arrow { font-family: var(--font-mono); color: var(--text-faint); font-size: var(--fs-lg); align-self: center; }
+  .dp-arrow .dp-arrow-tag {
+    display: block; font-size: var(--fs-xs); color: var(--text-faint); font-family: var(--font-mono);
+  }
+  .dp-blocks { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-4); }
+  .dp-block-btn {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    padding: var(--sp-2) var(--sp-4);
+    border-radius: 999px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .dp-block-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .dp-detail {
+    margin-top: var(--sp-4);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: var(--sp-4) var(--sp-5);
+    background: var(--surface-2);
+  }
+  .dp-detail h4 { margin-top: 0; }
+  .dp-detail .dp-backends { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin: var(--sp-2) 0 var(--sp-3); }
+  .dp-swap {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    padding: 0.2em 0.7em;
+    border-radius: var(--r-pill);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+  }
+  .dp-cp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--sp-3); margin-top: var(--sp-4); }
+  .dp-cp-card {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--surface);
+  }
+  .dp-cp-name { font-family: var(--font-mono); font-weight: 700; color: var(--accent); margin-bottom: var(--sp-1); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · App Runtime &amp; Platform Abstractions · Sub-topic 26 / 36</p>
+  <h1>Dapr</h1>
+  <p class="lead">
+    The last several deep-dives (SPIFFE/SPIRE, in-toto, TUF) were about the security and supply-chain
+    layer around Kubernetes. This one starts a different section: <strong>App Runtime &amp; Platform
+    Abstractions</strong> — projects that sit on top of Kubernetes and give <em>application code</em> a
+    simpler API to distributed-systems problems, instead of making every team re-solve them. Dapr —
+    <strong>D</strong>istributed <strong>Ap</strong>plication <strong>R</strong>untime — is the
+    broadest of these: a sidecar that turns "how do I call another service reliably," "where do I
+    store this state," and "how do I publish an event" into one small, portable local API.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Dapr is <strong>not</strong> a service mesh, a message broker, or a database — it's a runtime that
+    sits between your application code and all of those, exposing their capabilities as a uniform local
+    API (HTTP or gRPC) over <span class="term" title="A sidecar is a helper process/container deployed alongside your application's own process/container, sharing its lifecycle but running independently — the same deployment pattern Envoy and Linkerd's micro-proxy use for networking.">localhost</span>. Your code calls Dapr; Dapr talks to
+    whatever Redis, Kafka, Postgres, or cloud service is actually configured underneath — so the
+    application never imports a vendor SDK or hardcodes infrastructure specifics.
+  </div>
+
+  <h2>The problem: every polyglot microservice team re-solves the same plumbing</h2>
+  <p>
+    Once an application splits into more than a couple of services, a predictable list of problems shows
+    up regardless of what the services actually do: how does service A call service B reliably, with
+    retries and a timeout, without hardcoding B's address? How does A know it's really talking to B, not
+    an impersonator, without every team hand-rolling TLS? Where does ephemeral or long-lived state live,
+    and how do you swap a database without rewriting business logic? How do multiple services react to
+    the same event without polling each other?
+  </p>
+  <p>
+    Kubernetes gives you <em>placement</em> (Pods, Services, DNS) but has no opinion on any of this —
+    it will happily schedule a Pod that talks to Postgres with a bespoke retry loop and to Kafka with a
+    hand-rolled consumer, and the next team on the next service will write different, incompatible
+    versions of the same code, once per language their team happens to use. Before Dapr, the two ways
+    out were: pull in a heavyweight, language-specific framework (locking you to one language and often
+    one cloud), or accept the duplication. Dapr's bet, started at Microsoft in 2019 and open-sourced the
+    same year, is that these capabilities are common enough to standardize as a <strong>runtime API</strong>
+    instead — polyglot by construction, because the API is just HTTP/gRPC over localhost, callable from
+    any language that can make a network call.
+  </p>
+
+  <h2>The core idea: capabilities as a local API, not a library</h2>
+  <p>
+    A Dapr sidecar process, <code>daprd</code>, runs next to every instance of your application — as a
+    separate container in the same Kubernetes Pod, or as a separate OS process in self-hosted mode. Your
+    application never links a Dapr library or imports a cloud SDK; it just calls
+    <code>http://localhost:3500/v1.0/&lt;building-block&gt;/...</code> (or the equivalent gRPC call), and
+    the sidecar does the actual work: talking to the real message broker, the real state store, the real
+    downstream service, applying retries, mTLS, and tracing along the way.
+  </p>
+  <figure>
+    <div class="dp-diagram">
+      <div class="dp-box app"><span class="dp-box-label">Your app</span>any language, any framework</div>
+      <div class="dp-arrow">&harr;<span class="dp-arrow-tag">localhost<br/>HTTP/gRPC</span></div>
+      <div class="dp-box sidecar"><span class="dp-box-label">daprd sidecar</span>building-block APIs</div>
+      <div class="dp-arrow">&harr;<span class="dp-arrow-tag">component<br/>protocol</span></div>
+      <div class="dp-box backend"><span class="dp-box-label">Pluggable component</span>Redis, Kafka, Postgres, Azure, AWS…</div>
+    </div>
+    <figcaption>App code only ever talks to localhost. Swapping Kafka for Azure Service Bus is a component YAML change, not a code change.</figcaption>
+  </figure>
+  <p>
+    That last hop — sidecar to real infrastructure — goes through Dapr's <strong>component model</strong>:
+    a component is a small YAML resource (<code>spec.type: state.redis</code>,
+    <code>spec.type: pubsub.kafka</code>, <code>spec.type: bindings.aws.s3</code>, and so on) that tells
+    the sidecar which concrete implementation to load and how to connect to it. Because the application
+    only ever calls the generic <code>state</code> or <code>pubsub</code> API, changing the backing
+    technology — moving a state store from Redis to Postgres to CosmosDB, or a message broker from Kafka
+    to RabbitMQ to a cloud pub/sub service — is a platform-team edit to a component file, not a
+    redeploy of application code.
+  </p>
+
+  <h2>The building blocks</h2>
+  <p>
+    Dapr groups these capabilities into <strong>building blocks</strong> — a stable, versioned HTTP/gRPC
+    API surface per concern. The core set every deployment tends to use:
+  </p>
+  <table>
+    <thead><tr><th>Building block</th><th>What it gives your app</th><th>Underlying mechanism</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Service invocation</strong></td>
+        <td>Call another Dapr-enabled service by its logical app ID, not an IP.</td>
+        <td>Sidecar-to-sidecar call, automatic mTLS, retries with configurable policy, and distributed
+          tracing headers injected transparently.</td>
+      </tr>
+      <tr>
+        <td><strong>State management</strong></td>
+        <td>Get/set/delete keyed state, with optional strong or eventual consistency and optimistic
+          concurrency (ETags).</td>
+        <td>A pluggable <code>state.*</code> component (Redis, Postgres, CosmosDB, DynamoDB, …);
+          supports transactional multi-key writes where the store allows it.</td>
+      </tr>
+      <tr>
+        <td><strong>Publish/subscribe</strong></td>
+        <td>Publish and subscribe to topics without wiring a broker client into the app.</td>
+        <td>A pluggable <code>pubsub.*</code> component (Kafka, RabbitMQ, Redis Streams, cloud pub/sub
+          services); at-least-once delivery, with a Cloud Events envelope by default (see the CloudEvents
+          deep-dive, later in this section).</td>
+      </tr>
+      <tr>
+        <td><strong>Bindings</strong></td>
+        <td>Trigger your app from, or push data to, external systems (a queue, a cron schedule, a
+          webhook, an object store) without an SDK for each.</td>
+        <td>Input bindings invoke your app's HTTP endpoint on an external event; output bindings expose a
+          uniform <code>invoke</code> call to send data outward.</td>
+      </tr>
+      <tr>
+        <td><strong>Actors</strong></td>
+        <td>Stateful, single-threaded objects addressed by ID, without hand-rolling distributed
+          locking.</td>
+        <td>The virtual actor pattern (below) — placement, activation, and turn-based concurrency handled
+          by the runtime.</td>
+      </tr>
+      <tr>
+        <td><strong>Workflow</strong></td>
+        <td>Author long-running, multi-step business processes as ordinary code, with automatic
+          checkpointing and resume-after-crash.</td>
+        <td>A durable-execution engine (built on the actor runtime) that replays deterministic code
+          against a persisted history — the same idea popularized by Temporal/Azure Durable Functions.</td>
+      </tr>
+      <tr>
+        <td><strong>Secrets &amp; Configuration</strong></td>
+        <td>Read secrets and app configuration through one API regardless of the backing vault.</td>
+        <td>Pluggable <code>secretstores.*</code>/<code>configuration.*</code> components (Vault, Azure
+          Key Vault, Kubernetes Secrets, AWS Secrets Manager, …).</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Newer building blocks extend the same pattern into distributed locks, cryptography (encrypt/decrypt
+    without the app ever holding the key), scheduled jobs, and — reflecting where a lot of 2025–2026
+    workloads went — a <strong>conversation API</strong> that gives agentic AI applications a uniform way
+    to call different LLM providers and manage tool-calling through the same sidecar, rather than
+    wiring a separate provider SDK into every service.
+  </p>
+
+  <h2>Virtual actors: stateful objects without hand-rolled locking</h2>
+  <p>
+    The <span class="term" title="A design where actors aren't manually created or destroyed by the developer — the runtime activates one on first use and may deactivate it after a period of inactivity, so the application only ever deals with a stable logical identity (an actor type + ID).">virtual actor</span>
+    model (borrowed from Microsoft Orleans) gives you an object identified by a type and an ID — say,
+    <code>Order/order-42</code> — that your code addresses as if it always exists, without ever
+    explicitly instantiating or placing it. Two guarantees make this useful for distributed state:
+  </p>
+  <ul>
+    <li><strong>Turn-based concurrency</strong> — Dapr guarantees at most one thread executes inside a
+      given actor instance at a time. All the usual synchronization headaches (locks, races) around
+      that instance's state simply don't arise, because concurrent calls to the same actor ID are
+      serialized by the runtime, not the developer.</li>
+    <li><strong>Location transparency</strong> — your code never asks "which node is
+      <code>order-42</code> on?" It calls the actor by ID, and the runtime resolves and routes to
+      wherever that actor is currently activated.</li>
+  </ul>
+  <p>
+    That routing is the job of the <strong>Placement service</strong>, a Dapr control-plane component:
+    every sidecar hosting actors registers its supported actor types, and Placement maintains a
+    consistent-hash table mapping actor IDs to specific sidecar instances, pushing the current table out
+    to every sidecar. When a sidecar joins or leaves (scale-up, crash, rolling update), Placement
+    recomputes the hash ring and rebalances — moving only the minimum number of actors necessary,
+    the same consistent-hashing trick that lets caches and sharded stores add/remove nodes without a
+    full reshuffle. An actor with no incoming calls for a configurable idle period is deactivated,
+    freeing memory; the next call simply reactivates it (potentially on a different host), restoring its
+    state from whatever state store the actor type is configured to use.
+  </p>
+
+  <h2>The control plane, on Kubernetes</h2>
+  <p>
+    In self-hosted mode a single <code>daprd</code> process next to your app is nearly the whole story.
+    On Kubernetes, Dapr adds a small set of control-plane services (their own Deployments, installed via
+    the <code>dapr-operator</code> Helm chart or CLI) that make sidecar injection, actor placement, and
+    security automatic cluster-wide:
+  </p>
+  <div class="dp-cp-grid">
+    <div class="dp-cp-card">
+      <div class="dp-cp-name">Sidecar injector</div>
+      A mutating admission webhook that watches for the
+      <code>dapr.io/enabled: "true"</code> Pod annotation and injects the <code>daprd</code> container
+      automatically — no manual sidecar wiring per Deployment.
+    </div>
+    <div class="dp-cp-card">
+      <div class="dp-cp-name">Operator</div>
+      Watches Dapr custom resources (Components, Configurations, Subscriptions, HTTPEndpoints) and keeps
+      every sidecar's view of them current.
+    </div>
+    <div class="dp-cp-card">
+      <div class="dp-cp-name">Placement</div>
+      Maintains the actor placement table described above; every actor-hosting sidecar connects to it.
+    </div>
+    <div class="dp-cp-card">
+      <div class="dp-cp-name">Sentry</div>
+      The cluster's certificate authority: issues and rotates short-lived certificates so every
+      sidecar-to-sidecar call is mutually authenticated over mTLS, by default.
+    </div>
+    <div class="dp-cp-card">
+      <div class="dp-cp-name">Scheduler</div>
+      Backs the Jobs building block and Workflow/actor reminders with durable, at-least-once scheduled
+      triggers, so a "run this in 5 minutes" survives a sidecar restart.
+    </div>
+  </div>
+  <p>
+    Every one of these is optional in the sense that you could run just <code>daprd</code> processes by
+    hand — but on Kubernetes they're what turn "install a sidecar on every Pod, register every
+    component, rotate every mTLS cert" from a per-app chore into a cluster-wide default.
+  </p>
+
+  <h2>Try it: the building-blocks explorer</h2>
+  <p>
+    Pick a building block below to see what your application actually calls, and which interchangeable
+    backends the same call can be pointed at purely through a component YAML change.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">App + sidecar + pluggable backend</div>
+    <div class="dp-blocks" id="dpBlocks">
+      <button class="dp-block-btn active" data-block="invoke">Service invocation</button>
+      <button class="dp-block-btn" data-block="state">State management</button>
+      <button class="dp-block-btn" data-block="pubsub">Pub/sub</button>
+      <button class="dp-block-btn" data-block="bindings">Bindings</button>
+      <button class="dp-block-btn" data-block="actors">Actors</button>
+      <button class="dp-block-btn" data-block="secrets">Secrets</button>
+    </div>
+    <div class="dp-detail" id="dpDetail"></div>
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>Dapr vs. a service mesh (Istio/Linkerd):</strong> a mesh secures and observes traffic
+    <em>transparently</em>, without the app knowing it exists — it never gives the app new capabilities
+    like state or pub/sub. Dapr is an API the app <em>deliberately calls</em>; several teams run Dapr
+    <em>and</em> a mesh together (mesh for network-wide mTLS/traffic policy, Dapr for the application
+    building blocks), though Dapr's own sidecar-to-sidecar calls already carry mTLS on their own.
+    <strong>Dapr vs. Knative</strong> (next deep-dive): Knative is about <em>how a workload runs</em> —
+    request-driven autoscaling, scale-to-zero. Dapr is about <em>what a running workload can call</em> —
+    they compose (a Knative Service can absolutely have a Dapr sidecar). <strong>Dapr vs.
+    Crossplane/Kubernetes Operators:</strong> those manage <em>infrastructure</em> as Kubernetes
+    resources for platform teams; Dapr gives <em>application code</em> a runtime API — different
+    audience, different layer.
+  </div>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    Dapr started at Microsoft in 2019, was donated to CNCF and accepted at the <strong>Incubating</strong>
+    level on November 9, 2021, and reached <strong>Graduated</strong> status on October 30, 2024 — CNCF
+    cited its breadth of building blocks, multi-language SDK coverage (.NET, Java, Python, Go,
+    JavaScript/TypeScript, Rust, PHP), and adoption across thousands of organizations including Zeiss,
+    HDFC Bank, and Grafana Labs as evidence it had matured past a single vendor's project into
+    genuinely cross-industry infrastructure. In production you'll meet it wherever teams want portable
+    microservice plumbing without hand-rolling retries/mTLS/state per service — and, increasingly
+    through 2025–2026, as the durable-execution and conversation-API layer underneath agentic AI
+    workloads that need reliable multi-step orchestration and swappable LLM backends.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. An application calls Dapr's <code>state</code> API to save a value, backed
+        today by a Redis component. The platform team later swaps the component to Postgres. What does
+        the application need to change?</p>
+      <button class="quiz-option" data-val="a">It must switch from the Redis client library to the Postgres client library.</button>
+      <button class="quiz-option" data-val="b">Nothing — it still calls the same generic state API over localhost; only the component YAML changed.</button>
+      <button class="quiz-option" data-val="c">It must be redeployed with new connection-string environment variables.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. What specifically does Dapr's "turn-based concurrency" guarantee for a
+        virtual actor?</p>
+      <button class="quiz-option" data-val="a">The actor's state is always written to two replicas before a call returns.</button>
+      <button class="quiz-option" data-val="b">Calls to different actor IDs are processed in the order they were sent.</button>
+      <button class="quiz-option" data-val="c">At most one thread executes inside a given actor instance at a time, so concurrent calls to that same actor ID are serialized — no manual locking needed.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. How does the Placement service handle a sidecar hosting actors crashing or a new one joining?</p>
+      <button class="quiz-option" data-val="a">It recomputes the consistent-hash table and rebalances, moving only the minimum number of actors necessary — the same trick used by sharded caches to avoid a full reshuffle.</button>
+      <button class="quiz-option" data-val="b">It pauses all actor calls cluster-wide until an administrator manually reassigns actors.</button>
+      <button class="quiz-option" data-val="c">Nothing changes — actors are pinned permanently to the sidecar that first activated them.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var BLOCKS = {
+    invoke: {
+      label: "Service invocation",
+      call: "POST http://localhost:3500/v1.0/invoke/order-service/method/checkout",
+      desc: "Calls another Dapr app by its logical app-id (\"order-service\"), not an IP or Service name. The sidecar resolves the target, opens a direct sidecar-to-sidecar mTLS connection, retries on transient failure, and propagates distributed-tracing headers automatically.",
+      backends: ["Direct sidecar mTLS connection (no external component needed)"]
+    },
+    state: {
+      label: "State management",
+      call: "POST http://localhost:3500/v1.0/state/orders  [{\"key\":\"order-42\",\"value\":{...}}]",
+      desc: "Saves/reads keyed state through one generic API. The state store backing it is entirely a component-file decision — swapping the backend never touches this call.",
+      backends: ["Redis", "PostgreSQL", "Azure CosmosDB", "AWS DynamoDB", "MongoDB", "Cassandra"]
+    },
+    pubsub: {
+      label: "Pub/sub",
+      call: "POST http://localhost:3500/v1.0/publish/orderpubsub/order-created",
+      desc: "Publishes a CloudEvents-wrapped message to a topic; subscribers declare interest declaratively and Dapr delivers to their HTTP endpoint at-least-once, independent of which broker is actually running underneath.",
+      backends: ["Apache Kafka", "RabbitMQ", "Redis Streams", "Azure Service Bus", "AWS SNS/SQS", "NATS Streaming"]
+    },
+    bindings: {
+      label: "Bindings",
+      call: "POST http://localhost:3500/v1.0/bindings/mystorage  {\"operation\":\"create\",\"data\":\"...\"}",
+      desc: "Output bindings push data to an external system through one call shape; input bindings do the reverse, invoking your app's endpoint whenever the external system has something for it (a new blob, a cron tick, a queue message).",
+      backends: ["AWS S3", "Cron schedule", "Kafka topic", "Twilio SMS", "PostgreSQL", "Azure Blob Storage"]
+    },
+    actors: {
+      label: "Actors",
+      call: "POST http://localhost:3500/v1.0/actors/OrderActor/order-42/method/confirm",
+      desc: "Invokes a method on a specific virtual actor instance. The Placement service resolves which sidecar currently hosts \"order-42\"; the runtime guarantees only one call executes inside that instance at a time.",
+      backends: ["State store used for actor state persistence (Redis, CosmosDB, Postgres, …)"]
+    },
+    secrets: {
+      label: "Secrets",
+      call: "GET http://localhost:3500/v1.0/secrets/vault/db-password",
+      desc: "Reads a secret by name through one API; the app never holds vault credentials or a vault-specific SDK — only the sidecar authenticates to the real secret store.",
+      backends: ["HashiCorp Vault", "Azure Key Vault", "AWS Secrets Manager", "Kubernetes Secrets", "Google Secret Manager"]
+    }
+  };
+
+  var el = { blocks: document.getElementById("dpBlocks"), detail: document.getElementById("dpDetail") };
+
+  function render(key) {
+    var b = BLOCKS[key];
+    var html = "<h4>" + b.label + "</h4>" +
+      "<pre><code>" + b.call + "</code></pre>" +
+      "<p>" + b.desc + "</p>" +
+      "<div class=\"dp-backends\">" +
+      b.backends.map(function (x) { return '<span class="dp-swap">' + x + "</span>"; }).join("") +
+      "</div>";
+    el.detail.innerHTML = html;
+  }
+
+  el.blocks.addEventListener("click", function (e) {
+    var btn = e.target.closest(".dp-block-btn");
+    if (!btn) return;
+    Array.prototype.forEach.call(el.blocks.querySelectorAll(".dp-block-btn"), function (b) {
+      b.classList.toggle("active", b === btn);
+    });
+    render(btn.getAttribute("data-block"));
+  });
+
+  render("invoke");
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
