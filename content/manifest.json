@@ -280,7 +280,7 @@
       "summary": "Serverless on Kubernetes: scale-to-zero serving and event-driven eventing.",
       "prerequisites": ["kubernetes"],
       "file": "knative.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "kubeedge",

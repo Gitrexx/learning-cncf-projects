@@ -1,0 +1,631 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Knative — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring: request-path diagram + scale-to-zero simulator. ---- */
+  .kn-diagram {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-3);
+    flex-wrap: wrap;
+    margin-top: var(--sp-3);
+  }
+  .kn-box {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
+    background: var(--surface);
+    text-align: center;
+    min-width: 150px;
+    font-size: var(--fs-sm);
+  }
+  .kn-box .kn-box-label { font-family: var(--font-mono); font-weight: 700; display: block; margin-bottom: 2px; color: var(--accent); }
+  .kn-box.ingress { color: var(--text); }
+  .kn-box.activator { border-color: var(--accent-2); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-2) 14%, transparent); }
+  .kn-box.activator .kn-box-label { color: var(--accent-2); }
+  .kn-box.pod { color: var(--text-muted); }
+  .kn-arrow { font-family: var(--font-mono); color: var(--text-faint); font-size: var(--fs-lg); align-self: center; }
+  .kn-arrow .kn-arrow-tag { display: block; font-size: var(--fs-xs); color: var(--text-faint); font-family: var(--font-mono); }
+
+  .kn-badges { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-4); align-items: center; }
+  .kn-badge-lg {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    font-weight: 700;
+    padding: var(--sp-2) var(--sp-4);
+    border-radius: var(--r-pill);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-muted);
+  }
+  .kn-badge-lg.kn-zero  { border-color: color-mix(in srgb, var(--text-faint) 45%, var(--border)); color: var(--text-faint); }
+  .kn-badge-lg.kn-cold  { border-color: color-mix(in srgb, var(--signal-red) 45%, var(--border)); color: var(--signal-red); background: color-mix(in srgb, var(--signal-red) 10%, var(--surface)); }
+  .kn-badge-lg.kn-panic { border-color: color-mix(in srgb, var(--signal-amber) 45%, var(--border)); color: var(--signal-amber); background: color-mix(in srgb, var(--signal-amber) 10%, var(--surface)); }
+  .kn-badge-lg.kn-cool  { border-color: color-mix(in srgb, var(--signal-amber) 45%, var(--border)); color: var(--signal-amber); background: color-mix(in srgb, var(--signal-amber) 8%, var(--surface)); }
+  .kn-badge-lg.kn-steady{ border-color: color-mix(in srgb, var(--signal-green) 45%, var(--border)); color: var(--signal-green); background: color-mix(in srgb, var(--signal-green) 10%, var(--surface)); }
+  .kn-clock { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); }
+
+  .kn-row { margin-bottom: var(--sp-4); }
+  .kn-label {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-2);
+    display: block;
+  }
+  .kn-slider-row { display: flex; align-items: center; gap: var(--sp-4); }
+  .kn-slider-row input[type="range"] { flex: 1; }
+  .kn-slider-val { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--text); min-width: 8em; text-align: right; }
+  .kn-presets { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-top: var(--sp-2); }
+
+  .kn-viz {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--sp-4);
+    margin: var(--sp-4) 0;
+  }
+  @media (max-width: 700px) { .kn-viz { grid-template-columns: 1fr; } }
+  .kn-panel {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
+  }
+  .kn-panel-title {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent-strong);
+    margin-bottom: var(--sp-3);
+    display: block;
+  }
+  .kn-pods { display: flex; flex-wrap: wrap; gap: var(--sp-2); min-height: 2.6em; align-items: flex-end; }
+  .kn-pod {
+    width: 1.9em; height: 2.1em;
+    clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+    background: color-mix(in srgb, var(--signal-green) 55%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--signal-green) 70%, var(--border));
+  }
+  .kn-pod.starting {
+    background: color-mix(in srgb, var(--signal-red) 45%, var(--surface));
+    border-color: color-mix(in srgb, var(--signal-red) 70%, var(--border));
+    animation: kn-pulse 1s ease-in-out infinite;
+  }
+  @keyframes kn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+  .kn-buffer-track { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; height: 1.4em; }
+  .kn-buffer-bar { height: 100%; border-radius: var(--r-sm); background: linear-gradient(90deg, var(--signal-red), var(--signal-amber)); transition: width 0.2s ease; }
+  .kn-datapath { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); margin-top: var(--sp-3); }
+
+  .kn-log {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3);
+    min-height: 3.2em;
+  }
+  .kn-btn-row { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · App Runtime &amp; Platform Abstractions · Sub-topic 27 / 36</p>
+  <h1>Knative</h1>
+  <p class="lead">
+    Dapr, the last deep-dive, gave application code a uniform API for distributed-systems plumbing —
+    but it had nothing to say about <em>how many copies of your app are running</em>. That's the layer
+    Knative fills: a request-driven runtime on top of Kubernetes that decides pod count for you, all the
+    way down to zero, and gives every deployment a URL, a traffic-split router, and a history of
+    revisions for free. It's what people mean when they say "serverless on Kubernetes" — not because it
+    hides Kubernetes, but because it automates the one thing Kubernetes' own primitives were never
+    designed to do well: scaling a stateless HTTP workload to <em>exactly</em> the load it's getting,
+    including none at all.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Knative has two independent halves under one project umbrella. <strong>Knative Serving</strong> runs
+    request-driven containers with automatic scale-to-zero and traffic-splitting — this deep-dive's main
+    focus. <strong>Knative Eventing</strong> is a separate CloudEvents-native plumbing layer for
+    connecting event producers to consumers without either side knowing about the other. You can run
+    Serving without Eventing (most people do, for plain HTTP services) or Eventing without Serving (event
+    routing to any addressable target) — they compose, but neither depends on the other.
+  </div>
+
+  <h2>The problem: a Deployment doesn't know it's serving HTTP requests</h2>
+  <p>
+    A Kubernetes <code>Deployment</code> plus a <code>Service</code> gets you a running, load-balanced
+    workload — but every scaling decision has to be bolted on separately, and none of the defaults fit a
+    bursty, request-driven web service well. The
+    <span class="term" title="A Kubernetes controller that adjusts a Deployment's replica count based on an observed metric, usually CPU/memory utilization.">Horizontal Pod Autoscaler</span>
+    scales on CPU/memory by default — a weak proxy for "how many requests are actually arriving" — and it
+    can never go below one replica, so every service pays for at least one always-on pod even at 3am with
+    zero traffic. Rolling out a new version means juggling two Deployments and a manual traffic split if
+    you want a canary. None of this is wrong, exactly — it's just infrastructure every team building
+    request-driven services ends up re-inventing slightly differently, the same shape of problem Dapr
+    solved for state/pub-sub/service-calls one layer over. Knative, started at Google in 2018 with early
+    contributions from IBM, Red Hat, VMware, and SAP, standardizes it: give it a container image, and it
+    handles the URL, the routing, the revisions, and the scale curve — including all the way to zero.
+  </p>
+
+  <h2>The object model: Service → Configuration → Revision, with a Route on top</h2>
+  <p>
+    Applying a Knative <code>Service</code> (often called a <strong>ksvc</strong> to avoid confusing it
+    with the Kubernetes <code>Service</code> it sits above) creates three more objects underneath, and
+    understanding what each one owns explains almost everything else about how Knative behaves:
+  </p>
+  <table>
+    <thead><tr><th>Object</th><th>What it represents</th><th>Mutability</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Service</strong></td>
+        <td>The resource you actually apply — owns a Configuration and a Route, and gets one stable URL
+          for the life of the app.</td>
+        <td>Mutable; editing its <code>spec.template</code> is how you deploy a new version.</td>
+      </tr>
+      <tr>
+        <td><strong>Configuration</strong></td>
+        <td>The desired state you're currently running: image, env vars, resource requests, concurrency
+          settings.</td>
+        <td>Mutable; every change stamps out a brand-new Revision.</td>
+      </tr>
+      <tr>
+        <td><strong>Revision</strong></td>
+        <td>An <span class="term" title="Created once from a Configuration snapshot and never edited afterward — rollbacks and canaries work by shifting traffic between existing Revisions, not by mutating one.">immutable</span>
+          point-in-time snapshot of a Configuration — a specific code+config version, scaled
+          independently of every other Revision of the same Service.</td>
+        <td>Immutable — created once, eventually garbage-collected; never edited.</td>
+      </tr>
+      <tr>
+        <td><strong>Route</strong></td>
+        <td>Maps percentages of traffic, under the Service's one URL, across one or more Revisions.</td>
+        <td>Mutable — this is the mechanism behind canaries, blue/green cutovers, and instant rollbacks.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Because old Revisions stick around (until garbage-collected) and each keeps its own independent scale
+    state, a rollback is just moving the Route's 100% back to the previous Revision — no rebuild, no
+    redeploy, and the old Revision's pods spin back up from wherever its own scale-to-zero state left
+    them.
+  </p>
+
+  <h2>The request path: queue-proxy, the Activator, and getting out of the way</h2>
+  <p>
+    Every Revision pod runs your container plus a sidecar called <strong>queue-proxy</strong>, which sits
+    in front of your container, enforces the Revision's configured concurrency limit, and reports
+    per-pod request metrics upward. In front of the whole Revision sits a pluggable networking layer
+    (Kourier by default, or Istio, Contour, Envoy Gateway, and others — the same swappable-implementation
+    pattern as Dapr's components) that turns Route objects into real ingress config. The piece that makes
+    scale-to-zero actually work without dropping requests is the <strong>Activator</strong>:
+  </p>
+  <figure>
+    <div class="kn-diagram">
+      <div class="kn-box ingress"><span class="kn-box-label">Ingress</span>Kourier / Istio / Contour</div>
+      <div class="kn-arrow">&harr;<span class="kn-arrow-tag">only when<br/>0 pods or<br/>overloaded</span></div>
+      <div class="kn-box activator"><span class="kn-box-label">Activator</span>buffers &amp; triggers scale-up</div>
+      <div class="kn-arrow">&harr;<span class="kn-arrow-tag">once<br/>ready</span></div>
+      <div class="kn-box pod"><span class="kn-box-label">Revision pod</span>queue-proxy + your container</div>
+    </div>
+    <figcaption>When pods are ready and under capacity, ingress talks straight to a pod — the Activator drops out of the data path entirely.</figcaption>
+  </figure>
+  <p>
+    When a Revision has zero ready pods, the networking layer routes traffic to the Activator instead of
+    a pod. The Activator holds the request in a buffer, reports the pending demand to the Autoscaler,
+    and waits for a pod to become ready — a
+    <span class="term" title="The latency between a request arriving at zero warm pods and that pod becoming ready to serve it: scheduling, image pull (if not cached), container start, and passing the readiness probe.">cold start</span>
+    — before forwarding it on. Once at least one pod is ready and has spare capacity, the Activator steps
+    back out of the path and the networking layer sends traffic straight to pods again — it's a purely
+    on-demand component, not a permanent proxy hop.
+  </p>
+
+  <h2>The Knative Pod Autoscaler: target concurrency, stable and panic windows</h2>
+  <p>
+    The default autoscaler — <strong>KPA</strong>, Knative Pod Autoscaler (you can swap in the plain
+    Kubernetes HPA, or KEDA, as alternate autoscaler classes for CPU- or event-based scaling instead) —
+    scales on <strong>concurrency</strong>: how many in-flight requests each pod is handling right now,
+    against a configured target (100 by default, tunable per Revision). It evaluates two overlapping time
+    windows on every tick:
+  </p>
+  <ul>
+    <li><strong>Stable window</strong> (60s default) — the primary signal: average observed concurrency
+      over the last minute, used for ordinary, damped scaling decisions that don't overreact to a single
+      noisy sample.</li>
+    <li><strong>Panic window</strong> (6s default, 10% of the stable window) — a short-term signal that
+      exists purely to catch sudden spikes fast. If observed concurrency in the panic window exceeds
+      2&times; the target, KPA enters <strong>panic mode</strong>: it scales up on the fast 6-second
+      signal instead of waiting out the full minute, and — critically — it refuses to scale back down
+      again until the burst has fully subsided for a whole stable window, so a spiky-but-brief traffic
+      pattern doesn't thrash pods up and down every few seconds.</li>
+  </ul>
+  <p>
+    Scaling down is deliberately gradual (damped within the stable window) all the way to one pod; going
+    from one pod to zero is a separate, final step gated by its own
+    <code>scale-to-zero-grace-period</code> (30s default) — a last bit of idle time held in reserve in
+    case traffic resumes, before the last pod is actually torn down and the Activator becomes the sole
+    path for the next request.
+  </p>
+
+  <h2>Try it: scale-to-zero curve simulator</h2>
+  <p>
+    Drive the incoming request-rate slider for a Revision with <code>containerConcurrency</code> target
+    10 (max 8 pods here) and step or play through ticks. Push it to zero and watch pods ease down to one,
+    then hold through the scale-to-zero grace period before dropping to zero; push it from zero back up
+    and watch the Activator buffer requests through the cold start; spike it hard and watch panic mode
+    jump pods up immediately and then refuse to scale back down for a few ticks.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Scale-to-zero simulator — target concurrency 10/pod</div>
+
+    <div class="kn-badges">
+      <span class="kn-badge-lg" id="knPhaseBadge">Idle · 0 pods</span>
+      <span class="kn-clock" id="knClock">tick 0</span>
+    </div>
+
+    <div class="kn-row">
+      <span class="kn-label">Incoming request rate (req/s)</span>
+      <div class="kn-slider-row">
+        <input type="range" id="knRateSlider" min="0" max="80" value="0" step="1" />
+        <span class="kn-slider-val" id="knRateVal">0 req/s</span>
+      </div>
+      <div class="kn-presets">
+        <button class="btn ghost" data-preset="0">Idle</button>
+        <button class="btn ghost" data-preset="25">Steady light</button>
+        <button class="btn ghost" data-preset="75">Traffic spike</button>
+      </div>
+    </div>
+
+    <div class="kn-viz">
+      <div class="kn-panel">
+        <span class="kn-panel-title">Revision pods</span>
+        <div class="kn-pods" id="knPods"></div>
+        <p style="margin-top: var(--sp-3); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted);" id="knPodsText">0 pods</p>
+      </div>
+      <div class="kn-panel">
+        <span class="kn-panel-title">Activator buffer</span>
+        <div class="kn-buffer-track"><div class="kn-buffer-bar" id="knBufferBar" style="width:0%"></div></div>
+        <p style="margin-top: var(--sp-3); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted);" id="knBufferText">0 buffered requests</p>
+        <p class="kn-datapath" id="knDatapath">Data path: no traffic</p>
+      </div>
+    </div>
+
+    <div class="kn-row">
+      <span class="kn-label">Autoscaler log</span>
+      <div class="kn-log" id="knLog">Idle. No pods, no pending work.</div>
+    </div>
+
+    <div class="kn-row kn-btn-row">
+      <button class="btn" id="knPlayBtn">▶ Play</button>
+      <button class="btn ghost" id="knStepBtn">Step one tick</button>
+      <button class="btn ghost" id="knResetBtn">Reset</button>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">What to notice</span>
+    The jump from 0 pods only ever happens through the <strong>Activator</strong> buffering at least one
+    tick's worth of requests during the cold start — that buffering is what stops a scale-from-zero
+    request from simply failing. Scaling <em>down</em> is the gradual, damped path: pods ease down one at
+    a time, and the last pod gets a full grace-period hold before it's actually removed. Panic mode is
+    the odd one out — it's the only case where pods jump immediately, and it comes with a temporary
+    promise <em>not</em> to scale down again right away, trading a few extra warm pods for protection
+    against thrashing.
+  </div>
+
+  <h2>Knative Eventing: routing CloudEvents without producer/consumer coupling</h2>
+  <p>
+    Eventing solves a different problem: getting an event from whatever produced it to whatever should
+    react to it, in a common envelope, without either side hardcoding the other's existence. Every event
+    on the wire is a <span class="term" title="A CNCF specification for describing event data in a common envelope — attributes like id, source, type, and spec version — so events are portable across producers, routers, and consumers regardless of vendor. A dedicated deep-dive on CloudEvents comes later in this section.">CloudEvent</span>,
+    and four object kinds do the routing:
+  </p>
+  <table>
+    <thead><tr><th>Object</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Source</strong></td><td>A CRD wrapping an event producer — <code>PingSource</code> (cron), <code>ApiServerSource</code> (Kubernetes API events), <code>KafkaSource</code>, and dozens more — that emits CloudEvents to a configured sink.</td></tr>
+      <tr><td><strong>Broker</strong></td><td>An event mesh entry point: producers send to it, consumers subscribe to it via Triggers; handles retry and dead-lettering with at-least-once delivery.</td></tr>
+      <tr><td><strong>Trigger</strong></td><td>A filter on a Broker's event stream (by CloudEvent <code>type</code>, <code>source</code>, or custom extension attributes) that forwards only matching events to a target.</td></tr>
+      <tr><td><strong>Channel</strong> &amp; <strong>Subscription</strong></td><td>A lower-level, pluggable fan-out primitive (backed by Kafka, NATS, or an in-memory implementation) that a Broker is often itself built on top of.</td></tr>
+    </tbody>
+  </table>
+  <p>
+    Because every hop speaks the same CloudEvents envelope over HTTP, a Source has no idea what's
+    consuming its events, and a Trigger's target — often a Knative Service — has no idea what produced
+    them. That target can itself be any <strong>addressable</strong> resource, including a plain Knative
+    Service, so an event can be the thing that scales a Serving Revision up from zero in the first place.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>Knative vs. KEDA:</strong> KPA (Knative's default autoscaler) is purpose-built for
+    request-driven HTTP concurrency and ships its own Activator/buffering path for true zero-drop
+    scale-from-zero; KEDA is a general event-driven autoscaler for arbitrary Deployments driven by queue
+    depth, Kafka lag, or 60+ other sources — and Knative can actually use KEDA as an alternate autoscaler
+    class when the workload should scale on something other than request concurrency. <strong>Knative vs.
+    a plain Deployment + HPA:</strong> you get scale-to-zero, immutable Revisions, and built-in
+    traffic-splitting for free — none of which the HPA alone provides. <strong>Knative vs. Dapr</strong>
+    (previous deep-dive): Dapr is about <em>what a running workload can call</em> (state, pub/sub, service
+    invocation); Knative is about <em>how the workload runs</em> (request-driven autoscaling) — they
+    compose, since a Knative Service can carry a Dapr sidecar. <strong>Knative Eventing vs. a message
+    broker like Kafka:</strong> Eventing doesn't replace a broker — Channels are often backed by one; it
+    adds the CloudEvents-native routing/filtering layer (Broker + Trigger) on top.
+  </div>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    Knative started at Google in 2018, hit 1.0 in 2021 as a first production-readiness milestone, joined
+    CNCF as an <strong>Incubating</strong> project in 2022, and reached <strong>Graduated</strong> status
+    on October 8, 2025 — one of the newest graduations in the landscape. CNCF pointed to its normalized
+    governance (the earlier separate working groups merged into a single Steering Committee by December
+    2024), its defined maintainer lifecycle and annual elections, and adoption spanning managed platforms
+    (Red Hat OpenShift Serverless, IBM Cloud Code Engine, VMware Tanzu, SAP BTP) as evidence it had
+    matured into shared, vendor-neutral infrastructure rather than one company's serverless bet. In
+    production you'll meet it as the engine under managed "serverless container" offerings, and directly
+    wherever a platform team wants request-driven autoscaling — including real scale-to-zero for
+    bursty or low-traffic internal services — without hand-building an Activator-shaped buffering layer
+    themselves.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. A Knative Service has been idle and scaled to zero. A new request arrives. What actually happens first?</p>
+      <button class="quiz-option" data-val="a">The request fails immediately; the client must retry once a pod exists.</button>
+      <button class="quiz-option" data-val="b">The networking layer routes the request to the Activator, which buffers it and signals the Autoscaler to scale the Revision from 0 to 1, then forwards the request once a pod is ready.</button>
+      <button class="quiz-option" data-val="c">Kubernetes' own HorizontalPodAutoscaler intercepts the request and scales the Deployment directly.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">2. What triggers KPA's "panic mode," and what does it change?</p>
+      <button class="quiz-option" data-val="a">Observed concurrency in the short 6-second panic window exceeds 2&times; the target; KPA reacts on that fast signal to scale up immediately, and refuses to scale back down until the burst subsides for a full stable window.</button>
+      <button class="quiz-option" data-val="b">Any pod fails its liveness probe, causing KPA to immediately scale the Revision to zero as a safety measure.</button>
+      <button class="quiz-option" data-val="c">The Route's traffic split changes between two Revisions, which always triggers a temporary doubling of pod count.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">3. You need to roll back a Knative Service to the previous version after a bad deploy. What's the mechanism?</p>
+      <button class="quiz-option" data-val="a">Edit the current Revision's spec back to the old image and re-apply it.</button>
+      <button class="quiz-option" data-val="b">Delete the Configuration and recreate the Service from scratch.</button>
+      <button class="quiz-option" data-val="c">Shift the Route's traffic percentage back to the previous (still-existing, immutable) Revision — no rebuild or redeploy needed, since old Revisions are kept around rather than overwritten.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var TICK_MS = 800;
+  var TARGET_CONCURRENCY = 10;
+  var MAX_PODS = 8;
+  var IDLE_GRACE_TICKS = 5;   // models scale-to-zero-grace-period
+  var COLDSTART_TICKS = 3;    // models schedule + image pull/start + readiness
+  var PANIC_MULTIPLIER = 2;   // KPA panics above 2x target concurrency
+  var PANIC_HOLD_TICKS = 4;   // ticks scale-down stays blocked after a panic
+
+  var state = {
+    rate: 0,
+    pods: 0,
+    coldStart: { active: false, remaining: 0, buffered: 0 },
+    idleRemaining: IDLE_GRACE_TICKS,
+    panicRemaining: 0,
+    tick: 0,
+    playing: false,
+    timer: null,
+    lastAction: "Idle. No pods, no pending work."
+  };
+
+  var el = {};
+  ["knPhaseBadge", "knClock", "knRateSlider", "knRateVal", "knPods", "knPodsText",
+   "knBufferBar", "knBufferText", "knDatapath", "knLog", "knPlayBtn", "knStepBtn", "knResetBtn"
+  ].forEach(function (id) { el[id] = document.getElementById(id); });
+
+  function desiredPods(rate) {
+    if (rate <= 0) return 0;
+    return Math.min(MAX_PODS, Math.max(1, Math.ceil(rate / TARGET_CONCURRENCY)));
+  }
+
+  function render() {
+    el.knRateVal.textContent = state.rate + " req/s";
+
+    el.knPods.innerHTML = "";
+    for (var i = 0; i < state.pods; i++) {
+      var pod = document.createElement("div");
+      pod.className = "kn-pod";
+      el.knPods.appendChild(pod);
+    }
+    if (state.coldStart.active) {
+      var starting = document.createElement("div");
+      starting.className = "kn-pod starting";
+      el.knPods.appendChild(starting);
+    }
+    el.knPodsText.textContent = state.pods + " pod" + (state.pods === 1 ? "" : "s") +
+      (state.coldStart.active ? " (1 starting)" : "");
+
+    var bufferPct = Math.min(100, state.coldStart.buffered * 4);
+    el.knBufferBar.style.width = (state.coldStart.active ? bufferPct : 0) + "%";
+    el.knBufferText.textContent = (state.coldStart.active ? state.coldStart.buffered : 0) + " buffered request(s)";
+    el.knDatapath.textContent = state.coldStart.active
+      ? "Data path: ingress → Activator (buffering) → pod once ready"
+      : state.pods > 0
+        ? "Data path: ingress → pod directly (Activator out of path)"
+        : "Data path: no traffic";
+
+    var badgeClass = "kn-badge-lg ";
+    var badgeText;
+    if (state.coldStart.active) {
+      badgeClass += "kn-cold";
+      badgeText = "Cold start · " + state.coldStart.remaining + " tick(s) left";
+    } else if (state.pods === 0) {
+      badgeClass += "kn-zero";
+      badgeText = "Idle · 0 pods";
+    } else if (state.panicRemaining > 0) {
+      badgeClass += "kn-panic";
+      badgeText = "Panic mode · " + state.pods + " pod(s), scale-down held";
+    } else if (desiredPods(state.rate) === 0 && state.pods > 0) {
+      badgeClass += state.pods === 1 ? "kn-cool" : "kn-steady";
+      badgeText = state.pods === 1
+        ? "Cooling down · scale-to-zero in " + state.idleRemaining
+        : "Scaling down · " + state.pods + " pod(s)";
+    } else {
+      badgeClass += "kn-steady";
+      badgeText = "Steady · " + state.pods + " pod(s)";
+    }
+    el.knPhaseBadge.className = badgeClass;
+    el.knPhaseBadge.textContent = badgeText;
+
+    el.knClock.textContent = "tick " + state.tick;
+    el.knLog.textContent = state.lastAction;
+    el.knPlayBtn.textContent = state.playing ? "⏸ Pause" : "▶ Play";
+  }
+
+  function tick() {
+    state.tick++;
+    var desired = desiredPods(state.rate);
+
+    if (state.coldStart.active) {
+      state.coldStart.remaining--;
+      state.coldStart.buffered += Math.max(1, Math.round(state.rate / 5));
+      if (state.coldStart.remaining <= 0) {
+        state.pods = 1;
+        var flushed = state.coldStart.buffered;
+        state.coldStart.active = false;
+        state.coldStart.buffered = 0;
+        state.coldStart.remaining = 0;
+        state.idleRemaining = IDLE_GRACE_TICKS;
+        state.lastAction = "Cold start complete: new pod passed its readiness probe. Activator flushed " +
+          flushed + " buffered request(s) to it and steps out of the data path.";
+      } else {
+        state.lastAction = "Activator buffering while pod 0 → 1 starts (" + state.coldStart.remaining +
+          " tick(s) left) — " + state.coldStart.buffered + " request(s) queued so far.";
+      }
+    } else if (state.pods === 0 && desired >= 1) {
+      state.coldStart.active = true;
+      state.coldStart.remaining = COLDSTART_TICKS;
+      state.coldStart.buffered = Math.max(1, Math.round(state.rate / 5));
+      state.lastAction = "Request arrived at a zero-pod Revision. Ingress routed to the Activator, which " +
+        "buffers it and tells the Autoscaler to scale 0 → 1.";
+    } else if (desired === 0 && state.pods > 0) {
+      state.panicRemaining = 0;
+      if (state.pods > 1) {
+        state.pods--;
+        state.lastAction = "No traffic — Autoscaler easing down toward the floor (" + state.pods +
+          " pod(s) left) inside the stable window.";
+      } else {
+        state.idleRemaining--;
+        if (state.idleRemaining <= 0) {
+          state.pods = 0;
+          state.idleRemaining = IDLE_GRACE_TICKS;
+          state.lastAction = "scale-to-zero-grace-period elapsed with sustained zero traffic — " +
+            "Autoscaler scaled the last pod to zero.";
+        } else {
+          state.lastAction = "Last pod idle — holding through scale-to-zero-grace-period (" +
+            state.idleRemaining + " tick(s) left) in case traffic returns.";
+        }
+      }
+    } else if (desired !== state.pods) {
+      var isPanic = state.rate > PANIC_MULTIPLIER * TARGET_CONCURRENCY * state.pods;
+      if (isPanic && desired > state.pods) {
+        var from = state.pods;
+        state.pods = desired;
+        state.panicRemaining = PANIC_HOLD_TICKS;
+        state.lastAction = "Panic mode: observed concurrency exceeded 2× target within the 6s panic " +
+          "window. Autoscaler jumped " + from + " → " + desired + " pod(s) immediately and will hold " +
+          "off scaling down for a few ticks.";
+      } else if (desired > state.pods) {
+        state.pods = desired;
+        state.lastAction = "Autoscaler scaled up to " + state.pods + " pod(s) to track observed " +
+          "concurrency against the target (" + TARGET_CONCURRENCY + "/pod).";
+      } else if (state.panicRemaining > 0) {
+        state.panicRemaining--;
+        state.lastAction = "Still inside the post-panic hold — Autoscaler won't scale down for " +
+          state.panicRemaining + " more tick(s) even though desired pods dropped.";
+      } else {
+        state.pods = Math.max(desired, state.pods - 1);
+        state.lastAction = "Autoscaler easing down toward " + desired + " pod(s), one step per tick " +
+          "inside the stable window (avoids thrashing on a brief dip).";
+      }
+      state.idleRemaining = IDLE_GRACE_TICKS;
+    } else {
+      if (state.panicRemaining > 0) state.panicRemaining--;
+      state.idleRemaining = IDLE_GRACE_TICKS;
+      state.lastAction = state.pods > 0
+        ? "Steady state — " + state.pods + " pod(s) tracking " + state.rate + " req/s at target " +
+          TARGET_CONCURRENCY + "/pod."
+        : "Idle tick " + state.tick + " — no pending work.";
+    }
+    render();
+  }
+
+  function play() {
+    state.playing = !state.playing;
+    if (state.playing) {
+      state.timer = setInterval(tick, TICK_MS);
+    } else {
+      clearInterval(state.timer);
+    }
+    render();
+  }
+
+  function reset() {
+    clearInterval(state.timer);
+    state.rate = 0;
+    state.pods = 0;
+    state.coldStart = { active: false, remaining: 0, buffered: 0 };
+    state.idleRemaining = IDLE_GRACE_TICKS;
+    state.panicRemaining = 0;
+    state.tick = 0;
+    state.playing = false;
+    state.lastAction = "Idle. No pods, no pending work.";
+    el.knRateSlider.value = 0;
+    render();
+  }
+
+  el.knRateSlider.addEventListener("input", function () {
+    state.rate = parseInt(el.knRateSlider.value, 10);
+    render();
+  });
+  document.querySelectorAll(".kn-presets [data-preset]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      state.rate = parseInt(btn.getAttribute("data-preset"), 10);
+      el.knRateSlider.value = state.rate;
+      render();
+    });
+  });
+  el.knPlayBtn.addEventListener("click", play);
+  el.knStepBtn.addEventListener("click", tick);
+  el.knResetBtn.addEventListener("click", reset);
+
+  render();
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
