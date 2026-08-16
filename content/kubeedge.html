@@ -1,0 +1,608 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>KubeEdge — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring: cloud/edge topology diagram + sync simulator. ---- */
+  .ke-topology {
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    gap: var(--sp-3);
+    flex-wrap: wrap;
+    margin-top: var(--sp-3);
+  }
+  .ke-zone {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
+    background: var(--surface);
+    min-width: 190px;
+    font-size: var(--fs-sm);
+  }
+  .ke-zone .ke-zone-label { font-family: var(--font-mono); font-weight: 700; display: block; margin-bottom: var(--sp-2); color: var(--accent); text-transform: uppercase; font-size: var(--fs-xs); letter-spacing: 0.06em; }
+  .ke-zone.edge .ke-zone-label { color: var(--accent-2); }
+  .ke-zone ul { margin: 0; padding-left: 1.1em; }
+  .ke-zone li { margin-bottom: var(--sp-1); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
+  .ke-link { font-family: var(--font-mono); color: var(--text-faint); font-size: var(--fs-lg); align-self: center; text-align: center; }
+  .ke-link .ke-link-tag { display: block; font-size: var(--fs-xs); color: var(--text-faint); font-family: var(--font-mono); max-width: 9em; }
+
+  .ke-badges { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-4); align-items: center; }
+  .ke-badge-lg {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    font-weight: 700;
+    padding: var(--sp-2) var(--sp-4);
+    border-radius: var(--r-pill);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-muted);
+  }
+  .ke-badge-lg.ke-online  { border-color: color-mix(in srgb, var(--signal-green) 45%, var(--border)); color: var(--signal-green); background: color-mix(in srgb, var(--signal-green) 10%, var(--surface)); }
+  .ke-badge-lg.ke-offline { border-color: color-mix(in srgb, var(--signal-red) 45%, var(--border)); color: var(--signal-red); background: color-mix(in srgb, var(--signal-red) 10%, var(--surface)); }
+  .ke-badge-lg.ke-syncing { border-color: color-mix(in srgb, var(--signal-amber) 45%, var(--border)); color: var(--signal-amber); background: color-mix(in srgb, var(--signal-amber) 10%, var(--surface)); }
+
+  .ke-row { margin-bottom: var(--sp-4); }
+  .ke-label {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-2);
+    display: block;
+  }
+
+  .ke-viz {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: var(--sp-4);
+    margin: var(--sp-4) 0;
+    align-items: stretch;
+  }
+  @media (max-width: 760px) { .ke-viz { grid-template-columns: 1fr; } }
+  .ke-panel {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
+  }
+  .ke-panel-title {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent-strong);
+    margin-bottom: var(--sp-3);
+    display: block;
+  }
+  .ke-conn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-2);
+    min-width: 4.5em;
+  }
+  .ke-conn-line {
+    width: 3px;
+    flex: 1;
+    min-height: 3em;
+    background: repeating-linear-gradient(var(--signal-green), var(--signal-green) 6px, transparent 6px, transparent 11px);
+    border-radius: var(--r-pill);
+  }
+  .ke-conn-line.cut {
+    background: repeating-linear-gradient(var(--signal-red), var(--signal-red) 4px, transparent 4px, transparent 9px);
+    opacity: 0.6;
+  }
+  .ke-conn-icon { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); text-align: center; }
+
+  .ke-pods { display: flex; flex-wrap: wrap; gap: var(--sp-2); min-height: 2.6em; align-items: flex-end; margin-top: var(--sp-2); }
+  .ke-pod {
+    width: 1.9em; height: 2.1em;
+    clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+    background: color-mix(in srgb, var(--signal-green) 55%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--signal-green) 70%, var(--border));
+  }
+  .ke-pod.crashed {
+    background: color-mix(in srgb, var(--signal-red) 45%, var(--surface));
+    border-color: color-mix(in srgb, var(--signal-red) 70%, var(--border));
+    animation: ke-pulse 0.9s ease-in-out infinite;
+  }
+  .ke-pod.queued {
+    background: transparent;
+    border: 1px dashed var(--signal-amber);
+  }
+  @keyframes ke-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  .ke-queue-track { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; height: 1.4em; }
+  .ke-queue-bar { height: 100%; border-radius: var(--r-sm); background: linear-gradient(90deg, var(--signal-amber), var(--signal-red)); transition: width 0.2s ease; }
+
+  .ke-log {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3);
+    min-height: 3.6em;
+  }
+  .ke-btn-row { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; }
+  .ke-sub { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); margin-top: var(--sp-3); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · App Runtime &amp; Platform Abstractions · Sub-topic 28 / 36</p>
+  <h1>KubeEdge</h1>
+  <p class="lead">
+    Knative, the last deep-dive, automated pod count for request-driven HTTP workloads — but it still
+    assumed the thing every Kubernetes controller assumes: a fast, reliable, always-on link between the
+    node and the API server. KubeEdge exists because that assumption breaks the moment you move workloads
+    off a data-center network and onto the actual edge — a factory floor, a retail store, a cell tower, a
+    ship. It takes the Kubernetes control plane and splits it in two across an unreliable WAN link, so a
+    node can keep running the workloads it was told to run even when it can't reach the cluster at all,
+    and reconcile cleanly the moment the link comes back.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    KubeEdge is <strong>CloudCore</strong> (runs in your normal cluster, alongside the API server) plus
+    <strong>EdgeCore</strong> (runs on the edge node itself, in place of a stock kubelet) talking over a
+    single persistent connection built for a lossy network — not the API server's usual list-watch. On top
+    of that split, two optional layers extend it: <strong>DeviceTwin + Mappers</strong> bring non-Kubernetes
+    hardware (sensors, PLCs, BLE devices) into the Kubernetes object model, and <strong>EdgeMesh</strong>
+    gives edge nodes service discovery and east-west traffic routing that doesn't depend on reaching the
+    cloud at all.
+  </div>
+
+  <h2>The problem: Kubernetes assumes the control plane is always reachable</h2>
+  <p>
+    A stock kubelet is built around a continuous conversation with the API server: it watches for Pod
+    specs assigned to its node, reports status back, and leans on that channel constantly. That's a fine
+    assumption inside a data center, where node-to-control-plane latency is single-digit milliseconds and
+    a dropped connection is rare and brief. It falls apart at the
+    <span class="term" title="Compute that runs physically close to where data is produced or consumed — a factory floor, a retail store, a cell site, a vehicle — rather than in a centralized data center or cloud region.">edge</span>:
+    a WAN link to a factory floor, a cellular backhaul to a retail store, or a satellite link to a ship can
+    be high-latency, low-bandwidth, or simply gone for hours. If a stock kubelet loses its connection to
+    the API server for too long, the node gets marked <code>NotReady</code> and its pods get evicted —
+    exactly the wrong behavior when the workload (a conveyor-belt controller, a point-of-sale terminal) is
+    running <em>fine</em> and just can't currently be seen. Edge nodes are also often resource-constrained
+    (a Raspberry Pi, an industrial gateway box), so running the full kubelet plus a direct etcd/API-server
+    dependency per node doesn't scale to thousands of small, occasionally-connected sites the way it does
+    to a rack of well-connected servers. KubeEdge, originated by Huawei and open-sourced in 2018, addresses
+    both: a lighter edge agent, and a cloud-edge channel explicitly designed to survive being cut.
+  </p>
+
+  <h2>Two halves across the network split: CloudCore and EdgeCore</h2>
+  <p>
+    Installing KubeEdge doesn't replace your cluster's control plane — it adds <strong>CloudCore</strong>
+    as an extra deployment inside it, and swaps the edge node's kubelet for KubeEdge's <strong>EdgeCore</strong>
+    binary. Devices and pods scheduled to an edge node still show up as ordinary Kubernetes objects; the
+    difference is entirely in how their state gets from one side to the other.
+  </p>
+  <table>
+    <thead><tr><th>Side</th><th>Module</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr>
+        <td rowspan="4"><strong>CloudCore</strong><br/><span class="ke-sub" style="margin-top:0">runs in the cluster</span></td>
+        <td><strong>CloudHub</strong></td>
+        <td>The cloud-side endpoint of the cloud-edge channel: a WebSocket (or QUIC) server that watches the
+          API server for changes relevant to each edge node, and pushes them down over that node's
+          persistent connection.</td>
+      </tr>
+      <tr>
+        <td><strong>EdgeController</strong></td>
+        <td>An extended Kubernetes controller that manages edge-node and pod metadata so the right objects
+          get routed to the right node's CloudHub connection.</td>
+      </tr>
+      <tr>
+        <td><strong>DeviceController</strong></td>
+        <td>The device-management counterpart to EdgeController — syncs <code>Device</code> and
+          <code>DeviceModel</code> CRD state (see below) between the API server and the edge.</td>
+      </tr>
+      <tr>
+        <td><strong>SyncController</strong></td>
+        <td>Reconciles cloud-side object state against what the edge last reported, so a controller restart
+          or a missed message doesn't leave the two sides silently diverged.</td>
+      </tr>
+      <tr>
+        <td rowspan="6"><strong>EdgeCore</strong><br/><span class="ke-sub" style="margin-top:0">runs on the edge node</span></td>
+        <td><strong>EdgeHub</strong></td>
+        <td>The edge-side endpoint of the channel — a client that holds the persistent connection to
+          CloudHub, resilient to it dropping and reconnecting.</td>
+      </tr>
+      <tr>
+        <td><strong>Edged</strong></td>
+        <td>A tailored, trimmed-down kubelet: pulls images, starts/stops containers via the container
+          runtime, runs probes — everything a kubelet does locally, but sourcing its desired state from
+          MetaManager instead of a live API server watch.</td>
+      </tr>
+      <tr>
+        <td><strong>MetaManager</strong></td>
+        <td>The message broker and <strong>local cache</strong> between Edged and EdgeHub — persists every
+          Pod, ConfigMap, Secret, and Device object assigned to the node into an on-disk SQLite database.
+          This is the piece that makes offline autonomy possible.</td>
+      </tr>
+      <tr>
+        <td><strong>EventBus</strong></td>
+        <td>An MQTT client, so edge-local processes and devices can publish/subscribe to messages without
+          leaving the node.</td>
+      </tr>
+      <tr>
+        <td><strong>ServiceBus</strong></td>
+        <td>An HTTP client counterpart to EventBus, for edge-local services that speak plain REST instead
+          of MQTT.</td>
+      </tr>
+      <tr>
+        <td><strong>DeviceTwin</strong></td>
+        <td>Keeps each managed device's expected vs. reported state and answers queries about it — the
+          bridge between Kubernetes' declarative model and physical hardware (see below).</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <figure>
+    <div class="ke-topology">
+      <div class="ke-zone">
+        <span class="ke-zone-label">CloudCore</span>
+        <ul>
+          <li>API server (unmodified)</li>
+          <li>CloudHub</li>
+          <li>EdgeController</li>
+          <li>DeviceController</li>
+          <li>SyncController</li>
+        </ul>
+      </div>
+      <div class="ke-link">&harr;<span class="ke-link-tag">one persistent WebSocket/QUIC tunnel per node, not list-watch</span></div>
+      <div class="ke-zone edge">
+        <span class="ke-zone-label">EdgeCore (per node)</span>
+        <ul>
+          <li>EdgeHub</li>
+          <li>MetaManager + local SQLite</li>
+          <li>Edged (trimmed kubelet)</li>
+          <li>EventBus / ServiceBus</li>
+          <li>DeviceTwin</li>
+        </ul>
+      </div>
+    </div>
+    <figcaption>Everything Edged needs to keep running lives in MetaManager's local database — the tunnel only has to deliver <em>changes</em>, not stay open continuously.</figcaption>
+  </figure>
+
+  <h2>The tunnel, and why edge autonomy works</h2>
+  <p>
+    CloudHub and EdgeHub don't use the API server's normal list-watch mechanism directly — a raw watch
+    connection isn't designed to tolerate hours of disconnection and then catch up cleanly. Instead
+    CloudHub maintains one persistent, message-oriented connection per edge node and pushes changes down
+    it as they happen; EdgeHub holds the other end and is built to notice a drop and keep retrying. On the
+    way in, every message MetaManager receives — a new Pod, an updated ConfigMap, a Secret — is written to
+    its local SQLite store <em>before</em> Edged acts on it. That single design choice is what makes edge
+    autonomy possible: Edged never talks to the cloud to know what it should be running. It reads desired
+    state out of MetaManager's local cache, exactly like a kubelet reads it out of a watch cache, except
+    this cache survives the tunnel going away entirely. Cut the network, and:
+  </p>
+  <ul>
+    <li>Edged keeps enforcing whatever was last cached — restarting a crashed container, re-running
+      probes, doing everything a normal kubelet does off its local reconciliation loop.</li>
+    <li>New instructions from the cloud (a new deployment, a config change) simply queue up at CloudHub,
+      invisible to the node until reconnection.</li>
+    <li>Status the edge generates locally (pod phase changes, restart counts) queues up in MetaManager,
+      waiting to be reported once EdgeHub reconnects.</li>
+  </ul>
+  <p>
+    When the link comes back, EdgeHub reconnects and the two sides exchange what changed —
+    <strong>incrementally</strong>, not as a full resync flood. SyncController on the cloud side and
+    MetaManager on the edge side each know what the other last acknowledged, so reconnection after a short
+    blip is cheap, and reconnection after a long outage still converges without re-transmitting everything
+    from scratch. This is also what lets a single CloudCore reasonably support large edge fleets — KubeEdge
+    has been benchmarked managing on the order of 100,000 edge nodes from one cluster, something that would
+    be untenable if every node held an open list-watch and a full resync was the recovery path.
+  </p>
+
+  <h2>Try it: cut the link, watch the edge keep going</h2>
+  <p>
+    This models one edge node running two pods. Deploy from the cloud, crash a pod on the edge, and toggle
+    the network — notice what only requires the tunnel versus what Edged handles entirely on its own out
+    of MetaManager's cache.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Cloud/edge sync simulator</div>
+
+    <div class="ke-badges">
+      <span class="ke-badge-lg ke-online" id="keLinkBadge">Link up</span>
+      <span class="ke-clock mono" id="keQueueBadge" style="font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint);">0 messages queued</span>
+    </div>
+
+    <div class="ke-viz">
+      <div class="ke-panel">
+        <span class="ke-panel-title">CloudCore</span>
+        <p style="margin: 0 0 var(--sp-2); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted);">Pending changes for this node</p>
+        <div class="ke-queue-track"><div class="ke-queue-bar" id="keQueueBar" style="width:0%"></div></div>
+        <p class="ke-sub" id="keQueueText">Nothing queued</p>
+      </div>
+
+      <div class="ke-conn">
+        <span class="ke-conn-icon">CloudHub</span>
+        <div class="ke-conn-line" id="keConnLine"></div>
+        <span class="ke-conn-icon">EdgeHub</span>
+      </div>
+
+      <div class="ke-panel">
+        <span class="ke-panel-title">EdgeCore (this node)</span>
+        <p style="margin: 0 0 var(--sp-2); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted);">Pods Edged is running</p>
+        <div class="ke-pods" id="kePods"></div>
+        <p class="ke-sub" id="kePodsText">0 pods</p>
+      </div>
+    </div>
+
+    <div class="ke-row">
+      <span class="ke-label">Event log</span>
+      <div class="ke-log" id="keLog">Node online. MetaManager's local cache is empty — no pods yet.</div>
+    </div>
+
+    <div class="ke-row ke-btn-row">
+      <button class="btn" id="keDeployBtn">Deploy a pod from the cloud</button>
+      <button class="btn ghost" id="keCrashBtn">Simulate a crash on the edge</button>
+      <button class="btn ghost" id="keLinkBtn">Cut the network</button>
+      <button class="btn ghost" id="keResetBtn">Reset</button>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">What to notice</span>
+    "Deploy a pod" while the link is cut doesn't fail — it just sits in CloudHub's queue, because EdgeController
+    has nowhere to send it. "Simulate a crash" works identically online or offline, because Edged's
+    restart decision only ever depends on MetaManager's <em>local</em> cache, never a live cloud call.
+    Reconnecting flushes the queue in order rather than re-sending the node's entire state — the
+    incremental catch-up described above.
+  </div>
+
+  <h2>Managing physical hardware: DeviceTwin and Mappers</h2>
+  <p>
+    A lot of edge deployments exist to talk to hardware that has no idea what Kubernetes is — a Modbus
+    temperature sensor, a BLE beacon, an OPC-UA industrial controller. KubeEdge brings those into the same
+    declarative model as everything else via two CRDs and a companion process pattern:
+  </p>
+  <ul>
+    <li><strong><code>DeviceModel</code></strong> — describes a class of device: its properties (e.g.
+      <code>temperature</code>, <code>humidity</code>) and their types.</li>
+    <li><strong><code>Device</code></strong> — an instance of a model bound to a specific edge node,
+      carrying both a <em>desired</em> property state (what you want set, e.g. a target setpoint) and a
+      <em>reported</em> property state (what the hardware actually says).</li>
+    <li><strong>DeviceTwin</strong> (the EdgeCore module from the table above) — holds this expected/actual
+      pair locally and answers queries about it, the same twin/shadow pattern used by AWS IoT and Azure IoT
+      Hub, just modeled as native Kubernetes objects instead of a vendor-specific API.</li>
+    <li><strong>Mapper</strong> — a small per-protocol program (for Modbus, BLE, OPC UA, ONVIF, and others)
+      that runs at the edge and does the actual protocol translation: it polls or subscribes to the real
+      device and pushes readings into DeviceTwin, and pushes desired-state changes back down to the
+      hardware. KubeEdge ships a Mapper-Framework code generator so teams can build one for a proprietary
+      protocol without hand-rolling the DeviceTwin plumbing each time.</li>
+  </ul>
+  <p>
+    The result: <code>kubectl get device thermostat-3</code> reads like any other Kubernetes object,
+    <code>kubectl edit</code> on its desired temperature reaches actual hardware through a Mapper, and all
+    of it rides the same CloudCore/EdgeCore channel and offline cache as pods do — a device's last-known
+    reading survives a network cut exactly like a pod's running state does.
+  </p>
+
+  <h2>EdgeMesh: service traffic that doesn't need the cloud either</h2>
+  <p>
+    Kubernetes Services normally resolve through cluster DNS and route through kube-proxy — both of which
+    typically live in the cloud half of the cluster. That's a problem for edge-to-edge traffic: if two pods
+    on the <em>same factory floor</em> need to talk to each other, routing that through a control plane
+    that might be a flaky WAN hop away defeats the point of running at the edge at all. <strong>EdgeMesh</strong>
+    is a separate, optional component that fixes this: each edge node runs an EdgeMesh agent that resolves
+    Service names and proxies traffic using service metadata it keeps locally, so east-west traffic between
+    workloads on nearby edge nodes never has to leave the edge, and can even keep working when the link to
+    the cloud is down. Later EdgeMesh versions merged its relay/server role into the per-node agent itself,
+    so nodes with a routable path can also help others reach each other via NAT traversal — without a
+    centralized proxy the way a typical service mesh control plane works.
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>KubeEdge vs. a stock kubelet with flaky networking:</strong> a stock kubelet has no local
+    persistence layer for desired state — lose the API server connection long enough and the node goes
+    <code>NotReady</code> and pods get evicted; KubeEdge's whole design is caching desired state locally so
+    that never has to happen. <strong>KubeEdge vs. K3s:</strong> K3s is a smaller single-binary
+    <em>distribution</em> of Kubernetes (still one API server, still needs a live connection to it) aimed at
+    resource-constrained nodes; KubeEdge changes the <em>architecture</em> itself to tolerate a node being
+    disconnected from any control plane for extended periods — the two are sometimes combined, K3s as the
+    lightweight cloud-side cluster with KubeEdge managing the edge fleet hanging off it.
+    <strong>DeviceTwin/Mappers vs. a generic IoT platform:</strong> the twin/shadow concept is the same one
+    AWS IoT Core and Azure IoT Hub use; KubeEdge's version is just modeled as Kubernetes CRDs so device
+    state lives next to your workloads instead of in a separate vendor console. <strong>EdgeMesh vs. Istio
+    or Linkerd</strong> (earlier deep-dives): both give you service discovery and routing, but a
+    control-plane-driven mesh assumes that control plane is reachable; EdgeMesh is built specifically to
+    keep east-west edge traffic flowing when it isn't.
+  </div>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    KubeEdge was open-sourced by Huawei in 2018, joined CNCF as a Sandbox project in March 2019, moved to
+    Incubating in September 2020, and reached <strong>Graduated</strong> status on September 11, 2024
+    (announced by CNCF that October) — the first CNCF project purpose-built for edge computing to get
+    there. CNCF pointed to a broad, multi-vendor contributor base beyond its originating company, adoption
+    at meaningful production scale (including large-scale industrial and telecom deployments managing tens
+    of thousands of edge nodes from a single cluster), and a maturing ecosystem of sub-projects — EdgeMesh,
+    Mapper-Framework, and edge-native security tooling — as evidence it had grown past a single vendor's
+    edge story into shared infrastructure. In production you'll meet it wherever workloads have to keep
+    running through an unreliable link back to a cluster: manufacturing lines, retail POS and inventory
+    systems, telecom base-station management, transportation and logistics tracking, and any fleet of
+    remote sites where "wait for the network to come back" isn't an acceptable answer.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. An edge node's link to the cloud drops for several hours while its pods keep running fine. What keeps Edged able to enforce the right state during that time?</p>
+      <button class="quiz-option" data-val="a">Edged falls back to a cached copy of the API server's list-watch stream, replaying it from memory.</button>
+      <button class="quiz-option" data-val="b">MetaManager already persisted the node's desired state (Pods, ConfigMaps, Secrets, Devices) to a local SQLite database before the link dropped, and Edged reads its desired state from that local cache, not from a live cloud connection.</button>
+      <button class="quiz-option" data-val="c">CloudHub keeps a standby connection open through a secondary network path that EdgeHub automatically fails over to.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. Why don't CloudHub and EdgeHub use the Kubernetes API server's normal list-watch mechanism directly?</p>
+      <button class="quiz-option" data-val="a">List-watch is CPU-intensive and edge nodes don't have the compute for it.</button>
+      <button class="quiz-option" data-val="b">List-watch requires mutual TLS, which edge devices can't support.</button>
+      <button class="quiz-option" data-val="c">List-watch isn't designed to tolerate a connection being gone for a long stretch and then resuming cleanly; CloudHub/EdgeHub instead hold one persistent, reconnect-friendly channel per node and exchange changes incrementally on reconnect, which is what makes long offline periods and large edge fleets manageable.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. You need to read a temperature sensor's last known value and push a new setpoint to it from Kubernetes, even though the sensor speaks Modbus, not any Kubernetes-native protocol. What's the mechanism?</p>
+      <button class="quiz-option" data-val="a">A <code>Device</code> object (from a <code>DeviceModel</code>) holds desired vs. reported properties in DeviceTwin; a Modbus Mapper process at the edge translates between that object's state and the actual hardware protocol.</button>
+      <button class="quiz-option" data-val="b">EdgeMesh proxies raw Modbus traffic directly into the cluster's Service network as if the sensor were a pod.</button>
+      <button class="quiz-option" data-val="c">Edged runs the sensor's vendor driver as an extra container in every pod scheduled to that node.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var state = {
+    online: true,
+    pods: [],          // [{id, status: 'running'|'crashed'}]
+    cloudQueue: [],     // pending deploy messages, e.g. {type:'deploy'}
+    nextPodId: 1,
+    lastAction: "Node online. MetaManager's local cache is empty — no pods yet."
+  };
+
+  var el = {};
+  ["keLinkBadge", "keQueueBadge", "keQueueBar", "keQueueText", "keConnLine",
+   "kePods", "kePodsText", "keLog", "keDeployBtn", "keCrashBtn", "keLinkBtn", "keResetBtn"
+  ].forEach(function (id) { el[id] = document.getElementById(id); });
+
+  function render() {
+    el.keLinkBadge.className = "ke-badge-lg " + (state.online ? "ke-online" : "ke-offline");
+    el.keLinkBadge.textContent = state.online ? "Link up" : "Link cut";
+    el.keLinkBtn.textContent = state.online ? "Cut the network" : "Reconnect";
+
+    el.keQueueBadge.textContent = state.cloudQueue.length + " message" +
+      (state.cloudQueue.length === 1 ? "" : "s") + " queued at CloudHub";
+
+    var pct = Math.min(100, state.cloudQueue.length * 25);
+    el.keQueueBar.style.width = pct + "%";
+    el.keQueueText.textContent = state.cloudQueue.length === 0
+      ? "Nothing queued"
+      : state.cloudQueue.length + " change(s) waiting for EdgeHub to reconnect";
+
+    el.keConnLine.className = "ke-conn-line" + (state.online ? "" : " cut");
+
+    el.kePods.innerHTML = "";
+    state.pods.forEach(function (pod) {
+      var d = document.createElement("div");
+      d.className = "ke-pod" + (pod.status === "crashed" ? " crashed" : "");
+      el.kePods.appendChild(d);
+    });
+    state.cloudQueue.forEach(function () {
+      var d = document.createElement("div");
+      d.className = "ke-pod queued";
+      el.kePods.appendChild(d);
+    });
+    var running = state.pods.filter(function (p) { return p.status === "running"; }).length;
+    var crashed = state.pods.length - running;
+    el.kePodsText.textContent = state.pods.length + " pod(s) cached" +
+      (crashed > 0 ? " (" + crashed + " crashed, restarting)" : "") +
+      (state.cloudQueue.length > 0 ? ", " + state.cloudQueue.length + " queued at the cloud" : "");
+
+    el.keLog.textContent = state.lastAction;
+  }
+
+  function deploy() {
+    if (state.online) {
+      state.pods.push({ id: state.nextPodId++, status: "running" });
+      state.lastAction = "CloudHub pushed a new PodSpec straight to EdgeHub over the tunnel. MetaManager " +
+        "wrote it to local SQLite and Edged started the container immediately.";
+    } else {
+      state.cloudQueue.push({ type: "deploy" });
+      state.lastAction = "Link is down — EdgeController's create has nowhere to send it, so it sits " +
+        "queued at CloudHub. The edge node doesn't know this pod exists yet.";
+    }
+    render();
+  }
+
+  function crash() {
+    var running = state.pods.filter(function (p) { return p.status === "running"; });
+    if (running.length === 0) {
+      state.lastAction = "No running pods on this node to crash.";
+      render();
+      return;
+    }
+    var target = running[Math.floor(Math.random() * running.length)];
+    target.status = "crashed";
+    state.lastAction = "A container crashed on the edge. Edged notices via its own local health check " +
+      "and restarts it straight from the Pod spec cached in MetaManager's SQLite — " +
+      (state.online ? "the cloud link is up but isn't even involved in this decision." :
+        "no cloud round-trip needed, and none would be possible right now anyway.");
+    render();
+    setTimeout(function () {
+      target.status = "running";
+      state.lastAction = "Edged's restart succeeded — pod is running again, purely on local state.";
+      render();
+    }, 900);
+  }
+
+  function toggleLink() {
+    state.online = !state.online;
+    if (!state.online) {
+      state.lastAction = "Network partition: EdgeHub's connection to CloudHub drops. Edged keeps " +
+        "enforcing everything already in MetaManager's cache — nothing on this node stops.";
+    } else {
+      if (state.cloudQueue.length > 0) {
+        var n = state.cloudQueue.length;
+        state.cloudQueue.forEach(function () {
+          state.pods.push({ id: state.nextPodId++, status: "running" });
+        });
+        state.cloudQueue = [];
+        state.lastAction = "EdgeHub reconnected. " + n + " queued change(s) replayed in order from " +
+          "CloudHub — an incremental catch-up, not a full resync of the node's entire state.";
+      } else {
+        state.lastAction = "EdgeHub reconnected. Nothing was queued, so there's nothing to replay.";
+      }
+    }
+    render();
+  }
+
+  function reset() {
+    state.online = true;
+    state.pods = [];
+    state.cloudQueue = [];
+    state.nextPodId = 1;
+    state.lastAction = "Node online. MetaManager's local cache is empty — no pods yet.";
+    render();
+  }
+
+  el.keDeployBtn.addEventListener("click", deploy);
+  el.keCrashBtn.addEventListener("click", crash);
+  el.keLinkBtn.addEventListener("click", toggleLink);
+  el.keResetBtn.addEventListener("click", reset);
+
+  render();
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>

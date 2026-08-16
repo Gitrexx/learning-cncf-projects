@@ -290,7 +290,7 @@
       "summary": "Extending Kubernetes orchestration out to edge nodes with offline autonomy.",
       "prerequisites": ["kubernetes"],
       "file": "kubeedge.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "cloudevents",
