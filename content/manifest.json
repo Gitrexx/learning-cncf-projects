@@ -300,7 +300,7 @@
       "summary": "A specification for describing event data in a common, portable envelope.",
       "prerequisites": [],
       "file": "cloudevents.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "crossplane",

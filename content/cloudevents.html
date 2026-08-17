@@ -1,0 +1,571 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CloudEvents — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring: envelope builder form + JSON/HTTP output tabs. ---- */
+  .cev-form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--sp-4);
+    margin-bottom: var(--sp-4);
+  }
+  @media (max-width: 700px) { .cev-form-grid { grid-template-columns: 1fr; } }
+  .cev-field-full { grid-column: 1 / -1; }
+  .cev-label {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-2);
+    display: flex;
+    justify-content: space-between;
+    gap: var(--sp-2);
+  }
+  .cev-label .cev-req { color: var(--signal-red); text-transform: none; letter-spacing: 0; }
+  .cev-label .cev-opt { color: var(--text-faint); text-transform: none; letter-spacing: 0; }
+  .cev-field input, .cev-field textarea { width: 100%; }
+  .cev-field textarea { min-height: 4.2em; resize: vertical; }
+  .cev-presets { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-5); }
+
+  .cev-tabs { display: flex; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+  .cev-tab-btn.active { background: var(--surface-2); border-color: var(--accent); color: var(--accent-strong); }
+
+  .cev-output {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
+    overflow-x: auto;
+  }
+  .cev-output pre { margin: 0; background: transparent; border: 0; box-shadow: none; padding: 0; }
+  .cev-http-headers { color: var(--accent-strong); }
+  .cev-http-body { color: var(--text); }
+
+  .cev-validation { margin-top: var(--sp-4); }
+  .cev-vitem {
+    display: flex;
+    align-items: baseline;
+    gap: var(--sp-2);
+    font-size: var(--fs-sm);
+    padding: var(--sp-1) 0;
+  }
+  .cev-vtag {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    padding: 0.05em 0.5em;
+    border-radius: var(--r-sm);
+    flex: none;
+  }
+  .cev-vtag.ok    { color: var(--signal-green); background: color-mix(in srgb, var(--signal-green) 14%, var(--surface)); }
+  .cev-vtag.warn  { color: var(--signal-amber); background: color-mix(in srgb, var(--signal-amber) 14%, var(--surface)); }
+  .cev-vtag.error { color: var(--signal-red);   background: color-mix(in srgb, var(--signal-red) 14%, var(--surface)); }
+  .cev-vmsg { color: var(--text-muted); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · App Runtime &amp; Platform Abstractions · Sub-topic 29 / 36</p>
+  <h1>CloudEvents</h1>
+  <p class="lead">
+    Knative Eventing's deep-dive left a forward reference dangling: every message flowing through a
+    Broker and Trigger was described as "a CloudEvent," with a promise to come back to what that
+    actually means. This is that spec. CloudEvents isn't a server, a controller, or anything you
+    <code>kubectl apply</code> — it's a small, precise agreement about what metadata an event needs to
+    carry so that producers, routers, and consumers who have never heard of each other can still agree on
+    what an event <em>is</em>, regardless of which language, cloud, or broker moves it.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    CloudEvents is a <strong>specification, not software</strong> — the same category as SPIFFE from
+    earlier in this landscape. It defines a small set of <em>context attributes</em> (metadata like
+    <code>id</code>, <code>source</code>, <code>type</code>) and how to serialize and carry them over
+    real transports (HTTP, Kafka, AMQP, MQTT, NATS, and more). It says nothing about how events get
+    routed, retried, or stored — that's left to whatever sits on top, whether that's Knative Eventing's
+    Broker/Trigger, Dapr's pub/sub building block, or a cloud vendor's event bus.
+  </div>
+
+  <h2>The problem: every system's "event" looked slightly different</h2>
+  <p>
+    Long before CloudEvents, every platform that emitted events invented its own envelope. One system
+    called the event ID <code>eventId</code>, another <code>id</code>, another buried it inside a
+    vendor-specific header. One put the event kind in a <code>type</code> field, another in
+    <code>eventType</code>, another inferred it from the URL path. None of this was wrong on its own —
+    but it meant a routing layer, a logging pipeline, or a client SDK that wanted to work across sources
+    had to hand-write a translation for every producer it might ever see. Tooling couldn't be built once
+    and reused, because there was no shared shape to build it against.
+  </p>
+  <p>
+    CloudEvents, incubated at CNCF starting in 2018 with early backing from Microsoft, Google, IBM,
+    Red Hat, and others who all separately ran into this, fixes exactly the metadata — nothing else. It
+    doesn't touch delivery semantics, ordering, or what the event payload looks like inside. It just
+    guarantees that if something calls itself a CloudEvent, a handful of fields will always be named the
+    same thing, mean the same thing, and be findable the same way — whether the event arrived over HTTP,
+    Kafka, or an SDK call, and whether it came from AWS, Azure, GCP, or a Knative Source running on your
+    own cluster.
+  </p>
+
+  <h2>The context attributes: the part every CloudEvent has in common</h2>
+  <p>
+    Every CloudEvent carries a small set of <strong>context attributes</strong> — metadata about the
+    event, kept separate from its payload (<code>data</code>). Four are required, four are optional, and
+    producers can add their own on top as <strong>extension attributes</strong>.
+  </p>
+  <table>
+    <thead><tr><th>Attribute</th><th>Required?</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>id</code></td>
+        <td>Required</td>
+        <td>Identifies this event within the producer's scope. <code>id</code> + <code>source</code>
+          together — not <code>id</code> alone — must be unique per distinct event, which is what lets a
+          consumer deduplicate redelivered events.</td>
+      </tr>
+      <tr>
+        <td><code>source</code></td>
+        <td>Required</td>
+        <td>A <span class="term" title="A value that is either a full URI or a relative reference resolvable against some base — looser than requiring an absolute URI, but an absolute one is recommended.">URI-reference</span>
+          identifying the context the event occurred in — the "who" of the event, e.g.
+          <code>/orders/checkout-service</code> or <code>https://github.com/cncf/cloudevents</code>.</td>
+      </tr>
+      <tr>
+        <td><code>type</code></td>
+        <td>Required</td>
+        <td>What kind of occurrence this is. Convention is reverse-DNS namespacing, e.g.
+          <code>com.github.pull_request.opened</code> — this is the field routing/filtering logic keys
+          on (Knative's Trigger filters match on exactly this).</td>
+      </tr>
+      <tr>
+        <td><code>specversion</code></td>
+        <td>Required</td>
+        <td>Which version of the CloudEvents spec this event conforms to. Currently always the string
+          <code>"1.0"</code>.</td>
+      </tr>
+      <tr>
+        <td><code>time</code></td>
+        <td>Optional</td>
+        <td>When the occurrence happened, as an <span class="term" title="Must adhere to RFC 3339 — the internet-profile subset of ISO 8601, e.g. 2026-08-17T14:30:00Z.">RFC 3339 timestamp</span>.</td>
+      </tr>
+      <tr>
+        <td><code>subject</code></td>
+        <td>Optional</td>
+        <td>The specific subject of the event within the producer's context — e.g. if
+          <code>source</code> is a storage bucket, <code>subject</code> might be the one object key that
+          changed. Lets a consumer filter without parsing <code>data</code>.</td>
+      </tr>
+      <tr>
+        <td><code>datacontenttype</code></td>
+        <td>Optional</td>
+        <td>The media type of <code>data</code>, per RFC 2046 (e.g. <code>application/json</code>) — same
+          idea as an HTTP <code>Content-Type</code>, describing a payload CloudEvents itself never
+          standardizes.</td>
+      </tr>
+      <tr>
+        <td><code>dataschema</code></td>
+        <td>Optional</td>
+        <td>A URI pointing at the schema <code>data</code> conforms to, so a consumer can validate or
+          deserialize it without guessing.</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="callout note">
+    <span class="callout-title">Extension attributes</span>
+    Producers can attach any additional attribute beyond this base set — a <code>traceparent</code> for
+    W3C distributed-tracing correlation, a <code>partitionkey</code> for a queue that needs one, or
+    anything domain-specific. The naming rule that keeps every attribute — base or extension — mappable
+    onto any transport's native metadata (an HTTP header, a Kafka record header) is strict:
+    <strong>lower-case ASCII letters and digits only, no dashes or underscores, kept terse (≤ 20
+    characters is the convention)</strong>. That single constraint is why an attribute name never needs
+    escaping no matter which protocol binding carries it.
+  </div>
+
+  <h2>Event formats and content modes: how the envelope actually travels</h2>
+  <p>
+    Two separate ideas combine to get a CloudEvent onto the wire. An <strong>event format</strong>
+    defines how to serialize the whole envelope — attributes plus <code>data</code> — into bytes; JSON is
+    the default and most widely implemented format, with Avro and Protobuf formats also defined for
+    schema-heavy or binary-native pipelines. A <strong>content mode</strong> defines how that envelope
+    rides over a specific transport's own metadata mechanism:
+  </p>
+  <table>
+    <thead><tr><th>Content mode</th><th>How it works</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Binary</strong></td>
+        <td>Every context attribute maps onto the transport's native metadata — for HTTP, each attribute
+          becomes a header literally named <code>ce-&lt;attribute&gt;</code> (so <code>ce-id</code>,
+          <code>ce-source</code>, <code>ce-type</code>...), while <code>data</code> goes into the body
+          untouched, with the ordinary <code>Content-Type</code> header carrying
+          <code>datacontenttype</code>.</td>
+      </tr>
+      <tr>
+        <td><strong>Structured</strong></td>
+        <td>The entire envelope — attributes and <code>data</code> together — is serialized using one
+          event format and placed as a single blob in the body/value, with <code>Content-Type</code> set
+          to that format's own media type, e.g. <code>application/cloudevents+json</code>.</td>
+      </tr>
+      <tr>
+        <td><strong>Batched</strong></td>
+        <td>An array of full structured-mode events in one message, for transports/receivers that can
+          usefully accept more than one event per call.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    A receiver tells binary from structured mode purely by inspecting <code>Content-Type</code>: if it
+    starts with <code>application/cloudevents</code>, treat the body as a full structured-mode envelope;
+    otherwise, treat it as binary mode and read attributes back out of the <code>ce-*</code> headers. Every
+    compliant HTTP implementation is required to support both modes. The exact same binary/structured
+    split repeats — using each transport's own native metadata slot instead of HTTP headers — in the
+    separate protocol binding specs for Kafka (record headers), AMQP, MQTT, NATS, and others, which is
+    what lets one SDK call read a CloudEvent the same way regardless of which of those actually carried
+    it.
+  </p>
+
+  <h2>Try it: event-envelope builder</h2>
+  <p>
+    Fill in a CloudEvent below and watch both wire representations generate live — the JSON event format
+    (used in structured mode) and the HTTP binary-mode request it turns into. Validation runs against the
+    real spec rules: required attributes, the RFC 3339 <code>time</code> format, and the lower-case/≤20-char
+    naming rule for your one extension attribute.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">CloudEvents envelope builder</div>
+
+    <div class="cev-presets">
+      <button class="btn ghost" data-preset="pr">Preset: GitHub PR opened</button>
+      <button class="btn ghost" data-preset="order">Preset: order placed</button>
+      <button class="btn ghost" data-preset="blank">Clear</button>
+    </div>
+
+    <div class="cev-form-grid">
+      <div class="cev-field">
+        <span class="cev-label">id <span class="cev-req">required</span></span>
+        <input type="text" id="cevId" />
+      </div>
+      <div class="cev-field">
+        <span class="cev-label">source <span class="cev-req">required</span></span>
+        <input type="text" id="cevSource" />
+      </div>
+      <div class="cev-field">
+        <span class="cev-label">type <span class="cev-req">required</span></span>
+        <input type="text" id="cevType" />
+      </div>
+      <div class="cev-field">
+        <span class="cev-label">specversion</span>
+        <input type="text" id="cevSpecversion" value="1.0" disabled />
+      </div>
+      <div class="cev-field">
+        <span class="cev-label">time <span class="cev-opt">optional, RFC 3339</span></span>
+        <input type="text" id="cevTime" placeholder="2026-08-17T14:30:00Z" />
+      </div>
+      <div class="cev-field">
+        <span class="cev-label">subject <span class="cev-opt">optional</span></span>
+        <input type="text" id="cevSubject" />
+      </div>
+      <div class="cev-field">
+        <span class="cev-label">datacontenttype <span class="cev-opt">optional</span></span>
+        <input type="text" id="cevDct" placeholder="application/json" />
+      </div>
+      <div class="cev-field">
+        <span class="cev-label">extension attribute <span class="cev-opt">optional, name = lower-case/digits only</span></span>
+        <input type="text" id="cevExtKey" placeholder="e.g. partitionkey" style="margin-bottom: var(--sp-2);" />
+        <input type="text" id="cevExtVal" placeholder="value" />
+      </div>
+      <div class="cev-field cev-field-full">
+        <span class="cev-label">data <span class="cev-opt">optional JSON payload</span></span>
+        <textarea id="cevData" placeholder="{}"></textarea>
+      </div>
+    </div>
+
+    <div class="cev-tabs">
+      <button class="btn ghost cev-tab-btn active" data-tab="structured">JSON event format (structured mode)</button>
+      <button class="btn ghost cev-tab-btn" data-tab="binary">HTTP binary mode</button>
+    </div>
+    <div class="cev-output">
+      <pre id="cevOutStructured"><code></code></pre>
+      <pre id="cevOutBinary" style="display:none;"><code></code></pre>
+    </div>
+
+    <div class="cev-validation" id="cevValidation"></div>
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">Often confused with</span>
+    <strong>CloudEvents vs. Knative Eventing / Dapr pub/sub:</strong> CloudEvents is the envelope format;
+    Knative Eventing's Broker/Trigger and Dapr's pub/sub building block (previous deep-dives) are two
+    separate <em>implementations</em> that route messages shaped like CloudEvents — the same
+    spec-vs-implementation split as SPIFFE vs. SPIRE earlier in this landscape.
+    <strong>CloudEvents vs. a message broker (Kafka, NATS, RabbitMQ):</strong> orthogonal, not competing —
+    CloudEvents defines what rides <em>inside</em> a message; the broker still owns delivery, ordering,
+    and persistence. A broker's messages can be CloudEvents-shaped or not.
+    <strong>CloudEvents vs. a webhook payload:</strong> most webhook payloads are bespoke JSON with no
+    shared envelope; a CloudEvents-conformant producer is a webhook payload that any generic CloudEvents
+    tooling can also parse, without a custom integration per source.
+  </div>
+
+  <h2>Why it graduated, and where you'll meet it</h2>
+  <p>
+    CloudEvents entered CNCF as a Sandbox project in 2018, moved to Incubating in October 2019, hit spec
+    version 1.0 not long after, and reached <strong>Graduated</strong> status on January 25, 2024. What
+    graduated is unusual for this landscape: not one reference server, but a stable spec plus a family of
+    officially maintained SDKs (Go, Java, JavaScript/TypeScript, Python, C#, Rust, PHP, Ruby, PowerShell)
+    and a conformance test suite, adopted independently by competing vendors — a strong signal for a
+    format, since it means no single company controls how events are shaped. You'll meet it in two
+    places: baked into CNCF eventing projects (Knative Eventing natively, Dapr's pub/sub building block by
+    default), and adopted directly by public clouds as their event format of choice — AWS EventBridge,
+    Azure Event Grid, and Google Cloud Eventarc all support CloudEvents as a first-class representation,
+    which is what makes it realistic to write one event-handling library that works whether the event
+    originated on your cluster or in someone else's cloud.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. What actually has to be unique for a consumer to reliably deduplicate a CloudEvent?</p>
+      <button class="quiz-option" data-val="a">The <code>id</code> attribute alone, since it's the event's identifier.</button>
+      <button class="quiz-option" data-val="b">The combination of <code>source</code> and <code>id</code> together — <code>id</code> only has to be unique within its producer's own <code>source</code>.</button>
+      <button class="quiz-option" data-val="c">The <code>type</code> attribute, since it identifies the kind of occurrence.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. An HTTP receiver gets a request with <code>Content-Type: application/json</code> and headers like <code>ce-id</code>, <code>ce-source</code>, <code>ce-type</code>. What mode is this?</p>
+      <button class="quiz-option" data-val="a">Structured mode, because the attributes are present.</button>
+      <button class="quiz-option" data-val="b">Batched mode, because multiple <code>ce-*</code> headers are present.</button>
+      <button class="quiz-option" data-val="c">Binary mode — the <code>Content-Type</code> doesn't start with <code>application/cloudevents</code>, so attributes live in <code>ce-*</code> headers and the body is <code>data</code> as-is.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. Which of these does the CloudEvents spec itself define?</p>
+      <button class="quiz-option" data-val="a">The names, types, and constraints of a small set of context attributes, and how to map them onto formats and transports.</button>
+      <button class="quiz-option" data-val="b">A broker that guarantees at-least-once delivery of events between services.</button>
+      <button class="quiz-option" data-val="c">The required shape and schema of the <code>data</code> payload inside every event.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var el = {};
+  ["cevId", "cevSource", "cevType", "cevSpecversion", "cevTime", "cevSubject", "cevDct",
+   "cevExtKey", "cevExtVal", "cevData", "cevOutStructured", "cevOutBinary", "cevValidation"
+  ].forEach(function (id) { el[id] = document.getElementById(id); });
+
+  var RFC3339_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+  var EXT_NAME_RE = /^[a-z0-9]+$/;
+
+  var presets = {
+    pr: {
+      id: "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+      source: "https://github.com/cloudevents/spec",
+      type: "com.github.pull_request.opened",
+      time: "2026-08-17T14:30:00Z",
+      subject: "pull-request/482",
+      dct: "application/json",
+      extKey: "traceparent",
+      extVal: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+      data: '{\n  "number": 482,\n  "title": "Add batched content mode example"\n}'
+    },
+    order: {
+      id: "ord-000482",
+      source: "/orders/checkout-service",
+      type: "com.example.order.placed",
+      time: "2026-08-17T09:12:44Z",
+      subject: "customer/9931",
+      dct: "application/json",
+      extKey: "partitionkey",
+      extVal: "customer-9931",
+      data: '{\n  "orderId": "ord-000482",\n  "total": 58.40,\n  "currency": "USD"\n}'
+    },
+    blank: {
+      id: "", source: "", type: "", time: "", subject: "", dct: "",
+      extKey: "", extVal: "", data: ""
+    }
+  };
+
+  function applyPreset(name) {
+    var p = presets[name];
+    el.cevId.value = p.id;
+    el.cevSource.value = p.source;
+    el.cevType.value = p.type;
+    el.cevTime.value = p.time;
+    el.cevSubject.value = p.subject;
+    el.cevDct.value = p.dct;
+    el.cevExtKey.value = p.extKey;
+    el.cevExtVal.value = p.extVal;
+    el.cevData.value = p.data;
+    render();
+  }
+
+  function validate(v, dataParsed, dataError) {
+    var issues = [];
+
+    if (!v.id.trim()) issues.push({ level: "error", msg: "id is required." });
+    else issues.push({ level: "ok", msg: "id is present." });
+
+    if (!v.source.trim()) {
+      issues.push({ level: "error", msg: "source is required." });
+    } else {
+      issues.push({ level: "ok", msg: "id + source together identify this event uniquely." });
+      if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(v.source) && v.source.indexOf("/") !== 0) {
+        issues.push({ level: "warn", msg: "source doesn't look like a URI-reference (no scheme, doesn't start with '/'). Not fatal, but an absolute URI is recommended." });
+      }
+    }
+
+    if (!v.type.trim()) {
+      issues.push({ level: "error", msg: "type is required." });
+    } else {
+      issues.push({ level: "ok", msg: "type is present." });
+      if (v.type.indexOf(".") === -1) {
+        issues.push({ level: "warn", msg: "type has no dot — reverse-DNS namespacing (e.g. com.example.thing.happened) is the convention, not a hard rule." });
+      }
+    }
+
+    issues.push({ level: "ok", msg: "specversion is 1.0." });
+
+    if (v.time.trim()) {
+      if (RFC3339_RE.test(v.time.trim())) {
+        issues.push({ level: "ok", msg: "time matches RFC 3339." });
+      } else {
+        issues.push({ level: "error", msg: "time is set but doesn't match RFC 3339 (e.g. 2026-08-17T14:30:00Z)." });
+      }
+    }
+
+    if (v.extKey.trim()) {
+      if (EXT_NAME_RE.test(v.extKey.trim()) && v.extKey.trim().length <= 20) {
+        issues.push({ level: "ok", msg: "extension attribute name is valid (lower-case/digits, ≤ 20 chars)." });
+      } else {
+        issues.push({ level: "error", msg: "extension attribute names must be lower-case letters/digits only and ≤ 20 characters — no dashes, underscores, or uppercase." });
+      }
+    }
+
+    if (v.data.trim()) {
+      if (dataError) {
+        issues.push({ level: "warn", msg: "data isn't valid JSON — CloudEvents allows any content type, but this builder assumes JSON, so it will be included as a raw string." });
+      } else {
+        issues.push({ level: "ok", msg: "data parses as JSON." });
+      }
+    }
+
+    return issues;
+  }
+
+  function render() {
+    var v = {
+      id: el.cevId.value,
+      source: el.cevSource.value,
+      type: el.cevType.value,
+      time: el.cevTime.value,
+      subject: el.cevSubject.value,
+      dct: el.cevDct.value,
+      extKey: el.cevExtKey.value.trim(),
+      extVal: el.cevExtVal.value,
+      data: el.cevData.value
+    };
+
+    var dataParsed = null, dataError = false;
+    if (v.data.trim()) {
+      try { dataParsed = JSON.parse(v.data); }
+      catch (e) { dataError = true; }
+    }
+
+    var extValid = v.extKey && EXT_NAME_RE.test(v.extKey) && v.extKey.length <= 20;
+
+    // ---- Structured JSON envelope ----
+    var envelope = {};
+    envelope.specversion = "1.0";
+    if (v.id) envelope.id = v.id;
+    if (v.source) envelope.source = v.source;
+    envelope.type = v.type || "";
+    if (v.time) envelope.time = v.time;
+    if (v.subject) envelope.subject = v.subject;
+    if (v.dct) envelope.datacontenttype = v.dct;
+    if (extValid) envelope[v.extKey] = v.extVal;
+    if (dataParsed !== null) envelope.data = dataParsed;
+    else if (v.data.trim() && dataError) envelope.data = v.data;
+
+    el.cevOutStructured.querySelector("code").textContent = JSON.stringify(envelope, null, 2);
+
+    // ---- HTTP binary mode ----
+    var lines = [];
+    lines.push("POST /webhook HTTP/1.1");
+    lines.push("Host: consumer.example.com");
+    lines.push("ce-specversion: 1.0");
+    if (v.id) lines.push("ce-id: " + v.id);
+    if (v.source) lines.push("ce-source: " + v.source);
+    if (v.type) lines.push("ce-type: " + v.type);
+    if (v.time) lines.push("ce-time: " + v.time);
+    if (v.subject) lines.push("ce-subject: " + v.subject);
+    if (extValid) lines.push("ce-" + v.extKey + ": " + v.extVal);
+    lines.push("Content-Type: " + (v.dct || "application/json"));
+    lines.push("");
+    lines.push(v.data.trim() ? v.data.trim() : "{}");
+    el.cevOutBinary.querySelector("code").textContent = lines.join("\n");
+
+    // ---- Validation ----
+    var issues = validate(v, dataParsed, dataError);
+    el.cevValidation.innerHTML = "";
+    issues.forEach(function (issue) {
+      var row = document.createElement("div");
+      row.className = "cev-vitem";
+      var tag = document.createElement("span");
+      tag.className = "cev-vtag " + issue.level;
+      tag.textContent = issue.level === "ok" ? "OK" : issue.level === "warn" ? "WARN" : "ERROR";
+      var msg = document.createElement("span");
+      msg.className = "cev-vmsg";
+      msg.textContent = issue.msg;
+      row.appendChild(tag);
+      row.appendChild(msg);
+      el.cevValidation.appendChild(row);
+    });
+  }
+
+  [el.cevId, el.cevSource, el.cevType, el.cevTime, el.cevSubject, el.cevDct,
+   el.cevExtKey, el.cevExtVal, el.cevData
+  ].forEach(function (input) { input.addEventListener("input", render); });
+
+  document.querySelectorAll(".cev-presets [data-preset]").forEach(function (btn) {
+    btn.addEventListener("click", function () { applyPreset(btn.getAttribute("data-preset")); });
+  });
+
+  document.querySelectorAll(".cev-tab-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll(".cev-tab-btn").forEach(function (b) { b.classList.remove("active"); });
+      btn.classList.add("active");
+      var tab = btn.getAttribute("data-tab");
+      el.cevOutStructured.style.display = tab === "structured" ? "" : "none";
+      el.cevOutBinary.style.display = tab === "binary" ? "" : "none";
+    });
+  });
+
+  applyPreset("pr");
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
