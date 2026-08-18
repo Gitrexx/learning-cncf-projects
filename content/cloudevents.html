@@ -1,0 +1,505 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CloudEvents — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring: event-envelope builder. ---- */
+  .ce-builder {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--sp-5);
+    margin: var(--sp-4) 0;
+    align-items: start;
+  }
+  @media (max-width: 760px) { .ce-builder { grid-template-columns: 1fr; } }
+
+  .ce-field { margin-bottom: var(--sp-3); }
+  .ce-field label {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.04em;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-1);
+  }
+  .ce-field label .req { color: var(--signal-red); }
+  .ce-field input, .ce-field textarea, .ce-field select { width: 100%; }
+  .ce-field .ce-hint { font-size: var(--fs-xs); color: var(--text-faint); margin-top: var(--sp-1); }
+  .ce-field .ce-err { font-size: var(--fs-xs); color: var(--signal-red); margin-top: var(--sp-1); display: none; }
+  .ce-field.invalid input, .ce-field.invalid textarea { border-color: var(--signal-red); }
+  .ce-field.invalid .ce-err { display: block; }
+
+  .ce-modeswitch { display: flex; gap: var(--sp-2); margin-bottom: var(--sp-4); }
+  .ce-modeswitch button.active { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+
+  .ce-output {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    line-height: 1.6;
+    overflow-x: auto;
+    white-space: pre;
+    min-height: 12em;
+    color: var(--text);
+  }
+  .ce-output .ce-tok-req { color: var(--accent-strong); font-weight: 700; }
+  .ce-output .ce-tok-opt { color: var(--cloud-cyan-deep); }
+  .ce-output .ce-tok-ext { color: var(--signal-violet); }
+  .ce-output .ce-tok-str { color: var(--signal-green); }
+
+  .ce-legend { display: flex; gap: var(--sp-4); flex-wrap: wrap; margin-top: var(--sp-2); font-size: var(--fs-xs); font-family: var(--font-mono); color: var(--text-faint); }
+  .ce-legend span { display: inline-flex; align-items: center; gap: 0.4em; }
+  .ce-dot { width: 0.7em; height: 0.7em; border-radius: 50%; display: inline-block; }
+
+  .ce-pipeline { display: flex; align-items: center; justify-content: center; gap: var(--sp-2); flex-wrap: wrap; margin: var(--sp-4) 0; }
+  .ce-pipe-step {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-2) var(--sp-4);
+    color: var(--text-muted);
+  }
+  .ce-pipe-arrow { color: var(--text-faint); font-size: var(--fs-lg); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · App Runtime &amp; Platform Abstractions · Sub-topic 29 / 36</p>
+  <h1>CloudEvents</h1>
+  <p class="lead">
+    KubeEdge, the last deep-dive, showed a cloud/edge split that only works because both sides agree on a
+    shared object model — Kubernetes resources. CloudEvents solves the equivalent problem one layer up, for
+    <em>events</em> instead of Kubernetes objects: when a Pod is scheduled, an object is uploaded to storage,
+    a payment clears, or an IoT sensor reports a reading, how do systems that were never designed to talk to
+    each other agree on what an "event" even looks like? CloudEvents isn't a message broker, a runtime, or a
+    piece of software you deploy — it's a small, boring specification for the <em>envelope</em> that carries
+    an event, so producers, routers, and consumers built by entirely different teams (or vendors) can
+    understand each other's events without a bespoke integration for every pair.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    CloudEvents defines a small set of <strong>context attributes</strong> (<code>id</code>,
+    <code>source</code>, <code>type</code>, and a few more) that describe an event, independent of the
+    payload inside it. It then defines how that envelope gets <strong>serialized</strong> (JSON, and other
+    formats) and how it gets <strong>carried</strong> over a transport (HTTP, AMQP, MQTT, Kafka, NATS, and
+    more) — each via a documented, versioned binding. It has no runtime of its own: every other CNCF
+    eventing-adjacent project in this landscape — Knative Eventing, Dapr pub/sub, KEDA's event scalers,
+    Argo Events — either emits CloudEvents directly or lets you configure it to, because it's the one thing
+    they all agree on at the boundary.
+  </div>
+
+  <h2>The problem: every eventing system invented its own envelope</h2>
+  <p>
+    Before CloudEvents, "an event" meant something different depending on which vendor's SDK you were
+    holding. AWS had one JSON shape for S3 notifications and a different one for SNS. Azure Event Grid had
+    its own schema. Google Cloud Pub/Sub had another. Every message broker, serverless platform, and SaaS
+    webhook picked its own field names for "what kind of event is this," "where did it come from," and
+    "when did it happen" — <code>eventType</code> here, <code>event_name</code> there, sometimes buried
+    three levels deep in a vendor-specific wrapper. That meant every integration between two systems needed
+    custom glue code just to translate one event shape into another, and every general-purpose tool (a
+    router, a logger, a replay/audit system) needed vendor-specific parsers bolted on to do anything generic
+    with an event, like correlating it, deduplicating it, or routing it by type.
+  </p>
+  <p>
+    CloudEvents, incubated inside the CNCF Serverless Working Group starting in 2017 and reaching
+    <strong>v1.0</strong> in 2019, set out to fix exactly this: not to replace anyone's broker or event
+    format for the <em>payload</em>, but to standardize the small amount of <span class="term"
+    title="Metadata describing an event that is common across essentially every eventing system, independent of what the event's actual payload contains.">context metadata</span>
+    that literally every event needs, so that piece stops being reinvented per vendor.
+  </p>
+
+  <h2>The envelope: context attributes, not a payload format</h2>
+  <p>
+    A CloudEvent has two parts: a small, fixed set of <strong>context attributes</strong> describing the
+    event, and an optional <strong><code>data</code></strong> field carrying the actual payload — which can
+    be anything (JSON, protobuf bytes, plain text, XML). CloudEvents deliberately doesn't touch
+    <code>data</code>'s shape at all; it just gives it a name and a declared content type. The spec (current
+    stable version <strong>1.0.2</strong>) defines four <strong>REQUIRED</strong> attributes and four
+    commonly-used <strong>OPTIONAL</strong> ones, plus room for your own:
+  </p>
+  <table>
+    <thead><tr><th>Attribute</th><th>Required?</th><th>Type</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>id</code></td><td>Required</td><td>String</td>
+        <td>Identifies this event. <code>source</code> + <code>id</code> together must be unique per
+          distinct event — this is what lets a consumer deduplicate a redelivered message.</td></tr>
+      <tr><td><code>source</code></td><td>Required</td><td>URI-reference</td>
+        <td>The context in which the event occurred — the producer, e.g.
+          <code>/orders/service</code> or <code>https://example.com/checkout</code>.</td></tr>
+      <tr><td><code>type</code></td><td>Required</td><td>String</td>
+        <td>What kind of event this is, e.g. <code>com.example.order.shipped</code>. The spec recommends a
+          reverse-DNS-style prefix so types stay globally unique across organizations, mirroring Java
+          package naming.</td></tr>
+      <tr><td><code>specversion</code></td><td>Required</td><td>String</td>
+        <td>Which version of the CloudEvents spec this event follows — <code>"1.0"</code> today. Lets tooling
+          handle multiple spec versions side by side.</td></tr>
+      <tr><td><code>time</code></td><td>Optional</td><td>Timestamp (RFC 3339)</td>
+        <td>When the occurrence happened.</td></tr>
+      <tr><td><code>datacontenttype</code></td><td>Optional</td><td>String (RFC 2046)</td>
+        <td>The MIME type of <code>data</code>, e.g. <code>application/json</code>. Without it, a consumer
+          can't safely assume how to parse the payload.</td></tr>
+      <tr><td><code>dataschema</code></td><td>Optional</td><td>URI</td>
+        <td>A URI pointing at the schema <code>data</code> conforms to — a JSON Schema, an Avro schema,
+          wherever the producer publishes it.</td></tr>
+      <tr><td><code>subject</code></td><td>Optional</td><td>String</td>
+        <td>The specific subject of the event within the producer's context, e.g. an order ID — useful for
+          filtering a stream of <code>order.updated</code> events down to one order.</td></tr>
+    </tbody>
+  </table>
+  <p>
+    Beyond these, anyone can add <strong>extension attributes</strong> — additional named context fields
+    with no spec-defined meaning, used for domain- or organization-specific metadata (a trace ID, a tenant
+    ID). They follow the same naming and type rules as the core attributes so generic tooling can still
+    handle them predictably even without knowing what they mean.
+  </p>
+
+  <div class="callout note">
+    <span class="callout-title">Why this split matters</span>
+    Because context attributes are standardized but <code>data</code> is not, a generic router or logging
+    system can make real decisions — route by <code>type</code>, dedupe by <code>id</code>+<code>source</code>,
+    filter by <code>subject</code> — <strong>without ever needing to understand the payload</strong>. That's
+    the entire value proposition in one sentence: enough shared structure to build generic infrastructure,
+    with zero opinion about your actual event data.
+  </div>
+
+  <h2>Two ways to carry the envelope: structured vs. binary mode</h2>
+  <p>
+    Attributes have to travel somewhere — usually as an HTTP request, or a message on a broker like Kafka
+    or MQTT. CloudEvents' <strong>protocol bindings</strong> define exactly how, and every binding supports
+    two modes:
+  </p>
+  <ul>
+    <li><strong>Structured mode</strong> — the entire CloudEvent (attributes <em>and</em> <code>data</code>)
+      is serialized into one self-contained document (JSON, by the JSON event format) and placed as-is in
+      the message body. One artifact, easy to log or replay whole, and it survives being forwarded through
+      systems that don't understand CloudEvents at all — it's just a JSON blob to them.</li>
+    <li><strong>Binary mode</strong> — <code>data</code> goes in the message body untouched (so a
+      non-CloudEvents-aware consumer can still just read the payload), while each context attribute maps to
+      a protocol-native piece of metadata: an HTTP header prefixed <code>ce-</code>
+      (<code>ce-id</code>, <code>ce-source</code>, <code>ce-type</code>, ...), or the attribute-header
+      equivalent for Kafka, AMQP, MQTT v5, or NATS. This is the natural fit when the transport already has a
+      first-class place for metadata separate from the body.</li>
+  </ul>
+  <p>
+    Neither mode is "the real one" — a producer picks based on the transport and whether intermediate
+    infrastructure needs to inspect attributes without deserializing the body. SDKs for Go, JavaScript,
+    Java, C#, Python, Ruby, PHP, PowerShell, and Rust all implement both modes across the maintained protocol
+    bindings, so most producers/consumers never hand-roll this themselves.
+  </p>
+
+  <h2>Try it: build an envelope, see both modes</h2>
+  <p>
+    Fill in the attributes below. Required fields are validated live — clear <code>id</code>, <code>source</code>,
+    or <code>type</code> and watch it fail, exactly as a conformant CloudEvents producer must reject an
+    incomplete event before sending it. Switch modes to see the same event as a structured JSON document
+    versus an HTTP binary-mode request with <code>ce-*</code> headers.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Event-envelope builder</div>
+
+    <div class="ce-builder">
+      <div>
+        <div class="ce-field" id="ceF-id">
+          <label>id <span class="req">*required</span></label>
+          <input type="text" id="ceIn-id" value="a1b2c3d4-5e6f" />
+          <p class="ce-err">Required — must be non-empty; unique per <code>source</code>.</p>
+        </div>
+        <div class="ce-field" id="ceF-source">
+          <label>source <span class="req">*required</span></label>
+          <input type="text" id="ceIn-source" value="/orders/service" />
+          <p class="ce-hint">A URI-reference identifying the producer.</p>
+          <p class="ce-err">Required — must be a non-empty URI-reference.</p>
+        </div>
+        <div class="ce-field" id="ceF-type">
+          <label>type <span class="req">*required</span></label>
+          <input type="text" id="ceIn-type" value="com.example.order.shipped" />
+          <p class="ce-hint">Convention: reverse-DNS style, e.g. <code>com.example.thing.happened</code>.</p>
+          <p class="ce-err">Required — must be non-empty.</p>
+        </div>
+        <div class="ce-field">
+          <label>specversion</label>
+          <input type="text" value="1.0" disabled />
+        </div>
+        <div class="ce-field" id="ceF-time">
+          <label>time <span class="mono muted">optional</span></label>
+          <input type="text" id="ceIn-time" value="2026-08-18T09:41:00Z" />
+          <p class="ce-err">If present, must be RFC 3339, e.g. <code>2026-08-18T09:41:00Z</code>.</p>
+        </div>
+        <div class="ce-field">
+          <label>datacontenttype <span class="mono muted">optional</span></label>
+          <input type="text" id="ceIn-dct" value="application/json" />
+        </div>
+        <div class="ce-field">
+          <label>subject <span class="mono muted">optional</span></label>
+          <input type="text" id="ceIn-subject" value="order-8391" />
+        </div>
+        <div class="ce-field">
+          <label>data <span class="mono muted">payload, any shape</span></label>
+          <textarea id="ceIn-data" rows="3">{"orderId": "8391", "carrier": "ups"}</textarea>
+        </div>
+      </div>
+
+      <div>
+        <div class="ce-modeswitch">
+          <button class="btn ghost active" id="ceModeStructured">Structured mode (JSON)</button>
+          <button class="btn ghost" id="ceModeBinary">Binary mode (HTTP)</button>
+        </div>
+        <div class="ce-output" id="ceOutput"></div>
+        <div class="ce-legend">
+          <span><span class="ce-dot" style="background:var(--accent-strong)"></span>required attribute</span>
+          <span><span class="ce-dot" style="background:var(--cloud-cyan-deep)"></span>optional attribute</span>
+          <span><span class="ce-dot" style="background:var(--signal-green)"></span>data payload</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">What to notice</span>
+    In binary mode, <code>data</code> sits alone in the body exactly as you typed it — a plain HTTP client
+    with no idea what CloudEvents is can still read that body directly. In structured mode, the same body
+    is unreadable as "just JSON payload" without knowing to unwrap the <code>data</code> field first — the
+    tradeoff for having one self-contained artifact.
+  </div>
+
+  <h2>Where CloudEvents shows up in the ecosystem</h2>
+  <p>
+    You'll rarely install "CloudEvents" as its own piece of infrastructure — you'll meet it as the wire
+    format other CNCF projects already speak:
+  </p>
+  <div class="ce-pipeline">
+    <span class="ce-pipe-step">Knative Eventing</span>
+    <span class="ce-pipe-arrow">→</span>
+    <span class="ce-pipe-step">Dapr pub/sub</span>
+    <span class="ce-pipe-arrow">→</span>
+    <span class="ce-pipe-step">Argo Events</span>
+    <span class="ce-pipe-arrow">→</span>
+    <span class="ce-pipe-step">KEDA scalers</span>
+  </div>
+  <ul>
+    <li><strong>Knative Eventing</strong> is built around CloudEvents as its native event format end to end —
+      Brokers, Triggers, and Sources all pass CloudEvents.</li>
+    <li><strong>Dapr</strong>'s pub/sub building block wraps every message it delivers in a CloudEvent
+      envelope by default, so app code gets a consistent shape regardless of the underlying broker
+      component.</li>
+    <li><strong>Argo Events</strong> normalizes the dozens of external event sources it supports (webhooks,
+      message queues, cron, file watchers) into CloudEvents internally before routing them to Sensors.</li>
+    <li><strong>KEDA</strong> and many managed cloud services (AWS EventBridge, Azure Event Grid, Google
+      Eventarc) accept or emit CloudEvents at their integration boundaries, so an event can cross from one
+      cloud's native format into a Kubernetes-native pipeline without translation code per source.</li>
+  </ul>
+  <p>
+    The pattern across all of them: CloudEvents is the seam where a system stops caring about the origin of
+    an event and starts treating it generically.
+  </p>
+
+  <div class="callout warn">
+    <span class="callout-title">Often confused with</span>
+    <strong>CloudEvents vs. a message broker (Kafka, NATS, RabbitMQ):</strong> a broker moves and persists
+    messages; CloudEvents just defines what one message's metadata looks like once it's on the wire — you
+    can (and often do) send CloudEvents-formatted messages <em>through</em> Kafka. <strong>CloudEvents vs.
+    AsyncAPI:</strong> AsyncAPI describes an entire event-driven API's contract (channels, message schemas,
+    operations) the way OpenAPI describes a REST API — CloudEvents is narrower, just the envelope shape of
+    one message, and the two compose (an AsyncAPI document can specify that its messages are CloudEvents).
+    <strong>CloudEvents vs. webhooks:</strong> a webhook is a delivery mechanism (an HTTP POST to a URL);
+    CloudEvents is a payload/header format you can use to standardize <em>what's inside</em> that POST.
+  </div>
+
+  <h2>Why it graduated, and what "graduated" means for a spec, not software</h2>
+  <p>
+    CloudEvents entered the CNCF Sandbox in 2018 and reached <strong>Graduated</strong> status in October
+    2024 — an unusual case in this landscape because there's no single binary to run or cluster to operate;
+    what graduated was the specification plus its ecosystem of maintained SDKs (nine languages) and protocol
+    bindings. CNCF's graduation criteria for it centered on the same bar as any graduated project — broad,
+    multi-vendor adoption and governance, not just technical merit — and CloudEvents cleared it by becoming
+    the de facto event format across serverless platforms, all three major public clouds' eventing services,
+    and the other CNCF eventing projects listed above. You'll meet it any time you're integrating
+    event-driven systems across vendor or team boundaries: webhook payloads from SaaS platforms, event
+    buses in a multi-cloud architecture, or any Kubernetes-native eventing pipeline that wants a consistent
+    envelope its consumers can rely on without knowing who produced it.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. What does CloudEvents actually standardize?</p>
+      <button class="quiz-option" data-val="a">The shape and schema of the event payload itself, so every event's <code>data</code> field has a consistent structure.</button>
+      <button class="quiz-option" data-val="b">A small set of context attributes describing an event (id, source, type, and a few optional ones) — <code>data</code>'s contents stay entirely up to the producer.</button>
+      <button class="quiz-option" data-val="c">A message broker protocol that replaces Kafka, NATS, and AMQP for event transport.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. A consumer needs to deduplicate redelivered events without inspecting the payload. Which attribute(s) make that possible?</p>
+      <button class="quiz-option" data-val="a"><code>type</code> alone, since every event of a given type is assumed to be unique.</button>
+      <button class="quiz-option" data-val="b"><code>time</code>, by rejecting any event with a timestamp it has seen before.</button>
+      <button class="quiz-option" data-val="c"><code>source</code> + <code>id</code> together, since the spec requires producers to make that pair unique per distinct event.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. What's the actual difference between structured mode and binary mode?</p>
+      <button class="quiz-option" data-val="a">Structured mode serializes the whole event (attributes + data) into one document in the message body; binary mode leaves <code>data</code> in the body and maps each attribute to protocol-native metadata like HTTP headers.</button>
+      <button class="quiz-option" data-val="b">Binary mode is for binary payloads (images, protobuf) and structured mode is only for JSON payloads.</button>
+      <button class="quiz-option" data-val="c">Structured mode is for HTTP and binary mode is for Kafka — each transport only supports one mode.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var mode = "structured";
+
+  var el = {};
+  ["ceIn-id", "ceIn-source", "ceIn-type", "ceIn-time", "ceIn-dct", "ceIn-subject", "ceIn-data",
+   "ceOutput", "ceModeStructured", "ceModeBinary"
+  ].forEach(function (id) { el[id] = document.getElementById(id); });
+
+  var fields = {
+    id: { input: document.getElementById("ceIn-id"), wrap: document.getElementById("ceF-id"), required: true },
+    source: { input: document.getElementById("ceIn-source"), wrap: document.getElementById("ceF-source"), required: true },
+    type: { input: document.getElementById("ceIn-type"), wrap: document.getElementById("ceF-type"), required: true },
+    time: { input: document.getElementById("ceIn-time"), wrap: document.getElementById("ceF-time"), required: false }
+  };
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function isRFC3339(s) {
+    return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(s);
+  }
+
+  function validate() {
+    var ok = true;
+    ["id", "source", "type"].forEach(function (key) {
+      var f = fields[key];
+      var empty = f.input.value.trim() === "";
+      f.wrap.classList.toggle("invalid", empty);
+      if (empty) ok = false;
+    });
+    var timeVal = fields.time.input.value.trim();
+    var timeBad = timeVal !== "" && !isRFC3339(timeVal);
+    fields.time.wrap.classList.toggle("invalid", timeBad);
+    if (timeBad) ok = false;
+    return ok;
+  }
+
+  function currentData() {
+    try {
+      return JSON.parse(el["ceIn-data"].value);
+    } catch (e) {
+      return el["ceIn-data"].value;
+    }
+  }
+
+  function renderStructured(valid) {
+    if (!valid) {
+      el.ceOutput.innerHTML = '<span style="color:var(--signal-red)">Incomplete event — id, source, and type are all required, and time (if set) must be RFC 3339. Fix the highlighted fields to see valid output.</span>';
+      return;
+    }
+    var lines = [];
+    lines.push("{");
+    lines.push('  <span class="ce-tok-req">"specversion"</span>: <span class="ce-tok-str">"1.0"</span>,');
+    lines.push('  <span class="ce-tok-req">"id"</span>: <span class="ce-tok-str">"' + escapeHtml(fields.id.input.value) + '"</span>,');
+    lines.push('  <span class="ce-tok-req">"source"</span>: <span class="ce-tok-str">"' + escapeHtml(fields.source.input.value) + '"</span>,');
+    lines.push('  <span class="ce-tok-req">"type"</span>: <span class="ce-tok-str">"' + escapeHtml(fields.type.input.value) + '"</span>,');
+    if (fields.time.input.value.trim()) {
+      lines.push('  <span class="ce-tok-opt">"time"</span>: <span class="ce-tok-str">"' + escapeHtml(fields.time.input.value) + '"</span>,');
+    }
+    if (el["ceIn-dct"].value.trim()) {
+      lines.push('  <span class="ce-tok-opt">"datacontenttype"</span>: <span class="ce-tok-str">"' + escapeHtml(el["ceIn-dct"].value) + '"</span>,');
+    }
+    if (el["ceIn-subject"].value.trim()) {
+      lines.push('  <span class="ce-tok-opt">"subject"</span>: <span class="ce-tok-str">"' + escapeHtml(el["ceIn-subject"].value) + '"</span>,');
+    }
+    var dataStr = JSON.stringify(currentData(), null, 2)
+      .split("\n").map(function (l, i) { return i === 0 ? l : "  " + l; }).join("\n");
+    lines.push('  <span class="ce-tok-req" style="color:var(--signal-green)">"data"</span>: ' + escapeHtml(dataStr));
+    lines.push("}");
+    el.ceOutput.innerHTML = lines.join("\n");
+  }
+
+  function renderBinary(valid) {
+    if (!valid) {
+      el.ceOutput.innerHTML = '<span style="color:var(--signal-red)">Incomplete event — id, source, and type are all required, and time (if set) must be RFC 3339. Fix the highlighted fields to see valid output.</span>';
+      return;
+    }
+    var lines = [];
+    lines.push('<span class="ce-tok-opt">POST /events HTTP/1.1</span>');
+    lines.push('<span class="ce-tok-req">ce-specversion:</span> 1.0');
+    lines.push('<span class="ce-tok-req">ce-id:</span> ' + escapeHtml(fields.id.input.value));
+    lines.push('<span class="ce-tok-req">ce-source:</span> ' + escapeHtml(fields.source.input.value));
+    lines.push('<span class="ce-tok-req">ce-type:</span> ' + escapeHtml(fields.type.input.value));
+    if (fields.time.input.value.trim()) {
+      lines.push('<span class="ce-tok-opt">ce-time:</span> ' + escapeHtml(fields.time.input.value));
+    }
+    if (el["ceIn-subject"].value.trim()) {
+      lines.push('<span class="ce-tok-opt">ce-subject:</span> ' + escapeHtml(el["ceIn-subject"].value));
+    }
+    var ct = el["ceIn-dct"].value.trim() || "application/json";
+    lines.push('Content-Type: ' + escapeHtml(ct));
+    lines.push("");
+    lines.push('<span style="color:var(--signal-green)">' + escapeHtml(JSON.stringify(currentData(), null, 2)) + "</span>");
+    el.ceOutput.innerHTML = lines.join("\n");
+  }
+
+  function render() {
+    var valid = validate();
+    if (mode === "structured") renderStructured(valid);
+    else renderBinary(valid);
+  }
+
+  Object.keys(fields).forEach(function (k) { fields[k].input.addEventListener("input", render); });
+  ["ceIn-dct", "ceIn-subject", "ceIn-data"].forEach(function (id) {
+    document.getElementById(id).addEventListener("input", render);
+  });
+
+  el.ceModeStructured.addEventListener("click", function () {
+    mode = "structured";
+    el.ceModeStructured.classList.add("active");
+    el.ceModeBinary.classList.remove("active");
+    render();
+  });
+  el.ceModeBinary.addEventListener("click", function () {
+    mode = "binary";
+    el.ceModeBinary.classList.add("active");
+    el.ceModeStructured.classList.remove("active");
+    render();
+  });
+
+  render();
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
