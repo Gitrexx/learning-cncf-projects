@@ -310,7 +310,7 @@
       "summary": "Build control planes: manage cloud infrastructure as Kubernetes resources.",
       "prerequisites": ["kubernetes"],
       "file": "crossplane.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "rook",
