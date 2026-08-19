@@ -1,0 +1,543 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Crossplane — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring: composition builder / fan-out + drift demo. ---- */
+  .xp-layout {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: var(--sp-5);
+    margin: var(--sp-4) 0;
+    align-items: start;
+  }
+  @media (max-width: 820px) { .xp-layout { grid-template-columns: 1fr; } }
+
+  .xp-field { margin-bottom: var(--sp-3); }
+  .xp-field label {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.04em;
+    color: var(--text-faint);
+    margin-bottom: var(--sp-1);
+  }
+  .xp-field select, .xp-field input { width: 100%; }
+
+  .xp-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-top: var(--sp-4); }
+  .xp-actions .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .xp-yaml {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    line-height: 1.6;
+    white-space: pre;
+    overflow-x: auto;
+    margin-top: var(--sp-3);
+  }
+
+  .xp-stage {
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-5);
+    min-height: 20em;
+  }
+
+  .xp-flow { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-5); }
+  .xp-flow-node {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    text-align: center;
+    padding: var(--sp-2) var(--sp-3);
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    color: var(--text-faint);
+    transition: border-color .2s, color .2s, background .2s;
+  }
+  .xp-flow-node.active { border-color: var(--accent); color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+  .xp-flow-node.pipeline { min-width: 9em; }
+  .xp-flow-arrow { color: var(--text-faint); font-size: var(--fs-md); }
+
+  .xp-mrs { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--sp-3); }
+  .xp-mr {
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    box-shadow: var(--shadow-sm);
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity .35s, transform .35s, border-color .25s;
+  }
+  .xp-mr.shown { opacity: 1; transform: translateY(0); }
+  .xp-mr-kind { font-family: var(--font-mono); font-weight: 700; font-size: var(--fs-sm); color: var(--text); }
+  .xp-mr-provider { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); margin-top: 0.2em; }
+  .xp-mr-status {
+    display: inline-block;
+    margin-top: var(--sp-2);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    padding: 0.15em 0.6em;
+    border-radius: var(--r-pill);
+    letter-spacing: 0.03em;
+  }
+  .xp-mr-status.pending { background: color-mix(in srgb, var(--signal-amber) 18%, var(--surface)); color: var(--signal-amber); }
+  .xp-mr-status.ready   { background: color-mix(in srgb, var(--signal-green) 16%, var(--surface)); color: var(--signal-green); }
+  .xp-mr-status.drifted { background: color-mix(in srgb, var(--signal-red) 16%, var(--surface)); color: var(--signal-red); }
+  .xp-mr.drifted { border-color: var(--signal-red); }
+  .xp-mr-drift-btn { margin-top: var(--sp-2); }
+
+  .xp-log {
+    margin-top: var(--sp-4);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    min-height: 1.4em;
+  }
+  .xp-empty { color: var(--text-faint); font-family: var(--font-mono); font-size: var(--fs-sm); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · App Runtime &amp; Platform Abstractions · Sub-topic 30 / 36</p>
+  <h1>Crossplane</h1>
+  <p class="lead">
+    Every project so far in this section has stretched a Kubernetes-shaped API over something that isn't
+    a container: Dapr's building blocks, Knative's request-driven scaling, KubeEdge's offline nodes,
+    CloudEvents' event envelope. Crossplane takes the boldest version of that idea and points it at
+    infrastructure itself — a managed Postgres instance, a VPC, an IAM role, a Helm release, a DNS zone —
+    and manages all of it the same way the kubelet manages a Pod: as an object someone declares, that a
+    controller continuously reconciles toward. It graduated CNCF in <strong>November 2025</strong>, and the
+    pitch is blunt: stop treating "provision the cloud" and "run the workload" as two different tools with
+    two different mental models.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Crossplane turns a Kubernetes cluster into a <strong>universal control plane</strong>. You install
+    <strong>Providers</strong> (packages that add CRDs + controllers for a target system — AWS, GCP, Azure,
+    but also Helm, Vault, GitHub, or plain Kubernetes), which give you <strong>Managed Resources</strong> —
+    one Kubernetes object per external thing, reconciled the same way a Deployment is reconciled. On top of
+    that, <strong>Composite Resource Definitions (XRDs)</strong> let a platform team define its own custom
+    API (say, <code>XDatabase</code>), and a <strong>Composition</strong> says what combination of Managed
+    Resources one instance of that API expands into. It's the control-plane-building half of this
+    landscape's runtime section, the way Crossplane's own docs put it: a cloud-native alternative to
+    Terraform that never stops reconciling.
+  </div>
+
+  <h2>The problem: infrastructure and workloads speak different languages</h2>
+  <p>
+    A typical cloud-native app needs a Deployment, a Service, and an Ingress — all declared as Kubernetes
+    objects, all continuously reconciled by controllers so drift gets corrected automatically. But that same
+    app also needs a managed database, an object storage bucket, a message queue, maybe a DNS record — and
+    those usually get provisioned by a <em>completely different</em> tool: Terraform, a cloud console, a
+    bespoke script, run from a CI pipeline as a one-shot <code>apply</code>. Two different APIs, two
+    different failure modes, two different places to look when something drifts, and no way for the
+    Kubernetes-native half of your stack (RBAC, GitOps, admission policy) to reach the infrastructure half
+    at all.
+  </p>
+  <p>
+    Crossplane's founding bet, incubated at Upbound starting in 2018, is that the second half doesn't need a
+    separate tool — it needs the <em>same</em> tool, because Kubernetes' reconciliation model (declare
+    desired state, let a controller loop drive reality toward it) is a better fit for infrastructure than
+    <span class="term" title="Running a tool once to compute and apply a diff between desired and current state, then stopping — as opposed to a controller that keeps watching and correcting forever.">one-shot, run-when-you-remember apply</span>
+    tools ever were. So Crossplane extends the Kubernetes API itself with new resource types for
+    infrastructure, and lets the same controllers, the same <code>kubectl</code>, and the same RBAC that
+    already govern your workloads govern your cloud resources too.
+  </p>
+
+  <h2>Providers and Managed Resources: one Kubernetes object per external thing</h2>
+  <p>
+    A <strong>Provider</strong> is an installable package (distributed as an OCI artifact, installed with a
+    <code>Provider</code> object much like a Helm chart) that adds a set of CRDs and a controller targeting
+    one system. <code>provider-aws-rds</code> adds an <code>RDSInstance</code> kind; <code>provider-helm</code>
+    adds a <code>Release</code> kind for installing charts; <code>provider-kubernetes</code> even lets
+    Crossplane manage objects on a <em>different</em> Kubernetes cluster. The ecosystem now spans official
+    and community providers for every major hyperscaler plus dozens of other systems — anything with an API
+    is fair game, not just "cloud infra" in the AWS/GCP/Azure sense.
+  </p>
+  <p>
+    Each CRD a Provider installs is a <strong>Managed Resource (MR)</strong> — the Crossplane representation
+    of one external resource, in a strict 1:1 relationship: one <code>RDSInstance</code> object, one actual
+    RDS instance. Its controller runs the same reconcile loop as any Kubernetes controller: observe the
+    external resource's current state via the provider's API, diff it against <code>spec</code>, and call
+    create/update/delete as needed — every few minutes, forever, not just at creation time. That loop is
+    what makes Crossplane fundamentally different from a plan-and-apply tool: if someone hand-edits the RDS
+    instance in the AWS console, the next reconcile notices and reverts it, the same way a Deployment
+    controller would restore a Pod someone deleted by hand.
+  </p>
+
+  <div class="callout note">
+    <span class="callout-title">Managed Resources alone are already useful</span>
+    You can stop right here and get value: install a provider, write MRs directly, and get Kubernetes-native,
+    continuously-reconciled infrastructure with RBAC and GitOps for free. Most real platforms go one layer
+    further, though, because raw MRs are as low-level as raw cloud API calls — a platform team wants to hand
+    developers something higher-level, like "give me a database," not "here are the eleven AWS objects a
+    database needs."
+  </div>
+
+  <h2>Composite Resources: building your own API</h2>
+  <p>
+    That higher layer is a <strong>Composite Resource Definition (XRD)</strong> — it defines a brand-new
+    custom API, the way a CRD defines any Kubernetes type, except the objects it produces
+    (<strong>Composite Resources</strong>, or <strong>XRs</strong>) don't map to one external thing; they
+    map to a <em>combination</em> of Managed Resources that a <strong>Composition</strong> assembles. An XRD
+    for <code>XDatabase</code> might expose just <code>engine</code>, <code>size</code>, and
+    <code>region</code> to the person requesting one, while the Composition behind it fans that single
+    request out into an <code>RDSInstance</code>, a <code>DBSubnetGroup</code>, and a
+    <code>SecurityGroup</code> — full of organization-specific defaults (encryption on, a specific VPC,
+    tagging conventions) the requester never has to know about.
+  </p>
+  <p>
+    A Composition doesn't hard-code that fan-out with static templates anymore — as of Crossplane v2, the
+    standard mechanism is a <strong>pipeline of Composition Functions</strong>: small, independently
+    packaged and versioned programs that Crossplane calls in sequence with a request/response protocol. Each
+    function in the pipeline receives the XR plus whatever resources previous functions in the pipeline have
+    proposed so far, and returns the resources <em>it</em> wants to add or change — the last function's
+    output is what Crossplane actually creates. This replaced the older, purely declarative
+    "patch-and-transform" mode with something that can run real logic (loops, conditionals, calls to
+    external systems) to decide what infrastructure a request needs.
+  </p>
+  <p>
+    One more variable: <strong>scope</strong>. In Crossplane v2, an XRD's composite resources are
+    <strong>namespaced</strong> by default — an XR lives in a namespace and composes resources in that same
+    namespace, so ordinary Kubernetes RBAC and namespace isolation apply directly, no extra indirection
+    needed. XRDs can instead be <code>Cluster</code>-scoped for resources that legitimately span namespaces,
+    or (for backward compatibility) <code>LegacyCluster</code>-scoped — the original v1 model, where the XR
+    itself is cluster-scoped and a namespaced <strong>Claim</strong> object acts as a proxy so a namespaced
+    user can still request one. Claims still show up constantly in existing platforms built before v2; v2's
+    namespaced XRs exist specifically to make that extra proxy object unnecessary going forward.
+  </p>
+
+  <h2>Try it: submit a request, watch the fan-out — then watch it self-heal</h2>
+  <p>
+    Below, "submitting a request" creates an XR for a small custom <code>XDatabase</code> API. Watch it move
+    through the Composition's function pipeline and fan out into the Managed Resources that pipeline decided
+    the request needs. Then pick one Managed Resource and simulate someone changing it by hand, outside
+    Crossplane entirely — the way a Terraform-managed resource stays changed until someone remembers to
+    re-<code>apply</code>. Watch what Crossplane's reconcile loop does instead.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Composition fan-out + drift simulator</div>
+    <div class="xp-layout">
+      <div>
+        <div class="xp-field">
+          <label>engine</label>
+          <select id="xpEngine">
+            <option value="postgres" selected>postgres</option>
+            <option value="mysql">mysql</option>
+          </select>
+        </div>
+        <div class="xp-field">
+          <label>size</label>
+          <select id="xpSize">
+            <option value="small" selected>small</option>
+            <option value="medium">medium</option>
+            <option value="large">large</option>
+          </select>
+        </div>
+        <div class="xp-field">
+          <label>region</label>
+          <select id="xpRegion">
+            <option value="us-east-1" selected>us-east-1</option>
+            <option value="eu-west-1">eu-west-1</option>
+          </select>
+        </div>
+        <div class="xp-yaml" id="xpClaimYaml"></div>
+        <div class="xp-actions">
+          <button class="btn" id="xpSubmit">Submit XDatabase request</button>
+          <button class="btn ghost" id="xpReset" disabled>Reset</button>
+        </div>
+        <div class="xp-log" id="xpLog"></div>
+      </div>
+
+      <div class="xp-stage">
+        <div class="xp-flow">
+          <div class="xp-flow-node" id="xpNodeXR">XR: XDatabase</div>
+          <span class="xp-flow-arrow">→</span>
+          <div class="xp-flow-node pipeline" id="xpNodePipeline">Composition<br />function pipeline</div>
+          <span class="xp-flow-arrow">→</span>
+          <div class="xp-flow-node" id="xpNodeMRs">Managed Resources</div>
+        </div>
+        <div class="xp-mrs" id="xpMrs">
+          <p class="xp-empty">No request submitted yet — the Composition hasn't run.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">What to notice</span>
+    Nothing here ever "finishes" the way a Terraform <code>apply</code> finishes. Each Managed Resource
+    keeps its own controller reconciling forever — that's the whole reason drifting one and waiting shows it
+    flip back to <code>Ready</code> without you re-running anything. The Composition only runs again if the
+    XR's spec changes or a function's output would change; the individual MR controllers are what keep
+    fighting drift indefinitely.
+  </div>
+
+  <h2>The reconciliation loop vs. plan-and-apply</h2>
+  <p>
+    This is the crux of "Crossplane vs. Terraform," and it's worth being precise about it rather than
+    reaching for "Crossplane is Terraform on Kubernetes." Terraform computes a plan by diffing your
+    configuration against a state file, then applies it once; nothing watches for drift until you run
+    <code>plan</code> again by hand (or on a schedule). Crossplane's Managed Resource controllers behave
+    like every other Kubernetes controller in this landscape (compare Argo CD's sync loop, or the kubelet
+    reconciling a Pod spec): they watch continuously, and every observed drift is corrected on the next
+    reconcile, typically within minutes, with no human or pipeline run required. The tradeoff is real too —
+    a live control loop touching production cloud accounts is a different operational surface than a CLI you
+    invoke deliberately, which is exactly why Crossplane leans hard on Kubernetes' existing safety rails
+    (RBAC, admission webhooks, GitOps review) rather than inventing its own.
+  </p>
+
+  <h2>Where you'd reach for it</h2>
+  <ul>
+    <li><strong>Platform engineering / internal developer platforms</strong> — the dominant real-world
+      pattern: a platform team defines XRDs like <code>Environment</code>, <code>Application</code>, or
+      <code>DatabaseService</code>, and application teams self-serve against that API without ever seeing
+      the underlying cloud resources or needing cloud IAM permissions themselves.</li>
+    <li><strong>Multi-cloud or multi-system abstraction</strong> — one Composition can target AWS RDS in one
+      environment and Cloud SQL in another behind the identical <code>XDatabase</code> API, so application
+      manifests don't change across environments.</li>
+    <li><strong>Unifying infra and workload GitOps</strong> — because MRs and XRs are ordinary Kubernetes
+      objects, tools already in this landscape (Argo CD, Flux, Kyverno, OPA) apply to infrastructure exactly
+      as they apply to Deployments, with no separate pipeline needed.</li>
+  </ul>
+
+  <div class="callout warn">
+    <span class="callout-title">Often confused with</span>
+    <strong>Crossplane vs. Terraform:</strong> both provision infrastructure declaratively, but Terraform is
+    a one-shot CLI tool driven by a state file, while Crossplane is a live Kubernetes control plane that
+    reconciles forever — see above. <strong>Crossplane vs. Cluster API:</strong> Cluster API uses the same
+    provider/reconciler pattern specifically to provision <em>Kubernetes clusters</em>; Crossplane is
+    general-purpose and can provision anything a provider exists for, including clusters themselves.
+    <strong>Crossplane vs. a Helm chart:</strong> Helm templates and installs Kubernetes manifests once per
+    release; a Crossplane Composition keeps reconciling its output continuously and can provision resources
+    entirely outside Kubernetes (a managed database, a VPC) that Helm has no concept of.
+  </div>
+
+  <h2>Why it graduated</h2>
+  <p>
+    Crossplane entered CNCF as a Sandbox project in 2020, moved to Incubating in 2021, and reached
+    <strong>Graduated</strong> status in November 2025 after completing third-party security audits and
+    moving its release and artifact infrastructure onto CNCF-operated systems — the same governance and
+    security bar every graduated project in this landscape has cleared. Its graduation reflected a large and
+    still-growing ecosystem of providers and a genuine production pattern (platform teams building
+    self-service infrastructure APIs) that CNCF judged mature and vendor-neutral enough to graduate. You'll
+    meet it any time a platform-engineering conversation reaches for "how do we let developers request
+    infrastructure without giving them cloud console access" — it's usually either Crossplane or a
+    Crossplane-shaped in-house tool.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. What's the relationship between a Managed Resource and the external thing it represents?</p>
+      <button class="quiz-option" data-val="a">One Managed Resource can represent many external resources, batched together for efficiency.</button>
+      <button class="quiz-option" data-val="b">Strictly 1:1 — one Managed Resource object corresponds to exactly one external resource, continuously reconciled.</button>
+      <button class="quiz-option" data-val="c">Managed Resources are a planning artifact only; the real resources are tracked in a separate state file.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. What actually decides which Managed Resources a Composite Resource (XR) expands into?</p>
+      <button class="quiz-option" data-val="a">The XRD alone — it hard-codes the exact list of resources for every request.</button>
+      <button class="quiz-option" data-val="b">The Provider, which infers the right resources from the cloud account's existing inventory.</button>
+      <button class="quiz-option" data-val="c">The Composition's pipeline of Composition Functions, each contributing to the desired resource set from the XR's spec.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. Someone manually edits a cloud resource that a Crossplane Managed Resource is tracking. What happens, and how does that differ from Terraform?</p>
+      <button class="quiz-option" data-val="a">The Managed Resource's controller notices on its next reconcile and reverts the change automatically — no re-run needed, unlike Terraform's plan-and-apply model.</button>
+      <button class="quiz-option" data-val="b">Nothing — Crossplane only checks state at creation time, exactly like Terraform's state file.</button>
+      <button class="quiz-option" data-val="c">Crossplane deletes and recreates the entire Composite Resource, including every sibling Managed Resource, to be safe.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var els = {
+    engine: document.getElementById("xpEngine"),
+    size: document.getElementById("xpSize"),
+    region: document.getElementById("xpRegion"),
+    yaml: document.getElementById("xpClaimYaml"),
+    submit: document.getElementById("xpSubmit"),
+    reset: document.getElementById("xpReset"),
+    log: document.getElementById("xpLog"),
+    mrs: document.getElementById("xpMrs"),
+    nodeXR: document.getElementById("xpNodeXR"),
+    nodePipeline: document.getElementById("xpNodePipeline"),
+    nodeMRs: document.getElementById("xpNodeMRs"),
+  };
+
+  var timers = [];
+  var submitted = false;
+
+  function clearTimers() {
+    timers.forEach(function (t) { clearTimeout(t); });
+    timers = [];
+  }
+
+  function schedule(fn, delay) {
+    timers.push(setTimeout(fn, delay));
+  }
+
+  function currentSpec() {
+    return { engine: els.engine.value, size: els.size.value, region: els.region.value };
+  }
+
+  function mrPlan(spec) {
+    var engineKind = spec.engine === "postgres" ? "RDSInstance" : "RDSInstance";
+    return [
+      { kind: engineKind, provider: "provider-aws-rds", note: spec.engine + " / " + spec.size },
+      { kind: "DBSubnetGroup", provider: "provider-aws-rds", note: spec.region },
+      { kind: "SecurityGroup", provider: "provider-aws-ec2", note: "db-access" }
+    ];
+  }
+
+  function renderYaml() {
+    var spec = currentSpec();
+    els.yaml.textContent =
+      "apiVersion: platform.example.org/v1\n" +
+      "kind: XDatabase\n" +
+      "metadata:\n" +
+      "  name: orders-db\n" +
+      "  namespace: team-orders\n" +
+      "spec:\n" +
+      "  engine: " + spec.engine + "\n" +
+      "  size: " + spec.size + "\n" +
+      "  region: " + spec.region;
+  }
+
+  function log(msg) {
+    els.log.textContent = msg;
+  }
+
+  function reset() {
+    clearTimers();
+    submitted = false;
+    els.submit.disabled = false;
+    els.reset.disabled = true;
+    els.mrs.innerHTML = '<p class="xp-empty">No request submitted yet — the Composition hasn\'t run.</p>';
+    [els.nodeXR, els.nodePipeline, els.nodeMRs].forEach(function (n) { n.classList.remove("active"); });
+    log("");
+  }
+
+  function mrCard(mr, idx) {
+    var div = document.createElement("div");
+    div.className = "xp-mr";
+    div.id = "xpMr" + idx;
+    div.innerHTML =
+      '<div class="xp-mr-kind">' + mr.kind + '</div>' +
+      '<div class="xp-mr-provider">' + mr.provider + ' · ' + mr.note + '</div>' +
+      '<div><span class="xp-mr-status pending" id="xpMrStatus' + idx + '">Pending</span></div>' +
+      '<div><button class="btn ghost xp-mr-drift-btn" id="xpMrDrift' + idx + '" disabled>Simulate manual drift</button></div>';
+    return div;
+  }
+
+  function setStatus(idx, status, label) {
+    var el = document.getElementById("xpMrStatus" + idx);
+    var card = document.getElementById("xpMr" + idx);
+    if (!el) return;
+    el.className = "xp-mr-status " + status;
+    el.textContent = label;
+    card.classList.toggle("drifted", status === "drifted");
+  }
+
+  function armDriftButton(idx, mr) {
+    var btn = document.getElementById("xpMrDrift" + idx);
+    if (!btn) return;
+    btn.disabled = false;
+    btn.addEventListener("click", function () {
+      btn.disabled = true;
+      setStatus(idx, "drifted", "Drifted");
+      log("Someone hand-edited " + mr.kind + " outside Crossplane — reconciler hasn't run yet.");
+      schedule(function () {
+        setStatus(idx, "ready", "Ready");
+        log(mr.kind + "'s controller reconciled on its next loop and reverted the manual change — no re-apply needed.");
+        btn.disabled = false;
+      }, 2200);
+    });
+  }
+
+  function submit() {
+    if (submitted) return;
+    submitted = true;
+    els.submit.disabled = true;
+    els.reset.disabled = false;
+    els.mrs.innerHTML = "";
+
+    var spec = currentSpec();
+    var plan = mrPlan(spec);
+
+    els.nodeXR.classList.add("active");
+    log("XR created: XDatabase/orders-db (namespace: team-orders).");
+
+    schedule(function () {
+      els.nodePipeline.classList.add("active");
+      log("Composition selected for XDatabase — function pipeline running against the XR spec...");
+    }, 500);
+
+    schedule(function () {
+      els.nodeMRs.classList.add("active");
+      log("Pipeline's last function returned its desired resource set — creating Managed Resources.");
+    }, 1300);
+
+    plan.forEach(function (mr, idx) {
+      schedule(function () {
+        var card = mrCard(mr, idx);
+        els.mrs.appendChild(card);
+        requestAnimationFrame(function () { card.classList.add("shown"); });
+      }, 1500 + idx * 350);
+
+      schedule(function () {
+        setStatus(idx, "ready", "Ready");
+        armDriftButton(idx, mr);
+        if (idx === plan.length - 1) {
+          log("All Managed Resources reconciled to Ready. Try drifting one below.");
+        }
+      }, 1500 + idx * 350 + 900);
+    });
+  }
+
+  [els.engine, els.size, els.region].forEach(function (el) {
+    el.addEventListener("change", renderYaml);
+  });
+  els.submit.addEventListener("click", submit);
+  els.reset.addEventListener("click", reset);
+
+  renderYaml();
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
