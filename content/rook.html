@@ -1,0 +1,544 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Rook — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring: CRUSH placement / node-failure visualizer. ---- */
+  .rk-layout {
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    gap: var(--sp-5);
+    margin: var(--sp-4) 0;
+    align-items: start;
+  }
+  @media (max-width: 860px) { .rk-layout { grid-template-columns: 1fr; } }
+
+  .rk-controls { display: flex; flex-direction: column; gap: var(--sp-2); }
+  .rk-controls .btn { width: 100%; justify-content: center; }
+  .rk-controls .btn.ghost { margin-top: var(--sp-2); }
+  .rk-fail-list { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-2); }
+  .rk-fail-list .btn { background: var(--surface-2); color: var(--signal-red); border: 1px solid var(--border-strong); }
+  .rk-fail-list .btn:hover { background: color-mix(in srgb, var(--signal-red) 12%, var(--surface)); }
+  .rk-fail-list .btn:disabled { opacity: 0.4; cursor: not-allowed; background: var(--surface-2); color: var(--text-faint); }
+
+  .rk-meta { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); margin-top: var(--sp-3); line-height: 1.7; }
+  .rk-meta strong { color: var(--text-muted); }
+
+  .rk-log {
+    margin-top: var(--sp-4);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    min-height: 2.6em;
+  }
+
+  .rk-stage {
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
+  }
+  .rk-nodes { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp-3); }
+  @media (max-width: 640px) { .rk-nodes { grid-template-columns: repeat(2, 1fr); } }
+
+  .rk-node {
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-3);
+    transition: border-color .3s, opacity .3s;
+  }
+  .rk-node-title {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--sp-2);
+  }
+  .rk-node-status {
+    display: inline-block;
+    font-size: 0.68rem;
+    padding: 0.1em 0.5em;
+    border-radius: var(--r-pill);
+    background: color-mix(in srgb, var(--signal-green) 16%, var(--surface));
+    color: var(--signal-green);
+  }
+  .rk-node.down { border-color: var(--signal-red); opacity: 0.55; }
+  .rk-node.down .rk-node-status { background: color-mix(in srgb, var(--signal-red) 18%, var(--surface)); color: var(--signal-red); }
+
+  .rk-osd {
+    background: var(--surface-2);
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--r-sm);
+    padding: var(--sp-2);
+    margin-bottom: var(--sp-2);
+    min-height: 3.4em;
+  }
+  .rk-osd:last-child { margin-bottom: 0; }
+  .rk-osd-id { font-family: var(--font-mono); font-size: 0.68rem; color: var(--text-faint); margin-bottom: 0.3em; }
+  .rk-chips { display: flex; flex-wrap: wrap; gap: 0.3em; }
+  .rk-chip {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 0.12em 0.45em;
+    border-radius: var(--r-sm);
+    color: var(--on-accent);
+    opacity: 0;
+    transform: scale(0.7);
+    transition: opacity .3s, transform .3s;
+  }
+  .rk-chip.shown { opacity: 1; transform: scale(1); }
+  .rk-chip.primary { box-shadow: inset 0 0 0 2px rgba(255,255,255,0.55); }
+  .rk-chip.recovering { animation: rk-pulse 0.9s ease-in-out infinite; }
+  @keyframes rk-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  .rk-empty { color: var(--text-faint); font-family: var(--font-mono); font-size: var(--fs-sm); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Storage &amp; Databases · Sub-topic 31 / 36</p>
+  <h1>Rook</h1>
+  <p class="lead">
+    Every project so far has assumed persistent storage just shows up when a Pod asks for it — a
+    <code>PersistentVolumeClaim</code> gets bound, a volume appears, done. On a managed cloud that's because
+    the cloud provider's block-storage service is doing the actual work behind a CSI driver. On bare metal, or
+    when you need block, file, <em>and</em> object storage from the same pool of disks without three separate
+    systems, someone still has to run that storage layer — and historically that meant standing up
+    <strong>Ceph</strong>, a powerful but famously operationally heavy distributed storage system, entirely by
+    hand outside Kubernetes. Rook's job is to make Ceph a <em>Kubernetes-native, self-managing</em> thing: not
+    a new storage engine, but an <span class="term" title="A Kubernetes controller that encodes the operational knowledge of running a specific piece of software — deploying it, healing it, upgrading it — as code, watching custom resources instead of a human running playbooks.">operator</span> that runs, heals, and scales an existing one.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Rook is a Kubernetes <strong>operator</strong> for storage orchestration — by far its dominant use is
+    running <strong>Ceph</strong> (Rook started with several backends; Ceph is the actively maintained one
+    today). You declare a <code>CephCluster</code> custom resource describing which nodes and disks to use;
+    the Rook operator turns that into a running Ceph cluster of Pods, and Ceph itself — via the
+    <strong>Ceph-CSI</strong> driver — hands your other Pods block volumes, a shared filesystem, or an
+    S3-compatible object store, all from the same underlying pool of storage. Rook manages the cluster's
+    lifecycle; it does not sit in the data path once a volume is mounted.
+  </div>
+
+  <h2>The problem: Kubernetes has no opinion about where bytes live</h2>
+  <p>
+    Kubernetes standardized <em>how</em> a Pod asks for storage (PVCs) and <em>how</em> a driver provisions it
+    (the CSI interface), but it deliberately has no opinion on what's underneath a CSI driver. On EKS, GKE, or
+    AKS that's fine — the cloud's block-storage service is already elastic, replicated, and someone else's
+    3am pager. On bare metal, in a homelab, or in an air-gapped environment, there usually isn't one. You need
+    something that turns a pile of raw disks across a set of nodes into resilient, expandable storage — and
+    that "something" has traditionally been Ceph: a distributed storage system, created by Sage Weil in 2004,
+    that provides block, file, and object storage from a single self-healing cluster with no single point of
+    failure. The catch was always operational: standing up and running Ceph well — sizing monitors correctly,
+    building CRUSH maps, handling disk failures, planning capacity — is a specialty in its own right, usually
+    done with dedicated tooling (<code>ceph-deploy</code>, <code>cephadm</code>) completely outside any
+    Kubernetes workflow.
+  </p>
+  <p>
+    Rook's founding idea, entering CNCF Sandbox in January 2018, is that this operational knowledge belongs in
+    a Kubernetes controller instead of a runbook. You describe the <em>desired</em> storage cluster as a
+    custom resource; a controller drives the cluster toward that state and keeps fighting entropy — disk
+    failures, node loss, capacity growth — the same way every other controller in this landscape does.
+  </p>
+
+  <h2>The operator and its CRDs</h2>
+  <p>
+    The <strong>rook-ceph-operator</strong> is an ordinary Kubernetes <code>Deployment</code> that watches a
+    family of custom resources and reconciles Ceph daemons to match. The main ones:
+  </p>
+  <ul>
+    <li><code>CephCluster</code> — the cluster itself: which nodes and raw devices to use, how many monitors,
+      network mode, and cluster-wide settings. Creating one is what actually stands the Ceph cluster up.</li>
+    <li><code>CephBlockPool</code> — a replicated or erasure-coded pool backing RBD (block) volumes, with a
+      failure domain (<code>host</code>, <code>rack</code>, ...) and replica count.</li>
+    <li><code>CephFilesystem</code> — provisions the metadata and data pools plus MDS daemons for a shared,
+      POSIX CephFS filesystem multiple Pods can mount <code>ReadWriteMany</code>.</li>
+    <li><code>CephObjectStore</code> — stands up RGW (RADOS Gateway) daemons exposing an S3-compatible bucket
+      API over the same underlying cluster.</li>
+  </ul>
+  <p>
+    Apply a <code>CephCluster</code> and the operator creates the daemon Pods; apply a <code>CephBlockPool</code>
+    and it creates the pool and a matching <code>StorageClass</code> your app's PVCs can target. Nothing about
+    Ceph's internals — placement groups, CRUSH rules, monitor quorum — has to be hand-tuned for common cases;
+    the operator picks sane defaults and exposes the knobs that actually matter as CRD fields.
+  </p>
+
+  <h2>The daemons underneath: MON, MGR, OSD, MDS, RGW</h2>
+  <p>
+    A running Rook-Ceph cluster is a handful of daemon types, each its own set of Pods, all watched and healed
+    by the operator:
+  </p>
+  <ul>
+    <li><strong>MON (Monitor)</strong> — maintains the authoritative cluster map (which OSDs exist, the CRUSH
+      map, pool config) via Paxos consensus among an odd-sized quorum (typically 3 or 5). Every client and
+      daemon consults the monitors to learn the cluster's current shape.</li>
+    <li><strong>MGR (Manager)</strong> — tracks runtime metrics, exposes the Ceph dashboard and Prometheus
+      metrics, and hosts management modules; runs active/standby.</li>
+    <li><strong>OSD (Object Storage Daemon)</strong> — one per disk (or partition): the actual data-serving
+      workhorse. This is where objects live, where replication or erasure coding happens, and what recovers
+      when a disk or node is lost.</li>
+    <li><strong>MDS (Metadata Server)</strong> — tracks the directory tree and file metadata for CephFS only;
+      block (RBD) and object (RGW) storage don't need it.</li>
+    <li><strong>RGW (RADOS Gateway)</strong> — a stateless HTTP daemon translating S3/Swift API calls into
+      operations on the underlying object store.</li>
+  </ul>
+  <p>
+    Underneath all of it is <strong>RADOS</strong> (Reliable Autonomic Distributed Object Store) — Ceph's core
+    storage layer. Block, file, and object storage are three different <em>client-facing</em> APIs built on
+    the same RADOS object store; that's why one Rook-Ceph cluster can serve all three from the same disks
+    instead of needing three separate storage systems.
+  </p>
+
+  <h2>CRUSH: placement without a lookup table</h2>
+  <p>
+    The mechanism that makes Ceph scale is <strong>CRUSH</strong> (Controlled Replication Under Scalable
+    Hashing). A naive distributed store needs a central metadata service mapping every object to its physical
+    location — a bottleneck and a single point of failure at scale. Ceph instead spreads objects across
+    <strong>placement groups (PGs)</strong> — logical shards of a pool, typically far fewer than the object
+    count — and CRUSH is a <em>deterministic algorithm</em> any client or daemon can run locally to compute
+    which OSDs host a given PG, from the cluster map plus a pseudo-random hash. No lookup, no round trip to a
+    metadata server: everyone computes the same answer independently.
+  </p>
+  <p>
+    CRUSH is also failure-domain aware. A pool's replication rule can say "keep each PG's replicas on
+    different <em>hosts</em>" (or racks, or zones) — so CRUSH will never place two replicas of the same PG on
+    the same node, which is exactly what makes losing an entire node survivable rather than just losing a
+    disk. When an OSD (or a whole node) goes down, CRUSH recomputes placement for the PGs that lost a replica
+    and the affected OSDs re-replicate data onto the new target automatically — Ceph's self-healing, with no
+    external orchestrator involved.
+  </p>
+
+  <h2>Try it: place objects with CRUSH, then fail a node</h2>
+  <p>
+    Below is a simplified 4-node, 2-<wbr />OSD-per-node cluster with a pool replicated 3x (replica count 3),
+    failure domain = host. Write a few objects and watch each one land as a placement group spread across
+    three <em>different nodes</em> — never two replicas on the same host. Then fail a node and watch CRUSH
+    recompute: PGs that lost a replica on the dead node get a new replica on a surviving node, automatically.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">CRUSH placement + node-failure simulator</div>
+    <div class="rk-layout">
+      <div>
+        <div class="rk-controls">
+          <button class="btn" id="rkWrite">Write object (new PG)</button>
+          <button class="btn ghost" id="rkReset">Reset cluster</button>
+        </div>
+        <p class="mono rk-meta">pool: <strong id="rkPoolName">rbd-pool</strong> · size: <strong>3</strong> · failure domain: <strong>host</strong></p>
+        <div class="rk-fail-list" id="rkFailList"></div>
+        <div class="rk-log" id="rkLog">Write a few objects, then try failing a node.</div>
+      </div>
+
+      <div class="rk-stage">
+        <div class="rk-nodes" id="rkNodes"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">What to notice</span>
+    Recovery only reaches for the disk that failed — the two healthy replicas of each affected PG are never
+    touched or re-copied, only the missing third is rebuilt onto a surviving node. And CRUSH never has to ask
+    a central service where anything is: every placement decision here is computed from the (small) cluster
+    map, which is why Ceph scales to thousands of OSDs without a metadata bottleneck.
+  </div>
+
+  <h2>What Rook actually exposes to your Pods</h2>
+  <p>
+    All of the above is invisible to an application developer, who just sees three flavors of Kubernetes
+    storage, all backed by the same Ceph cluster:
+  </p>
+  <table>
+    <thead><tr><th>Ceph client</th><th>Kubernetes-facing shape</th><th>Access mode</th><th>Typical use</th></tr></thead>
+    <tbody>
+      <tr><td>RBD (RADOS Block Device)</td><td><code>StorageClass</code> → dynamically provisioned PV</td><td><code>ReadWriteOnce</code></td><td>Database / StatefulSet volumes</td></tr>
+      <tr><td>CephFS</td><td><code>StorageClass</code> → PV backed by a shared filesystem</td><td><code>ReadWriteMany</code></td><td>Shared config, multi-writer workloads</td></tr>
+      <tr><td>RGW (object)</td><td><code>ObjectBucketClaim</code> → S3-compatible bucket + credentials</td><td>HTTP S3 API</td><td>App-level object storage, backups</td></tr>
+    </tbody>
+  </table>
+  <p>
+    Provisioning and mounting is handled by the separate <strong>Ceph-CSI</strong> driver, which Rook deploys
+    and wires up automatically — this is also the precise sense in which "Rook is not in the data path": once
+    a volume is mounted, your application's I/O goes straight from the Ceph-CSI driver (and ultimately the
+    client library) to the OSDs via CRUSH-computed placement, not through the Rook operator.
+  </p>
+
+  <h2>Where you'd reach for it</h2>
+  <ul>
+    <li><strong>Bare-metal and on-prem Kubernetes</strong> — the primary case: no cloud block-storage API
+      exists, and Rook turns a set of nodes' local disks into elastic, replicated storage.</li>
+    <li><strong>Needing block, file, and object from one system</strong> — instead of running three separate
+      storage stacks (e.g. an NFS server, a block CSI driver, and a MinIO cluster), one Rook-Ceph cluster
+      serves all three from the same pool of disks.</li>
+    <li><strong>Edge or air-gapped clusters</strong> — anywhere a managed cloud storage service simply isn't
+      available and self-hosted, self-healing storage is the only option.</li>
+  </ul>
+
+  <div class="callout warn">
+    <span class="callout-title">Often confused with</span>
+    <strong>Rook vs. Ceph:</strong> Ceph is the storage system; Rook is the Kubernetes operator that deploys,
+    heals, and upgrades it — you can run Ceph without Rook (the traditional way), but you can't run Rook
+    without Ceph. <strong>Rook vs. Longhorn / OpenEBS:</strong> those are simpler, Kubernetes-native block
+    storage systems built from scratch for the container era with a smaller operational footprint; Rook
+    brings the far more mature but heavier Ceph, and is the only one of the three offering block, file,
+    <em>and</em> object from one cluster. <strong>Rook vs. a cloud CSI driver (EBS, PD):</strong> those
+    provision storage the cloud already runs for you; Rook runs the storage cluster itself, inside your
+    Kubernetes cluster, which is the point when there's no cloud storage service to call.
+  </div>
+
+  <h2>Why it graduated</h2>
+  <p>
+    Rook entered CNCF Sandbox in January 2018 and reached <strong>Graduated</strong> status in October 2020 —
+    the first (and for a long time only) project in CNCF's storage category to do so. Its graduation reflected
+    a mature operator managing a genuinely production-proven storage engine (Ceph long predates Kubernetes and
+    powers storage at large scale independently of it), plus the project narrowing its focus over time to the
+    backend that mattered most in practice: Ceph. You'll meet Rook wherever a team runs Kubernetes without a
+    cloud provider's storage API underneath it — bare metal, edge, and on-prem platform teams are its home
+    turf.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. What does the Rook operator actually do once a Ceph cluster is running?</p>
+      <button class="quiz-option" data-val="a">It proxies every read and write between Pods and the OSDs.</button>
+      <button class="quiz-option" data-val="b">It reconciles the cluster's daemons toward the desired state declared in CRDs (CephCluster, CephBlockPool, ...) and heals it — it isn't in the data path.</button>
+      <button class="quiz-option" data-val="c">It replaces Ceph-CSI as the volume provisioner for every mounted PV.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. Why can any Ceph client compute where an object lives without asking a central metadata server?</p>
+      <button class="quiz-option" data-val="a">Ceph caches every object's location in etcd, which every client reads.</button>
+      <button class="quiz-option" data-val="b">Objects are placed round-robin in a fixed, unchanging order across OSDs.</button>
+      <button class="quiz-option" data-val="c">CRUSH is a deterministic algorithm — given the same cluster map, any client can independently compute which OSDs hold a placement group.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. A pool is replicated 3x with failure domain = host, across 4 nodes. One node fails. What happens to the placement groups that had a replica there?</p>
+      <button class="quiz-option" data-val="a">CRUSH computes a new OSD on one of the surviving nodes for the missing replica, and only that replica is rebuilt — the other two are untouched.</button>
+      <button class="quiz-option" data-val="b">All three replicas of every affected PG are recopied from scratch to be safe.</button>
+      <button class="quiz-option" data-val="c">Nothing — Ceph waits for an administrator to manually trigger recovery.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var NODE_IDS = ["node-a", "node-b", "node-c", "node-d"];
+  var CHIP_COLORS = ["#326ce5", "#17b6c4", "#e0871a", "#7c5cde", "#1f9d64", "#d8484b", "#0e8a95", "#1b3fa0", "#b06fd4"];
+
+  var els = {
+    write: document.getElementById("rkWrite"),
+    reset: document.getElementById("rkReset"),
+    log: document.getElementById("rkLog"),
+    nodes: document.getElementById("rkNodes"),
+    failList: document.getElementById("rkFailList")
+  };
+
+  var timers = [];
+  function schedule(fn, delay) { timers.push(setTimeout(fn, delay)); }
+  function clearTimers() { timers.forEach(function (t) { clearTimeout(t); }); timers = []; }
+
+  var cluster, pgs, pgCounter;
+
+  function freshCluster() {
+    var c = {};
+    NODE_IDS.forEach(function (nid, i) {
+      c[nid] = {
+        id: nid,
+        up: true,
+        osds: [
+          { id: "osd." + (i * 2), node: nid },
+          { id: "osd." + (i * 2 + 1), node: nid }
+        ]
+      };
+    });
+    return c;
+  }
+
+  function init() {
+    cluster = freshCluster();
+    pgs = [];
+    pgCounter = 0;
+    renderFailList();
+    render();
+    log("Write a few objects, then try failing a node.");
+  }
+
+  function renderFailList() {
+    els.failList.innerHTML = "";
+    NODE_IDS.forEach(function (nid) {
+      var btn = document.createElement("button");
+      btn.className = "btn";
+      btn.id = "rkFail-" + nid;
+      btn.textContent = "Fail " + nid;
+      btn.addEventListener("click", function () { failNode(nid); });
+      els.failList.appendChild(btn);
+    });
+  }
+
+  function upNodes() {
+    return NODE_IDS.filter(function (nid) { return cluster[nid].up; });
+  }
+
+  function osdWithFewestPgs(nid) {
+    var node = cluster[nid];
+    var best = node.osds[0];
+    node.osds.forEach(function (o) {
+      var count = pgs.reduce(function (n, pg) {
+        return n + pg.replicas.filter(function (r) { return r.osd === o.id; }).length;
+      }, 0);
+      var bestCount = pgs.reduce(function (n, pg) {
+        return n + pg.replicas.filter(function (r) { return r.osd === best.id; }).length;
+      }, 0);
+      if (count < bestCount) best = o;
+    });
+    return best;
+  }
+
+  function pickNodesForNewPg(pgIndex) {
+    var up = upNodes();
+    var rotated = up.slice(pgIndex % up.length).concat(up.slice(0, pgIndex % up.length));
+    return rotated.slice(0, Math.min(3, up.length));
+  }
+
+  function writeObject() {
+    if (upNodes().length < 1) { log("No healthy nodes left — cannot place new objects."); return; }
+    var pgIndex = pgCounter++;
+    var nodes = pickNodesForNewPg(pgIndex);
+    var replicas = nodes.map(function (nid, i) {
+      var osd = osdWithFewestPgs(nid);
+      return { osd: osd.id, node: nid, primary: i === 0 };
+    });
+    var pg = { id: pgIndex, color: CHIP_COLORS[pgIndex % CHIP_COLORS.length], replicas: replicas };
+    pgs.push(pg);
+    var under = replicas.length < 3;
+    log("PG " + pgIndex + " placed across " + replicas.map(function (r) { return r.node; }).join(", ") +
+      (under ? " — under-replicated (" + replicas.length + "/3, not enough healthy nodes)." : " (3/3 replicas)."));
+    render();
+  }
+
+  function failNode(nid) {
+    var node = cluster[nid];
+    if (!node.up) return;
+    node.up = false;
+    document.getElementById("rkFail-" + nid).disabled = true;
+    render();
+    log(nid + " went down — " + node.osds.map(function (o) { return o.id; }).join(", ") + " are unreachable. Recomputing placement for affected PGs...");
+
+    schedule(function () { recover(nid); }, 1400);
+  }
+
+  function recover(deadNode) {
+    var healthyNodes = upNodes();
+    var affected = pgs.filter(function (pg) {
+      return pg.replicas.some(function (r) { return r.node === deadNode; });
+    });
+
+    affected.forEach(function (pg) {
+      pg.replicas = pg.replicas.filter(function (r) { return r.node !== deadNode; });
+      var usedNodes = pg.replicas.map(function (r) { return r.node; });
+      var candidate = healthyNodes.filter(function (n) { return usedNodes.indexOf(n) === -1; })[0];
+      if (candidate && pg.replicas.length < 3) {
+        var osd = osdWithFewestPgs(candidate);
+        pg.replicas.push({ osd: osd.id, node: candidate, primary: pg.replicas.length === 0, recovering: true });
+      }
+    });
+
+    render();
+    if (affected.length) {
+      log(affected.length + " PG(s) rebuilt a replacement replica on a surviving node. The two untouched replicas were never re-copied.");
+    } else {
+      log(deadNode + " held no placement groups yet — nothing to recover.");
+    }
+
+    schedule(function () {
+      affected.forEach(function (pg) {
+        pg.replicas.forEach(function (r) { delete r.recovering; });
+      });
+      render();
+    }, 1600);
+  }
+
+  function render() {
+    els.nodes.innerHTML = "";
+    NODE_IDS.forEach(function (nid) {
+      var node = cluster[nid];
+      var div = document.createElement("div");
+      div.className = "rk-node" + (node.up ? "" : " down");
+      var title = document.createElement("div");
+      title.className = "rk-node-title";
+      title.innerHTML = '<span class="mono">' + nid + '</span><span class="rk-node-status">' + (node.up ? "up" : "down") + "</span>";
+      div.appendChild(title);
+
+      node.osds.forEach(function (o) {
+        var osdDiv = document.createElement("div");
+        osdDiv.className = "rk-osd";
+        var idDiv = document.createElement("div");
+        idDiv.className = "rk-osd-id";
+        idDiv.textContent = o.id;
+        osdDiv.appendChild(idDiv);
+        var chips = document.createElement("div");
+        chips.className = "rk-chips";
+        pgs.forEach(function (pg) {
+          pg.replicas.forEach(function (r) {
+            if (r.osd !== o.id) return;
+            var chip = document.createElement("span");
+            chip.className = "rk-chip shown" + (r.primary ? " primary" : "") + (r.recovering ? " recovering" : "");
+            chip.style.background = pg.color;
+            chip.textContent = "pg" + pg.id + (r.primary ? "p" : "");
+            chips.appendChild(chip);
+          });
+        });
+        osdDiv.appendChild(chips);
+        div.appendChild(osdDiv);
+      });
+
+      els.nodes.appendChild(div);
+    });
+
+    if (!pgs.length) {
+      var empty = document.createElement("p");
+      empty.className = "rk-empty";
+      empty.textContent = "No objects written yet.";
+      els.nodes.appendChild(empty);
+    }
+  }
+
+  function log(msg) { els.log.textContent = msg; }
+
+  els.write.addEventListener("click", writeObject);
+  els.reset.addEventListener("click", function () { clearTimers(); init(); });
+
+  init();
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
