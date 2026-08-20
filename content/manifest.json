@@ -320,7 +320,7 @@
       "summary": "Storage orchestration for Kubernetes — Ceph as a self-managing operator.",
       "prerequisites": ["kubernetes"],
       "file": "rook.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "cubefs",
