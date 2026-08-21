@@ -1,0 +1,490 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CubeFS — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring: write-path tracer. ---- */
+  .cf-modes { display: flex; gap: var(--sp-2); margin-bottom: var(--sp-4); flex-wrap: wrap; }
+  .cf-mode-btn {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    padding: var(--sp-2) var(--sp-4);
+    border-radius: var(--r-pill);
+    border: 1px solid var(--border-strong);
+    background: var(--surface-2);
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .cf-mode-btn.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+
+  .cf-pipeline {
+    display: flex;
+    align-items: stretch;
+    gap: var(--sp-2);
+    overflow-x: auto;
+    padding: var(--sp-2) 0 var(--sp-4);
+  }
+  .cf-node {
+    flex: 1 1 0;
+    min-width: 128px;
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-3);
+    text-align: center;
+    transition: border-color .25s, background .25s, transform .2s, box-shadow .25s;
+  }
+  .cf-node .cf-node-label {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    color: var(--text-muted);
+    margin-bottom: 0.3em;
+  }
+  .cf-node .cf-node-detail { font-size: var(--fs-xs); color: var(--text-faint); min-height: 2.4em; }
+  .cf-node.active {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+  }
+  .cf-node.done { border-color: var(--signal-green); }
+  .cf-arrow { align-self: center; color: var(--text-faint); font-size: var(--fs-lg); flex: 0 0 auto; }
+
+  .cf-shards { display: flex; gap: var(--sp-2); justify-content: center; flex-wrap: wrap; margin-top: var(--sp-2); }
+  .cf-shard {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 700;
+    padding: 0.2em 0.55em;
+    border-radius: var(--r-sm);
+    opacity: 0;
+    transform: scale(0.7);
+    transition: opacity .3s, transform .3s;
+  }
+  .cf-shard.shown { opacity: 1; transform: scale(1); }
+  .cf-shard.data { background: var(--k8s-blue); color: var(--on-accent); }
+  .cf-shard.parity { background: var(--signal-amber); color: var(--on-accent); }
+  .cf-shard.replica { background: var(--cloud-cyan); color: var(--on-accent); }
+
+  .cf-log {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    min-height: 4.6em;
+    line-height: 1.7;
+    background: var(--surface-2);
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3);
+  }
+  .cf-log .line { opacity: 0; transition: opacity .25s; }
+  .cf-log .line.shown { opacity: 1; }
+
+  .cf-controls { display: flex; gap: var(--sp-2); margin-top: var(--sp-4); flex-wrap: wrap; }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Storage &amp; Databases · Sub-topic 32 / 36</p>
+  <h1>CubeFS</h1>
+  <p class="lead">
+    Rook's answer to "who runs the storage layer" was: wrap Ceph, a system where block, file, and object are
+    three client APIs over one shared object store (RADOS). CubeFS starts from a different design question
+    entirely — one JD.com actually had at exabyte scale: can <em>metadata</em> and <em>data</em> be split into
+    two independently-scaling clusters, so that browsing a directory with a million files never waits on a
+    slow disk, and a hot dataset can automatically cool from replicated storage into cheaper erasure-coded
+    storage without the application noticing? CubeFS is a distributed storage system built around exactly that
+    separation, exposed through <strong>POSIX, HDFS, and S3</strong> APIs over the same underlying data.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    CubeFS is a <strong>cloud-native distributed file and object storage system</strong>, born inside JD.com
+    (China's second-largest e-commerce company) to run its own storage at exabyte scale, open-sourced in 2019.
+    Its defining architectural move is a hard split between a <strong>metadata subsystem</strong> (who owns
+    which inode, what's in a directory) and a <strong>data subsystem</strong> (the actual bytes) — each its own
+    cluster of nodes, scaled and tuned independently. Data itself can live in one of two storage engines:
+    multi-replica for hot, latency-sensitive workloads, or Reed-Solomon erasure coding (via a subsystem called
+    <strong>Blobstore</strong>) for cold data at a fraction of the storage cost.
+  </div>
+
+  <h2>The problem: metadata and data don't scale the same way</h2>
+  <p>
+    A single POSIX filesystem namespace with billions of files has two very different bottlenecks. Metadata
+    operations — <code>stat</code>, <code>readdir</code>, creating a file, renaming — are small, latency-critical,
+    and need to be strongly consistent: two clients renaming the same file can't both "win." Data operations
+    are the opposite: they're about raw throughput moving potentially huge, sequential byte streams, and they
+    tolerate more relaxed placement. Traditional network filesystems (and, in a different way, even
+    <a href="rook.html">Rook/Ceph</a>'s RADOS layer) treat data placement as the one hard problem and let
+    metadata ride along inside the same object model. CubeFS instead treats metadata as a first-class,
+    separately-scaled service — the bet being that at JD.com's scale (hundreds of petabytes, later growing past
+    an exabyte, across 200+ adopting companies today), keeping the entire live metadata working set in memory
+    across a dedicated fleet is what keeps a billion-file namespace fast, while data nodes are free to scale
+    out purely for capacity and throughput.
+  </p>
+
+  <h2>Three subsystems, three clusters</h2>
+  <p>A CubeFS deployment is three independently-scaled clusters of daemons, all coordinated through Raft:</p>
+  <ul>
+    <li><strong>Resource Management (Master)</strong> — a small cluster of Master nodes that owns cluster-wide
+      bookkeeping: creating and tracking <span class="term" title="A CubeFS volume is the top-level namespace a client mounts — the unit of quota, access control, and multi-tenancy, backed by many metadata and data partitions spread across the cluster.">volumes</span>,
+      allocating new metadata and data partitions, health-checking every MetaNode and DataNode, and
+      rebalancing. Masters replicate their own state via Raft and persist it to
+      <span class="term" title="An embedded key-value store (LSM-tree based) used here purely as the Master's durable state backend — not part of the client-facing data path.">RocksDB</span>;
+      only the Raft leader serves writes.</li>
+    <li><strong>Metadata Subsystem (MetaNode)</strong> — a fleet of MetaNode processes, each hosting many
+      <strong>Meta Partitions</strong>: a Meta Partition owns a contiguous range of inode IDs and keeps that
+      range's <em>inode B-tree</em> (file attributes) and <em>dentry B-tree</em> (directory entries, i.e. name
+      → inode mappings) entirely in memory for speed, checkpointed to disk. Each Meta Partition is itself
+      replicated across 3 MetaNodes via Raft (CubeFS calls this <strong>Multi-Raft</strong> — many small,
+      independent Raft groups running concurrently rather than one big one) — so a namespace with a huge
+      inode count isn't one bottlenecked shard, it's however many partitions the Master has split it into,
+      each with its own leader and its own quorum.</li>
+    <li><strong>Data Subsystem (DataNode / BlobNode)</strong> — where bytes actually live, in one of two
+      engines described below.</li>
+  </ul>
+
+  <h2>Two data engines: replicate hot, erasure-code cold</h2>
+  <p>
+    This is CubeFS's other defining idea: data storage isn't one-size-fits-all, and the two engines can be
+    used side by side, even for the same volume as data ages.
+  </p>
+  <table>
+    <thead><tr><th>Engine</th><th>Unit</th><th>Redundancy</th><th>Optimized for</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Replica subsystem</strong> (DataNode)</td><td>Data Partition, replicated across a set of DataNodes</td><td>2 or 3 full copies</td><td>Hot data — low latency, high throughput, cheap recovery (just copy)</td></tr>
+      <tr><td><strong>Erasure-code subsystem</strong> (Blobstore / BlobNode)</td><td>a stripe of fixed-size blocks across BlobNodes</td><td>Reed-Solomon <em>N</em> data + <em>M</em> parity shards</td><td>Cold data — same durability at a fraction of the raw storage cost, at the price of costlier recovery</td></tr>
+    </tbody>
+  </table>
+  <p>
+    A volume can be configured to store data purely as replicas, purely as erasure-coded blobs, or — the
+    common production pattern — start as replicas while data is hot and being actively written/read, then let
+    a background migration process demote cold, rarely-touched data into Blobstore once it stops being hot,
+    reclaiming most of that 3x replication overhead automatically instead of the application ever managing
+    tiers itself.
+  </p>
+
+  <h2>Multi-protocol: the same bytes, three doors in</h2>
+  <p>
+    Unlike a storage system that's "S3-native" or "POSIX-native" and treats the others as bolt-on gateways,
+    CubeFS was designed so <strong>POSIX, HDFS, and S3</strong> clients can address the same underlying
+    volume — a file written via a mounted POSIX client can be listed and read back through the S3-compatible
+    object API, and vice versa. In practice:
+  </p>
+  <ul>
+    <li><strong>POSIX</strong> — via FUSE (<code>cubefs-client</code>) or a kernel bypass client, mounted like
+      any local filesystem; the path most application code takes with zero changes.</li>
+    <li><strong>HDFS-compatible</strong> — implements the Hadoop <code>FileSystem</code> interface, so existing
+      big-data jobs (Spark, Hive, Flink) can point at CubeFS instead of a real HDFS cluster with no code change,
+      while gaining separated compute/storage scaling.</li>
+    <li><strong>S3-compatible</strong> — an object gateway speaking the AWS S3 API, so tools built against S3
+      SDKs work unmodified.</li>
+  </ul>
+  <p>
+    This is a big part of why CubeFS shows up under both "big data" and "AI/ML" workloads: a training pipeline
+    can read a dataset over the POSIX mount for maximum throughput while a separate analytics job queries the
+    exact same data over S3, with no export/copy step between them.
+  </p>
+
+  <h2>Try it: trace a file write through the cluster</h2>
+  <p>
+    Pick a data engine, then write a file and watch it move through the three subsystems. In replica mode, the
+    file's bytes land as full copies on a handful of DataNodes. In erasure-coded mode, they're striped into
+    data shards plus parity shards spread across BlobNodes — any single shard can be lost and reconstructed
+    from the rest.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">CubeFS write-path tracer</div>
+
+    <div class="cf-modes">
+      <button class="cf-mode-btn active" id="cfModeReplica">Replica engine (hot)</button>
+      <button class="cf-mode-btn" id="cfModeEc">Erasure-coded engine (cold, 4+2)</button>
+    </div>
+
+    <div class="cf-pipeline" id="cfPipeline"></div>
+
+    <div class="cf-log" id="cfLog"></div>
+
+    <div class="cf-controls">
+      <button class="btn" id="cfWrite">Write /data/report.parquet</button>
+      <button class="btn ghost" id="cfReset">Reset</button>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">What to notice</span>
+    The Master is only ever consulted to <em>locate or allocate</em> partitions — it never sees the file's
+    bytes. Metadata (the inode + the directory entry) is written and Raft-committed on the MetaNode fleet
+    completely independently of where the data itself ends up, which is exactly the separation this whole
+    architecture is built around. And notice erasure coding doesn't reduce durability versus 3x replication —
+    a 4+2 stripe also tolerates 2 losses — it just does it in 1.5x the original size instead of 3x.
+  </div>
+
+  <h2>Where you'd reach for it</h2>
+  <ul>
+    <li><strong>Big-data platforms replacing HDFS</strong> — get HDFS API compatibility with separated
+      compute/storage scaling and erasure-coded cold tiers, without re-architecting Spark/Hive/Flink jobs.</li>
+    <li><strong>AI/ML training and model storage</strong> — high-throughput POSIX access to large datasets and
+      checkpoints, with the same data also reachable over S3 for other tooling.</li>
+    <li><strong>Kubernetes-native shared storage at large scale</strong> — a CSI driver exposes CubeFS volumes
+      as <code>ReadWriteMany</code> PVs, useful anywhere many Pods need to share a filesystem across a large,
+      cost-sensitive dataset.</li>
+    <li><strong>Database/middleware storage-compute separation</strong> — using CubeFS as the durable backing
+      store so stateless compute nodes can be scaled or replaced independently.</li>
+  </ul>
+
+  <div class="callout warn">
+    <span class="callout-title">Often confused with</span>
+    <strong>CubeFS vs. Rook/Ceph:</strong> both are self-hosted, self-healing distributed storage for
+    Kubernetes, but Ceph's RADOS is one object store underneath block/file/object clients, while CubeFS
+    explicitly separates metadata (MetaNode/Raft) from data (DataNode or Blobstore) as different clusters, and
+    leads with HDFS/S3/POSIX multi-protocol access to the same volume rather than three separate client APIs.
+    <strong>CubeFS vs. HDFS:</strong> CubeFS's HDFS compatibility layer is a drop-in replacement, but under the
+    hood it isn't Java/JVM-based, separates metadata differently (no single active NameNode to fail over), and
+    adds erasure coding and S3/POSIX access HDFS doesn't natively have. <strong>CubeFS vs. MinIO:</strong>
+    MinIO is S3-object-storage-only; CubeFS's S3 API is one of three doors into the same POSIX-capable
+    filesystem, useful when you need both a real mountable filesystem and object access to the same data.
+  </div>
+
+  <h2>Why it graduated</h2>
+  <p>
+    CubeFS entered CNCF as a Sandbox project in 2020, reached Incubating in mid-2022, and <strong>graduated in
+    January 2025</strong> — CNCF's announcement cited over 200 adopting organizations managing roughly 350
+    petabytes of data in production, spanning e-commerce (its JD.com origin), fintech, telecom, and AI/big-data
+    platforms. Its graduation reflects a storage architecture proven at genuinely exabyte-adjacent scale before
+    it was ever open-sourced, plus a design — separated metadata/data scaling, dual hot/cold storage engines,
+    and true multi-protocol access — that answers problems Ceph-based storage doesn't optimize for as directly:
+    huge flat namespaces and mixed big-data/AI access patterns over the same dataset.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. Why does CubeFS run metadata (MetaNode) and data (DataNode/BlobNode) as separate clusters instead of one unified object store?</p>
+      <button class="quiz-option" data-val="a">Because Kubernetes requires storage systems to have at least two clusters.</button>
+      <button class="quiz-option" data-val="b">Metadata operations (stat, readdir, rename) are small, latency-critical, and benefit from being kept in memory across a dedicated fleet, while data scaling is purely about throughput and capacity — separating them lets each scale independently.</button>
+      <button class="quiz-option" data-val="c">Because erasure coding is only possible if metadata lives on a different cluster than data.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. What does the Master node actually do when a client writes a new file?</p>
+      <button class="quiz-option" data-val="a">It streams the file's bytes through itself before forwarding them to a DataNode.</button>
+      <button class="quiz-option" data-val="b">It re-encodes the file into erasure-coded shards.</button>
+      <button class="quiz-option" data-val="c">It only handles allocation/lookup of the metadata and data partitions involved — it never sees the file's actual bytes.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. What's the main advantage of moving cold data from the replica engine into the erasure-coded (Blobstore) engine?</p>
+      <button class="quiz-option" data-val="a">Similar durability (tolerating multiple shard losses) at much lower storage overhead than keeping 3 full replicas.</button>
+      <button class="quiz-option" data-val="b">It makes reads faster than the replica engine for all workloads.</button>
+      <button class="quiz-option" data-val="c">It removes the need for a Master node to track that data's location.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var els = {
+    modeReplica: document.getElementById("cfModeReplica"),
+    modeEc: document.getElementById("cfModeEc"),
+    pipeline: document.getElementById("cfPipeline"),
+    log: document.getElementById("cfLog"),
+    write: document.getElementById("cfWrite"),
+    reset: document.getElementById("cfReset")
+  };
+
+  var mode = "replica"; // or "ec"
+  var writing = false;
+  var timers = [];
+  function schedule(fn, delay) { timers.push(setTimeout(fn, delay)); }
+  function clearTimers() { timers.forEach(function (t) { clearTimeout(t); }); timers = []; }
+
+  function stageNodes() {
+    if (mode === "replica") {
+      return [
+        { id: "client", label: "Client (POSIX/S3/HDFS)", detail: "opens /data/report.parquet" },
+        { id: "master", label: "Master", detail: "look up volume, allocate a Data Partition" },
+        { id: "meta", label: "MetaNode", detail: "Raft-commit inode + dentry" },
+        { id: "data", label: "DataNode ×3", detail: "write 3 full replicas" }
+      ];
+    }
+    return [
+      { id: "client", label: "Client (POSIX/S3/HDFS)", detail: "opens /data/report.parquet" },
+      { id: "master", label: "Master", detail: "look up volume, mark data as cold" },
+      { id: "meta", label: "MetaNode", detail: "Raft-commit inode + dentry" },
+      { id: "data", label: "BlobNode ×6", detail: "stripe into 4 data + 2 parity shards" }
+    ];
+  }
+
+  function renderPipeline() {
+    var nodes = stageNodes();
+    els.pipeline.innerHTML = "";
+    nodes.forEach(function (n, i) {
+      var div = document.createElement("div");
+      div.className = "cf-node";
+      div.id = "cfNode-" + n.id;
+      div.innerHTML = '<div class="cf-node-label">' + n.label + '</div><div class="cf-node-detail">' + n.detail + '</div><div class="cf-shards" id="cfShards-' + n.id + '"></div>';
+      els.pipeline.appendChild(div);
+      if (i < nodes.length - 1) {
+        var arrow = document.createElement("div");
+        arrow.className = "cf-arrow";
+        arrow.textContent = "→";
+        els.pipeline.appendChild(arrow);
+      }
+    });
+  }
+
+  function clearActive() {
+    stageNodes().forEach(function (n) {
+      var el = document.getElementById("cfNode-" + n.id);
+      if (el) el.classList.remove("active", "done");
+    });
+  }
+
+  function logLines(lines) {
+    els.log.innerHTML = "";
+    lines.forEach(function () {
+      var d = document.createElement("div");
+      d.className = "line";
+      els.log.appendChild(d);
+    });
+  }
+
+  function showLine(i, text) {
+    var line = els.log.children[i];
+    if (!line) return;
+    line.textContent = text;
+    line.classList.add("shown");
+  }
+
+  function setActive(id, prevId) {
+    if (prevId) {
+      var prev = document.getElementById("cfNode-" + prevId);
+      if (prev) { prev.classList.remove("active"); prev.classList.add("done"); }
+    }
+    var el = document.getElementById("cfNode-" + id);
+    if (el) el.classList.add("active");
+  }
+
+  function fillShards(nodeId, shards) {
+    var wrap = document.getElementById("cfShards-" + nodeId);
+    if (!wrap) return;
+    wrap.innerHTML = "";
+    shards.forEach(function (s) {
+      var span = document.createElement("span");
+      span.className = "cf-shard " + s.cls;
+      span.textContent = s.text;
+      wrap.appendChild(span);
+      setTimeout(function () { span.classList.add("shown"); }, 30);
+    });
+  }
+
+  function writeFile() {
+    if (writing) return;
+    writing = true;
+    clearTimers();
+    clearActive();
+    var replicaMode = mode === "replica";
+    var lines = replicaMode
+      ? [
+          "client: open(\"/data/report.parquet\", O_CREAT)",
+          "master: volume \"prod-vol\" found → allocate Data Partition dp-118 on 3 DataNodes",
+          "meta: MetaPartition mp-42 Raft-commits inode #918231 + dentry \"report.parquet\"",
+          "data: 3 full replicas written to dp-118 (dn-07, dn-13, dn-21) — write acked after quorum"
+        ]
+      : [
+          "client: open(\"/data/report.parquet\", O_CREAT)",
+          "master: volume \"cold-archive\" found → allocate an erasure-coded stripe (Blobstore)",
+          "meta: MetaPartition mp-42 Raft-commits inode #918231 + dentry \"report.parquet\"",
+          "data: striped 4+2 across 6 BlobNodes — any 2 shards can be lost and reconstructed"
+        ];
+    logLines(lines);
+
+    var order = ["client", "master", "meta", "data"];
+    var delay = 0;
+    var step = 900;
+    order.forEach(function (id, i) {
+      schedule(function () {
+        setActive(id, order[i - 1]);
+        showLine(i, lines[i]);
+        if (id === "data") {
+          if (replicaMode) {
+            fillShards("data", [
+              { cls: "replica", text: "dn-07" },
+              { cls: "replica", text: "dn-13" },
+              { cls: "replica", text: "dn-21" }
+            ]);
+          } else {
+            fillShards("data", [
+              { cls: "data", text: "d0" }, { cls: "data", text: "d1" },
+              { cls: "data", text: "d2" }, { cls: "data", text: "d3" },
+              { cls: "parity", text: "p0" }, { cls: "parity", text: "p1" }
+            ]);
+          }
+        }
+      }, delay);
+      delay += step;
+    });
+
+    schedule(function () {
+      document.getElementById("cfNode-data").classList.add("done");
+      writing = false;
+    }, delay);
+  }
+
+  function resetAll() {
+    clearTimers();
+    writing = false;
+    clearActive();
+    els.log.innerHTML = "";
+    stageNodes().forEach(function (n) {
+      var w = document.getElementById("cfShards-" + n.id);
+      if (w) w.innerHTML = "";
+    });
+  }
+
+  function setMode(next) {
+    if (mode === next) return;
+    mode = next;
+    els.modeReplica.classList.toggle("active", mode === "replica");
+    els.modeEc.classList.toggle("active", mode === "ec");
+    renderPipeline();
+    resetAll();
+  }
+
+  els.modeReplica.addEventListener("click", function () { setMode("replica"); });
+  els.modeEc.addEventListener("click", function () { setMode("ec"); });
+  els.write.addEventListener("click", writeFile);
+  els.reset.addEventListener("click", resetAll);
+
+  renderPipeline();
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
