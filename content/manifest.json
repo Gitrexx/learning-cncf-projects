@@ -330,7 +330,7 @@
       "summary": "A cloud-native distributed file and object store (metadata/data separation).",
       "prerequisites": [],
       "file": "cubefs.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "tikv",
