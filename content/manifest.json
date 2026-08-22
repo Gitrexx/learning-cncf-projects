@@ -340,7 +340,7 @@
       "summary": "A distributed transactional key-value database (multi-Raft, MVCC).",
       "prerequisites": ["etcd"],
       "file": "tikv.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "vitess",
