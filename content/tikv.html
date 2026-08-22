@@ -1,0 +1,443 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TiKV — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring: keyspace / region-split visualizer. ---- */
+  .tk-keyspace {
+    display: flex;
+    align-items: stretch;
+    gap: 3px;
+    height: 64px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    overflow: hidden;
+    background: var(--surface-2);
+    margin-bottom: var(--sp-3);
+  }
+  .tk-region {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 64px;
+    background: var(--surface);
+    border-right: 1px solid var(--border-strong);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    transition: background .3s, flex-basis .4s;
+    cursor: default;
+  }
+  .tk-region:last-child { border-right: none; }
+  .tk-region .tk-r-id {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    color: var(--text-muted);
+  }
+  .tk-region .tk-r-range { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-faint); }
+  .tk-region .tk-r-fill {
+    position: absolute;
+    left: 0; bottom: 0; width: 100%;
+    background: color-mix(in srgb, var(--accent) 28%, transparent);
+    transition: height .3s;
+  }
+  .tk-region.splitting { animation: tk-flash 0.5s ease-in-out 2; }
+  @keyframes tk-flash { 0%,100% { background: var(--surface); } 50% { background: color-mix(in srgb, var(--signal-amber) 25%, var(--surface)); } }
+
+  .tk-groups { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin-top: var(--sp-4); }
+  .tk-group {
+    flex: 1 1 220px;
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: var(--sp-3);
+  }
+  .tk-group-title { font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 700; color: var(--text-muted); margin-bottom: var(--sp-2); }
+  .tk-replicas { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+  .tk-replica {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 700;
+    padding: 0.25em 0.6em;
+    border-radius: var(--r-pill);
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    color: var(--text-muted);
+  }
+  .tk-replica.leader { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .tk-replica.follower { color: var(--text-muted); }
+
+  .tk-log {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    min-height: 3.4em;
+    line-height: 1.7;
+    background: var(--surface-2);
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3);
+    margin-top: var(--sp-3);
+  }
+
+  .tk-controls { display: flex; gap: var(--sp-2); margin-top: var(--sp-4); flex-wrap: wrap; }
+  .tk-stat { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); margin-top: var(--sp-2); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Storage &amp; Databases · Sub-topic 33 / 36</p>
+  <h1>TiKV</h1>
+  <p class="lead">
+    <a href="etcd.html">etcd</a> proved that a small, strongly-consistent Raft-backed key-value store is exactly
+    what a control plane needs — but etcd deliberately stays small: a few MB of cluster state, one Raft group,
+    not built to hold your application's data. TiKV asks a different question: what if you took that same
+    "Raft-replicated key-value store" idea and built it to scale *horizontally* to terabytes of data, with real
+    distributed <strong>transactions</strong> across keys that might live on completely different machines? TiKV
+    is a distributed, transactional key-value database — originally built as the storage engine underneath
+    <span class="term" title="TiDB is a MySQL-compatible distributed SQL database that layers a SQL engine on top of TiKV, translating tables/rows into TiKV key-value ranges.">TiDB</span>,
+    now a general-purpose store used on its own by systems that need horizontally-scalable ACID transactions.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    TiKV is a <strong>distributed transactional key-value database</strong> built in Rust at PingCAP, inspired by
+    Google's <strong>Spanner</strong> (globally-distributed transactions) and <strong>Percolator</strong>
+    (transactions layered on a distributed store), but without depending on a distributed filesystem the way
+    Bigtable does on GFS. Data is automatically sharded into <strong>Regions</strong>, each replicated via its
+    own independent <strong>Raft group</strong> — the same consensus algorithm etcd uses, but run as thousands of
+    small, parallel groups instead of one. A separate <strong>Placement Driver (PD)</strong> cluster (itself
+    Raft-replicated, and etcd-flavored in spirit) tracks where every Region lives and continuously rebalances
+    the cluster. TiKV graduated CNCF in September 2020 — the 12th project to do so.
+  </div>
+
+  <h2>The problem: etcd-style consistency doesn't scale past one Raft group</h2>
+  <p>
+    Raft gives you strong consistency, but every write has to go through one leader and get acknowledged by a
+    quorum of followers before it's committed — that's inherently a serial bottleneck for <em>that group</em>.
+    etcd embraces this limit: it caps how much data it holds (multi-GB clusters are explicitly discouraged) and
+    never needs more than one group, because control-plane state is small. A general-purpose database can't make
+    that trade — you might have terabytes of data and need write throughput far beyond what one Raft group's
+    leader can push through. TiKV's answer is to stop treating "the keyspace" as one thing: it's sliced into
+    many contiguous key ranges called <strong>Regions</strong>, each around 96&nbsp;MiB by default, each with its
+    <em>own</em> 3-way-replicated Raft group and its own leader. A cluster with a billion keys might have tens of
+    thousands of Regions spread across every node, each independently accepting writes through its own leader —
+    so total write throughput scales with the number of Regions (and nodes), not with the throughput ceiling of
+    a single Raft group.
+  </p>
+
+  <h2>Three roles: TiKV nodes, Placement Driver, and the client</h2>
+  <ul>
+    <li><strong>TiKV nodes (stores)</strong> — each runs a local <span class="term" title="RocksDB is an embedded LSM-tree key-value store (originated at Facebook, forked from LevelDB). TiKV uses it as the on-disk engine underneath every Region's Raft log and key-value data.">RocksDB</span>
+      instance holding the raw bytes for every Region replica it hosts, plus the <strong>raftstore</strong>
+      layer that runs one Raft state machine per Region replica, batches Raft messages between nodes, and
+      applies committed log entries into RocksDB.</li>
+    <li><strong>Placement Driver (PD)</strong> — a small Raft-replicated cluster (structurally similar to an
+      etcd cluster) that is the brain, not the data path: it hands out globally-unique, strictly-increasing
+      timestamps (the <span class="term" title="PD's Timestamp Oracle issues monotonically increasing timestamps used to order transactions cluster-wide — the same role Spanner's TrueTime plays, but via a central oracle instead of synchronized clocks.">Timestamp Oracle, TSO</span>),
+      stores the Region → node mapping, and constantly decides how to <strong>schedule</strong> the cluster:
+      split a Region that's grown too large, merge two that shrank, move a replica off an overloaded node, or
+      transfer a Region's Raft leadership to spread hot load evenly.</li>
+    <li><strong>Client</strong> — talks gRPC directly to whichever TiKV node currently holds the Region's Raft
+      leader (looking that up from PD, and caching it), so reads and writes go straight to the right node with
+      no proxy hop in the common case.</li>
+  </ul>
+
+  <h2>MVCC: every key carries a timestamp</h2>
+  <p>
+    TiKV gives every logical key a whole family of physical versions rather than overwriting in place. Internally
+    a key is stored as <code>(user_key, timestamp) → value</code>, ordered so all versions of a key sit next to
+    each other, newest first. A read at timestamp <em>T</em> just seeks to the first version whose timestamp is
+    ≤ <em>T</em> — this is what lets TiKV give a transaction a single consistent <strong>snapshot</strong> of the
+    whole keyspace as of one timestamp, even while other transactions are concurrently writing new versions
+    elsewhere, and it's also what makes the distributed transaction protocol below possible: a transaction can
+    write "tentative" versions during its first phase without ever blocking or corrupting a reader's snapshot of
+    the last committed version.
+  </p>
+
+  <h2>Distributed transactions: an optimized Percolator</h2>
+  <p>
+    Committing a transaction that touches keys scattered across many Regions (and therefore many different Raft
+    groups, possibly on different nodes) needs its own coordination — Raft alone only guarantees consistency
+    <em>within</em> one Region. TiKV adopts Google's <strong>Percolator</strong> model, a two-phase-commit
+    scheme, using three logical column families:
+  </p>
+  <table>
+    <thead><tr><th>Column family</th><th>Holds</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Lock</strong></td><td>Whether a key currently has an in-flight transaction's lock on it, and where to find that transaction's primary key</td></tr>
+      <tr><td><strong>Default</strong></td><td>The actual versioned values</td></tr>
+      <tr><td><strong>Write</strong></td><td>A record of when a key's write was committed, pointing at the version in Default</td></tr>
+    </tbody>
+  </table>
+  <p>
+    One key involved in the transaction is picked as the <strong>primary</strong>; every other key is a
+    <strong>secondary</strong> and stores a pointer back to the primary. Commit runs in two phases:
+  </p>
+  <ol>
+    <li><strong>Prewrite</strong> — for every key, write its tentative value and place a lock recording the
+      primary's location; a prewrite fails the whole transaction if it finds a conflicting lock or a newer
+      committed version already there (first-committer-wins). TiKV parallelizes this across batches of keys
+      rather than requiring the primary to go first.</li>
+    <li><strong>Commit</strong> — once every key prewrites successfully, the client commits the <em>primary</em>
+      key first (this single write is the transaction's real commit point), then asynchronously commits the
+      secondaries and clears their locks.</li>
+  </ol>
+  <p>
+    The trick that makes this safe without a lingering coordinator: if a reader runs into a lock left by an
+    unfinished transaction, it doesn't just wait — it looks up that lock's primary key. If the primary is
+    already committed, the transaction is known to have succeeded, so the reader (or anyone) can roll the
+    secondary forward on the spot; if the primary was never committed, the whole transaction is rolled back the
+    same way. No process needs to stay alive coordinating a transaction to completion — any client that stumbles
+    onto a stale lock can resolve it.
+  </p>
+
+  <h2>Try it: grow the keyspace and watch Regions split</h2>
+  <p>
+    Below is one simplified Region's key range. Insert data and watch it fill up; once it crosses the split
+    threshold, PD splits it into two Regions, each getting its own 3-replica Raft group with an elected leader.
+    Rebalance to see PD move a replica off an overloaded node.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">TiKV Region-split &amp; Raft-group visualizer</div>
+
+    <div class="tk-keyspace" id="tkKeyspace"></div>
+    <div class="tk-stat" id="tkStat">1 region · ~0 MiB</div>
+
+    <div class="tk-groups" id="tkGroups"></div>
+
+    <div class="tk-log" id="tkLog">Insert data to see PD split the Region and start a new Raft group…</div>
+
+    <div class="tk-controls">
+      <button class="btn" id="tkInsert">Insert ~20 MiB of writes</button>
+      <button class="btn ghost" id="tkRebalance">PD: rebalance a replica</button>
+      <button class="btn ghost" id="tkReset">Reset</button>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">What to notice</span>
+    Every Region gets its <em>own</em> Raft group and its own leader — the leader for Region 1 might sit on
+    node A while Region 2's leader sits on node C, so write load spreads across the whole cluster instead of
+    funneling through one leader. PD is the one deciding when a split happens and where replicas land; TiKV
+    nodes never decide this about themselves.
+  </div>
+
+  <h2>Where you'd reach for it</h2>
+  <ul>
+    <li><strong>As TiDB's storage layer</strong> — the overwhelmingly common path: you get a MySQL-compatible
+      distributed SQL database, and TiKV is the part doing sharding, replication, and transactions underneath.</li>
+    <li><strong>Directly, as a KV store</strong> — via the Rust/Go/Java/Python clients, when you want horizontally
+      scalable storage with real multi-key ACID transactions and don't need SQL — e.g. as the backing store for
+      another system (this is exactly how TiKV itself is used inside some other CNCF-ecosystem tools).</li>
+    <li><strong>Large, growing datasets that must stay strongly consistent</strong> — where a single-leader store
+      (like etcd) would run out of headroom, but you still can't tolerate eventual consistency.</li>
+  </ul>
+
+  <div class="callout warn">
+    <span class="callout-title">Often confused with</span>
+    <strong>TiKV vs. etcd:</strong> etcd is one small Raft group meant for control-plane metadata (MBs, not TBs)
+    with no transaction API beyond simple compare-and-swap; TiKV is many parallel Raft groups (Regions) meant to
+    hold your actual application data at scale, with full multi-key ACID transactions on top. TiKV even uses PD,
+    which is architecturally etcd-like, as its own coordination layer. <strong>TiKV vs. TiDB:</strong> TiDB is
+    the SQL layer (parser, optimizer, distributed SQL execution) — it has no storage of its own and stores
+    every row as TiKV key-value pairs; TiKV has no SQL concept at all, only keys, values, and transactions.
+    <strong>TiKV vs. CockroachDB:</strong> architecturally close cousins (both Spanner/Percolator-inspired,
+    both Raft-sharded), but CockroachDB bundles the SQL layer and the KV layer into one process/project, while
+    TiKV is deliberately usable as a standalone KV store independent of any SQL engine.
+  </div>
+
+  <h2>Why it graduated</h2>
+  <p>
+    TiKV joined CNCF as a Sandbox project in August 2018, reached Incubating in 2019, and graduated in
+    <strong>September 2020</strong> as the 12th CNCF project to do so. CNCF's graduation review pointed to
+    production adoption that had roughly doubled since joining (to about 1,000 companies) across finance,
+    gaming, and e-commerce, an open, vendor-neutral governance model, and a design that plugged cleanly into
+    the rest of the cloud-native stack — gRPC for its wire protocol, Prometheus for metrics, and a Kubernetes
+    Operator for deployment — while solving a problem (horizontally-scalable, strongly-consistent transactional
+    storage) that etcd deliberately doesn't try to solve.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. Why does TiKV split the keyspace into many independent Regions, each with its own Raft group, instead of using one big Raft group like etcd does?</p>
+      <button class="quiz-option" data-val="a">Because Raft can only replicate keys smaller than 96 MiB in total.</button>
+      <button class="quiz-option" data-val="b">One Raft group's throughput is capped by its single leader; splitting data into many independently-led Raft groups lets write throughput scale with the number of Regions/nodes instead.</button>
+      <button class="quiz-option" data-val="c">Because Placement Driver requires at least two Raft groups to start a cluster.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">2. In TiKV's Percolator-style commit protocol, what makes it safe for a transaction to finish committing its secondary keys asynchronously, or even be resolved by an unrelated later reader?</p>
+      <button class="quiz-option" data-val="a">Every secondary key's lock points back to the primary key, so anyone who finds a stale lock can check whether the primary committed and roll the secondary forward or back accordingly.</button>
+      <button class="quiz-option" data-val="b">Secondary keys don't need to be consistent with the primary at all.</button>
+      <button class="quiz-option" data-val="c">Placement Driver commits all secondary keys itself as soon as the primary commits.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">3. What does Placement Driver (PD) actually do in a TiKV cluster?</p>
+      <button class="quiz-option" data-val="a">It stores the application's key-value data directly, as a fourth replica.</button>
+      <button class="quiz-option" data-val="b">It executes SQL queries on behalf of TiDB.</button>
+      <button class="quiz-option" data-val="c">It issues cluster-wide timestamps, tracks which node holds which Region, and decides when to split, merge, move, or transfer leadership of Regions.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var els = {
+    keyspace: document.getElementById("tkKeyspace"),
+    stat: document.getElementById("tkStat"),
+    groups: document.getElementById("tkGroups"),
+    log: document.getElementById("tkLog"),
+    insert: document.getElementById("tkInsert"),
+    rebalance: document.getElementById("tkRebalance"),
+    reset: document.getElementById("tkReset")
+  };
+
+  var SPLIT_THRESHOLD = 96; // MiB, mirrors TiKV's real default
+  var NODES = ["node-A", "node-B", "node-C", "node-D"];
+  var regions = [];
+  var nextRegionId = 1;
+  var nextKeyStart = 0;
+
+  function log(msg) { els.log.textContent = msg; }
+
+  function pickReplicaNodes() {
+    // simple round-robin-ish pick of 3 distinct nodes
+    var pool = NODES.slice();
+    var picked = [];
+    for (var i = 0; i < 3; i++) {
+      var idx = Math.floor(Math.random() * pool.length);
+      picked.push(pool.splice(idx, 1)[0]);
+    }
+    return picked;
+  }
+
+  function newRegion(keyStart, keyEnd) {
+    var nodes = pickReplicaNodes();
+    return {
+      id: nextRegionId++,
+      keyStart: keyStart,
+      keyEnd: keyEnd,
+      sizeMiB: 0,
+      nodes: nodes,
+      leader: nodes[0]
+    };
+  }
+
+  function resetAll() {
+    regions = [newRegion(0, 10000)];
+    nextRegionId = 2;
+    render();
+    log("Insert data to see PD split the Region and start a new Raft group…");
+  }
+
+  function render() {
+    els.keyspace.innerHTML = "";
+    var totalMiB = 0;
+    regions.forEach(function (r) {
+      totalMiB += r.sizeMiB;
+      var div = document.createElement("div");
+      div.className = "tk-region";
+      div.id = "tkRegion-" + r.id;
+      var pct = Math.min(100, Math.round((r.sizeMiB / SPLIT_THRESHOLD) * 100));
+      div.innerHTML =
+        '<div class="tk-r-fill" style="height:' + pct + '%"></div>' +
+        '<div class="tk-r-id">Region ' + r.id + '</div>' +
+        '<div class="tk-r-range">[' + r.keyStart + ', ' + r.keyEnd + ')</div>';
+      els.keyspace.appendChild(div);
+    });
+    els.stat.textContent = regions.length + " region" + (regions.length === 1 ? "" : "s") +
+      " · ~" + Math.round(totalMiB) + " MiB total";
+
+    els.groups.innerHTML = "";
+    regions.forEach(function (r) {
+      var g = document.createElement("div");
+      g.className = "tk-group";
+      var replicasHtml = r.nodes.map(function (n) {
+        var isLeader = n === r.leader;
+        return '<span class="tk-replica ' + (isLeader ? "leader" : "follower") + '">' +
+          n + (isLeader ? " (leader)" : "") + '</span>';
+      }).join("");
+      g.innerHTML =
+        '<div class="tk-group-title">Region ' + r.id + " — Raft group (3 replicas)</div>" +
+        '<div class="tk-replicas">' + replicasHtml + '</div>';
+      els.groups.appendChild(g);
+    });
+  }
+
+  function insertData() {
+    // write into whichever region currently has the smallest key range end (simulate sequential-ish load)
+    var target = regions[regions.length - 1];
+    target.sizeMiB += 20;
+    log("client → leader " + target.leader + ": prewrite/commit batch of writes into Region " + target.id + " (now ~" + target.sizeMiB + " MiB)");
+
+    if (target.sizeMiB >= SPLIT_THRESHOLD) {
+      var el = document.getElementById("tkRegion-" + target.id);
+      if (el) el.classList.add("splitting");
+      setTimeout(function () {
+        var mid = target.keyStart + Math.floor((target.keyEnd - target.keyStart) / 2);
+        var left = newRegion(target.keyStart, mid);
+        var right = newRegion(mid, target.keyEnd);
+        left.sizeMiB = target.sizeMiB / 2;
+        right.sizeMiB = target.sizeMiB / 2;
+        var idx = regions.indexOf(target);
+        regions.splice(idx, 1, left, right);
+        render();
+        log("PD: Region " + target.id + " exceeded " + SPLIT_THRESHOLD + " MiB → split into Region " +
+          left.id + " and Region " + right.id + ", each starting its own 3-replica Raft group.");
+      }, 550);
+    } else {
+      render();
+    }
+  }
+
+  function rebalance() {
+    if (regions.length === 0) return;
+    var r = regions[Math.floor(Math.random() * regions.length)];
+    var oldNode = r.nodes[Math.floor(Math.random() * r.nodes.length)];
+    var candidates = NODES.filter(function (n) { return r.nodes.indexOf(n) === -1; });
+    if (candidates.length === 0) { log("Cluster is fully balanced — no idle node to move a replica to."); return; }
+    var newNode = candidates[Math.floor(Math.random() * candidates.length)];
+    var wasLeader = r.leader === oldNode;
+    r.nodes = r.nodes.map(function (n) { return n === oldNode ? newNode : n; });
+    if (wasLeader) r.leader = r.nodes[0];
+    render();
+    log("PD: moved a replica of Region " + r.id + " from " + oldNode + " → " + newNode +
+      (wasLeader ? " (transferred leadership to " + r.leader + " first)" : "") + ".");
+  }
+
+  els.insert.addEventListener("click", insertData);
+  els.rebalance.addEventListener("click", rebalance);
+  els.reset.addEventListener("click", resetAll);
+
+  resetAll();
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
