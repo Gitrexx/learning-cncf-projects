@@ -350,7 +350,7 @@
       "summary": "Horizontal scaling for MySQL via sharding and query routing (VTGate).",
       "prerequisites": [],
       "file": "vitess.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "harbor",

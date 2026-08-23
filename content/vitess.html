@@ -1,0 +1,444 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vitess — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring: VTGate query-routing / resharding visualizer. ---- */
+  .vt-topo {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-3);
+  }
+  .vt-gate {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    color: var(--on-accent);
+    background: var(--accent);
+    border-radius: var(--r-md);
+    padding: 0.5em 1em;
+  }
+  .vt-arrows { font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-faint); }
+  .vt-shards {
+    display: flex;
+    gap: 3px;
+    width: 100%;
+  }
+  .vt-shard {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 70px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    padding: var(--sp-2);
+    text-align: center;
+    transition: background .25s, border-color .25s, box-shadow .25s;
+  }
+  .vt-shard .vt-s-name { font-family: var(--font-mono); font-weight: 700; font-size: var(--fs-xs); }
+  .vt-shard .vt-s-range { font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-faint); }
+  .vt-shard.hit {
+    background: color-mix(in srgb, var(--accent) 22%, var(--surface-2));
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  .vt-shard.splitting { animation: vt-flash 0.5s ease-in-out 2; }
+  @keyframes vt-flash { 0%,100% { background: var(--surface-2); } 50% { background: color-mix(in srgb, var(--signal-amber) 25%, var(--surface-2)); } }
+
+  .vt-controls { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin: var(--sp-3) 0; align-items: center; }
+  .vt-controls input[type="text"] {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    padding: 0.4em 0.6em;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    color: var(--text);
+    width: 9em;
+  }
+  .vt-log {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    min-height: 4.6em;
+    line-height: 1.7;
+    background: var(--surface-2);
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3);
+    white-space: pre-wrap;
+  }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Storage &amp; Databases · Sub-topic 34 / 36</p>
+  <h1>Vitess</h1>
+  <p class="lead">
+    <a href="tikv.html">TiKV</a> scales a transactional key-value store by rebuilding storage from scratch around
+    Raft-replicated Regions. Vitess takes the opposite bet: don't replace MySQL — <em>surround</em> it. Vitess is
+    a database clustering system that puts a query-routing and topology-management layer in front of a fleet of
+    ordinary MySQL servers, so an application still speaks plain MySQL wire protocol and SQL, but its data can be
+    transparently split across hundreds of shards on hundreds of machines. It was born inside YouTube in 2010 to
+    solve one very concrete problem: YouTube's core MySQL database was falling over under the site's growth, and
+    rewriting every application query to know about shards was not an option.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Vitess is a <strong>database clustering and sharding system for MySQL</strong>. It doesn't touch MySQL's
+    storage engine or replication protocol — it wraps standard <code>mysqld</code> processes with a proxy layer
+    (<strong>VTGate</strong>) that parses SQL, decides which shard(s) a query needs, and routes it there, plus a
+    sidecar (<strong>VTTablet</strong>) on every MySQL instance that manages its health, connections, and
+    replication topology. A separate <strong>Topology Service</strong> (backed by etcd, ZooKeeper, or Consul —
+    Vitess itself doesn't reinvent this, it just needs *a* consistent metadata store) tracks which shards exist
+    and where they live. Vitess graduated CNCF in <strong>November 2019</strong>, the 8th project to do so, and
+    now runs in production at Slack, Square/Block, GitHub, HubSpot, and (as a managed service) PlanetScale — on
+    top of the workload it was built for at YouTube.
+  </div>
+
+  <h2>The problem: MySQL scales up, not out</h2>
+  <p>
+    A single MySQL primary can only take so much write traffic before it runs out of CPU, memory, or disk I/O —
+    and unlike reads, writes can't be offloaded to replicas, because replicas apply the same binlog and stay
+    behind the same single writer. The traditional escape hatches all have sharp edges: buy a bigger box (finite,
+    expensive, and eventually impossible); shard manually in the application (every query, every migration, every
+    ORM call now has to know which of N databases a row lives in, and resharding later means rewriting all of
+    it); or move to a different database entirely (rewriting the app and losing MySQL's tooling, replication
+    model, and operational maturity). Vitess's pitch is to keep plain MySQL as the storage engine and put the
+    sharding logic in a layer the application never has to see — it connects over the normal MySQL protocol and,
+    as far as it's concerned, is talking to one very large database.
+  </p>
+
+  <h2>The moving parts</h2>
+  <ul>
+    <li><strong>VTGate</strong> — a stateless proxy that applications connect to instead of MySQL directly. It
+      parses every query, consults the <strong>VSchema</strong> (below) to work out which shard(s) it must touch,
+      rewrites and routes the query, and — for queries that must run on more than one shard — merges the results
+      back into one response. Being stateless, you run a pool of VTGates behind a normal load balancer and scale
+      it horizontally like any stateless service.</li>
+    <li><strong>VTTablet</strong> — runs alongside every <code>mysqld</code> instance (one per MySQL primary or
+      replica). It enforces query timeouts and row-count limits, pools and multiplexes connections, rewrites
+      unsafe queries, exposes health checks VTGate uses to route only to healthy, caught-up replicas, and drives
+      replication topology changes (like promoting a new primary).</li>
+    <li><strong>Topology Service</strong> — the source of truth for cluster metadata: which keyspaces and shards
+      exist, which VTTablet is the primary for each shard, routing rules. Backed by a consistent store (etcd is
+      the common default) — conceptually the same job etcd does for Kubernetes, just for Vitess's own topology.</li>
+    <li><strong>VTOrc</strong> — watches replication health and automates primary failover when a primary
+      becomes unreachable, updating the topology so VTGate routes writes to the new primary.</li>
+    <li><strong>vtctld / VTAdmin</strong> — the control-plane API and web UI for cluster operations: creating
+      keyspaces, running backups, and driving the resharding and migration workflows described below.</li>
+  </ul>
+
+  <h2>Keyspaces, shards, and the VSchema</h2>
+  <p>
+    A <strong>keyspace</strong> is Vitess's name for a logical database — what an application thinks it's
+    querying. A keyspace can be <em>unsharded</em> (one shard, exactly like a normal MySQL database — useful for
+    small reference tables) or <em>sharded</em> across many physical <strong>shards</strong>, each shard being a
+    normal MySQL primary plus its replicas holding one slice of the keyspace's rows. What decides which shard a
+    given row lives on is a <strong>Vindex</strong> (vitess index) declared per table in the keyspace's
+    <strong>VSchema</strong> — a JSON document, not something baked into the SQL schema itself:
+  </p>
+  <pre><code>{
+  "sharded": true,
+  "vindexes": {
+    "hash": { "type": "hash" }
+  },
+  "tables": {
+    "customer": {
+      "column_vindexes": [
+        { "column": "customer_id", "name": "hash" }
+      ]
+    }
+  }
+}</code></pre>
+  <p>
+    The <strong>hash</strong> vindex type takes a column's value, hashes it, and maps the hash into a
+    <strong>keyspace ID</strong> space (conceptually 0–255); shards each own a contiguous range of that space,
+    conventionally named by their hex boundaries — <code>-40</code>, <code>40-80</code>, <code>80-c0</code>,
+    <code>c0-</code>. Hashing spreads rows evenly regardless of the source values' distribution. A
+    <strong>lookup</strong> vindex is the other common type: an external mapping table (itself stored in Vitess)
+    from some other column — say <code>email</code> — to a keyspace ID, useful when you need to route on a
+    column that isn't the primary sharding key.
+  </p>
+
+  <h2>How VTGate routes a query</h2>
+  <p>
+    What a query costs depends entirely on whether it can use a vindex:
+  </p>
+  <ul>
+    <li><strong>Equality on the primary vindex column</strong> (<code>WHERE customer_id = 42</code>) — VTGate
+      computes the keyspace ID directly and sends the query to exactly one shard. This is the fast path and the
+      whole point of choosing a good sharding key.</li>
+    <li><strong>IN-list on the vindex column</strong> — VTGate fans the query out to just the shards those
+      specific values map to, and merges the per-shard results.</li>
+    <li><strong>No usable vindex predicate</strong> (filtering on a non-indexed column, or an unfiltered scan) —
+      VTGate has no way to narrow it down, so it <strong>scatters</strong> the query to every shard in parallel
+      and merges (and, for <code>ORDER BY</code>/<code>LIMIT</code>, sorts) the combined results itself. Correct,
+      but it touches the whole cluster for every such query — a sign the schema or query pattern needs a vindex.</li>
+    <li><strong>Cross-shard joins</strong> — Vitess's query planner can push a join's inner query down to the
+      shard(s) that hold the outer rows and stitch results together, though joins across unrelated shards are
+      inherently more expensive than a join MySQL could do locally on one box.</li>
+  </ul>
+
+  <h2>Try it: route queries through VTGate</h2>
+  <p>
+    Below is a 4-shard <code>commerce</code> keyspace, sharded on <code>customer_id</code> via a hash vindex.
+    Enter a <code>customer_id</code> and route a point query, or run a scatter query with no vindex predicate.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">VTGate query router</div>
+
+    <div class="vt-topo">
+      <div class="vt-gate">VTGate</div>
+      <div class="vt-arrows">▼ ▼ ▼ ▼</div>
+      <div class="vt-shards" id="vtShards"></div>
+    </div>
+
+    <div class="vt-controls">
+      <span class="mono muted" style="font-size: var(--fs-xs);">customer_id =</span>
+      <input type="text" id="vtCustomerId" value="42" />
+      <button class="btn" id="vtRoutePoint">Route: WHERE customer_id = ?</button>
+      <button class="btn ghost" id="vtRouteScatter">Scatter: WHERE order_date &gt; '2026-01-01'</button>
+      <button class="btn ghost" id="vtReshard">Reshard: split shard c0-</button>
+    </div>
+
+    <div class="vt-log" id="vtLog">Enter a customer_id and route a query to see VTGate pick a shard…</div>
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">What to notice</span>
+    A point query on the vindex column lights up exactly one shard — VTGate never had to ask any other shard
+    anything. The scatter query lights up all of them, because without a vindex predicate there's no way to know
+    in advance which shard(s) hold matching rows. The "Reshard" button models Vitess's online resharding: unlike
+    a store that auto-splits by data size, Vitess resharding is an explicit, operator-triggered workflow — but it
+    runs live, with no downtime and no application changes, which is the mechanism explained next.
+  </div>
+
+  <h2>Resharding and migration without downtime: VReplication</h2>
+  <p>
+    Both major online workflows in Vitess — <strong>Reshard</strong> (changing the shard count/boundaries of a
+    keyspace) and <strong>MoveTables</strong> (moving tables between keyspaces, e.g. migrating an unsharded
+    legacy database into a sharded one) — are built on the same primitive: <strong>VReplication</strong>. It
+    first copies existing rows from source to target shards in bulk, then switches to streaming ongoing changes
+    from the source's binlog (much like MySQL replication, but Vitess-managed and filtered/re-keyed for the
+    target's shard boundaries) to catch the target up to the moving source. Once the target is continuously
+    caught up, a brief traffic cutover — VTGate starts routing to the new shards, the old ones stop accepting
+    writes — completes the migration. Because the source keeps serving traffic throughout the copy-and-catch-up
+    phase, the whole operation is online: no maintenance window, no frozen writes beyond the final short cutover.
+  </p>
+
+  <h2>Keeping transactions simple: co-locate what needs to be atomic</h2>
+  <p>
+    Vitess does support a distributed <span class="term" title="A two-phase-commit protocol coordinated by VTGate across the VTTablets involved, letting a single transaction atomically commit changes spanning multiple shards.">two-phase commit</span>
+    for transactions that must atomically touch multiple shards, but it's the exception path, not the everyday
+    one — cross-shard 2PC adds real latency and complexity. The idiomatic Vitess schema design instead picks a
+    sharding key (often a tenant ID, user ID, or similar) so that rows which need to be transactionally consistent
+    with each other — an order and its line items, say — always hash to the <em>same</em> shard, keeping ordinary
+    transactions local to one MySQL primary where they're just... normal MySQL transactions.
+  </p>
+
+  <h2>Where you'd reach for it</h2>
+  <ul>
+    <li><strong>A MySQL workload that's outgrown one primary</strong> — write throughput, connection count, or
+      dataset size has hit a ceiling a bigger box won't fix, and you want horizontal scale without rewriting
+      the application off SQL.</li>
+    <li><strong>You want to keep MySQL's ecosystem</strong> — existing ORMs, backup tooling, and operational
+      knowledge mostly keep working, because the wire protocol and SQL surface stay MySQL-compatible.</li>
+    <li><strong>Managing many MySQL clusters at scale</strong> — even teams that don't need sharding adopt Vitess
+      for VTOrc's automated failover, built-in connection pooling, and a uniform operational model (including an
+      official Kubernetes Operator that manages keyspaces, shards, and tablets as CRDs) across a large fleet.</li>
+  </ul>
+
+  <div class="callout warn">
+    <span class="callout-title">Often confused with</span>
+    <strong>Vitess vs. TiKV:</strong> TiKV is a new storage engine built around Raft from the ground up, with
+    automatic Region splitting and Percolator-style distributed transactions native to the store. Vitess doesn't
+    replace MySQL's storage or transaction engine at all — it's an orchestration and routing layer in front of
+    unmodified MySQL processes, with resharding as an explicit, operator-driven workflow rather than an automatic
+    background process. <strong>Vitess vs. manual application-level sharding:</strong> manual sharding means every
+    query and migration in the app has to know the shard map; Vitess centralizes that knowledge in VTGate and the
+    VSchema, so the application keeps writing ordinary SQL. <strong>Vitess vs. a plain SQL proxy (e.g. ProxySQL):</strong>
+    a proxy load-balances and can rewrite queries, but has no concept of a keyspace, a vindex, or a shard map — it
+    doesn't know how to route one query to the *right* shard or run an online resharding workflow.
+  </div>
+
+  <h2>Why it graduated</h2>
+  <p>
+    Vitess was created at YouTube in 2010 to keep its core MySQL database alive under Google-scale growth, was
+    open-sourced in 2012, joined CNCF as one of its earliest hosted projects (2018), and graduated in
+    <strong>November 2019</strong> — the 8th CNCF project to reach Graduated status, after Kubernetes, Prometheus,
+    Envoy, CoreDNS, containerd, Fluentd, and Jaeger. The graduation case rested on exactly the kind of evidence
+    CNCF looks for: sustained large-scale production use (YouTube's MySQL fleet, plus adopters like Slack, Square,
+    GitHub, and HubSpot), a healthy multi-vendor contributor base despite its single-company origin, and clean
+    integration with the rest of the cloud-native stack — a Kubernetes Operator for deployment, and Prometheus
+    metrics throughout.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. Why does a query like <code>WHERE customer_id = 42</code> only hit one shard, while <code>WHERE order_date &gt; '2026-01-01'</code> hits all of them?</p>
+      <button class="quiz-option" data-val="a">Vitess caches recent order_date values, so it already knows the answer without querying.</button>
+      <button class="quiz-option" data-val="b"><code>customer_id</code> is the primary vindex column, so VTGate can compute its keyspace ID and route to one shard; <code>order_date</code> isn't indexed by any vindex, so VTGate has no way to narrow the search and must scatter to every shard.</button>
+      <button class="quiz-option" data-val="c">Range queries are always slower than equality queries in MySQL, regardless of Vitess.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">2. What actually changes when Vitess sits in front of a MySQL cluster?</p>
+      <button class="quiz-option" data-val="a">MySQL keeps running unmodified as the storage engine; VTGate and VTTablet add a routing/proxy layer plus topology management on top, so the app still speaks normal SQL.</button>
+      <button class="quiz-option" data-val="b">MySQL's storage engine is replaced with a Raft-replicated engine, similar to TiKV's Regions.</button>
+      <button class="quiz-option" data-val="c">Applications must rewrite all queries into a Vitess-specific query language instead of SQL.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">3. What mechanism lets Vitess reshard a keyspace or migrate tables between keyspaces without downtime?</p>
+      <button class="quiz-option" data-val="a">Vitess pauses all writes to the keyspace for the duration of the migration, then resumes once complete.</button>
+      <button class="quiz-option" data-val="b">VTOrc promotes a new primary and the old shards are simply deleted.</button>
+      <button class="quiz-option" data-val="c">VReplication bulk-copies existing rows to the target, then streams ongoing binlog changes to catch up, so only a brief final cutover is needed.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var els = {
+    shards: document.getElementById("vtShards"),
+    customerId: document.getElementById("vtCustomerId"),
+    routePoint: document.getElementById("vtRoutePoint"),
+    routeScatter: document.getElementById("vtRouteScatter"),
+    reshard: document.getElementById("vtReshard"),
+    log: document.getElementById("vtLog")
+  };
+
+  var shards = [
+    { name: "-40", lo: 0, hi: 64 },
+    { name: "40-80", lo: 64, hi: 128 },
+    { name: "80-c0", lo: 128, hi: 192 },
+    { name: "c0-", lo: 192, hi: 256 }
+  ];
+  var resharded = false;
+
+  function log(msg) { els.log.textContent = msg; }
+
+  function hashToByte(str) {
+    var h = 0;
+    for (var i = 0; i < str.length; i++) {
+      h = (h * 33 + str.charCodeAt(i)) >>> 0;
+    }
+    return h % 256;
+  }
+
+  function render() {
+    els.shards.innerHTML = "";
+    shards.forEach(function (s) {
+      var div = document.createElement("div");
+      div.className = "vt-shard";
+      div.id = "vtShard-" + s.name.replace(/[^a-z0-9]/gi, "");
+      div.innerHTML =
+        '<div class="vt-s-name">' + s.name + '</div>' +
+        '<div class="vt-s-range">[0x' + s.lo.toString(16) + ', 0x' + (s.hi - 1).toString(16) + ']</div>';
+      els.shards.appendChild(div);
+    });
+  }
+
+  function clearHits() {
+    els.shards.querySelectorAll(".vt-shard").forEach(function (el) { el.classList.remove("hit"); });
+  }
+
+  function shardEl(name) {
+    return document.getElementById("vtShard-" + name.replace(/[^a-z0-9]/gi, ""));
+  }
+
+  function routePoint() {
+    clearHits();
+    var val = els.customerId.value || "";
+    var ksid = hashToByte(val);
+    var target = shards.filter(function (s) { return ksid >= s.lo && ksid < s.hi; })[0];
+    if (!target) return;
+    var el = shardEl(target.name);
+    if (el) el.classList.add("hit");
+    log(
+      "VTGate: parsed \"SELECT * FROM orders WHERE customer_id = '" + val + "'\"\n" +
+      "VTGate: hash vindex(customer_id='" + val + "') -> keyspace id 0x" + ksid.toString(16) + "\n" +
+      "VTGate: 0x" + ksid.toString(16) + " falls in shard " + target.name + " -> route to VTTablet(" + target.name + ", primary)\n" +
+      "1 shard queried, 0 shards skipped."
+    );
+  }
+
+  function routeScatter() {
+    clearHits();
+    shards.forEach(function (s) {
+      var el = shardEl(s.name);
+      if (el) el.classList.add("hit");
+    });
+    log(
+      "VTGate: parsed \"SELECT * FROM orders WHERE order_date > '2026-01-01'\"\n" +
+      "VTGate: order_date has no vindex -> cannot narrow to a shard range\n" +
+      "VTGate: scatter to all " + shards.length + " shards in parallel, then merge (and sort) results\n" +
+      shards.length + " shards queried — full-cluster fan-out."
+    );
+  }
+
+  function reshardDemo() {
+    if (resharded) {
+      log("Shard c0- has already been split in this demo. Click Reset in your browser to try again.");
+      return;
+    }
+    var target = shards[shards.length - 1];
+    var el = shardEl(target.name);
+    if (el) el.classList.add("splitting");
+    log(
+      "vtctld: Reshard workflow started — splitting shard " + target.name + " into c0-e0 / e0-\n" +
+      "VReplication: bulk-copying existing rows from " + target.name + " into the two new targets…"
+    );
+    setTimeout(function () {
+      var mid = target.lo + Math.floor((target.hi - target.lo) / 2);
+      var left = { name: "c0-e0", lo: target.lo, hi: mid };
+      var right = { name: "e0-", lo: mid, hi: target.hi };
+      var idx = shards.indexOf(target);
+      shards.splice(idx, 1, left, right);
+      resharded = true;
+      render();
+      log(
+        "VReplication: target shards caught up to the live binlog stream.\n" +
+        "vtctld: SwitchTraffic — VTGate now routes " + target.name + "'s range to c0-e0 / e0-.\n" +
+        "Old shard " + target.name + " dropped. No application downtime, no query rewrite."
+      );
+    }, 900);
+  }
+
+  els.routePoint.addEventListener("click", routePoint);
+  els.routeScatter.addEventListener("click", routeScatter);
+  els.reshard.addEventListener("click", reshardDemo);
+
+  render();
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
