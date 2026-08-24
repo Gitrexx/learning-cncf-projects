@@ -1,0 +1,436 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Harbor — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring: push-scan-sign-gate pipeline visualizer. ---- */
+  .hb-controls { display: flex; gap: var(--sp-4); flex-wrap: wrap; align-items: center; margin-bottom: var(--sp-4); }
+  .hb-controls select {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+  }
+  .hb-controls label.check {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+  }
+
+  .hb-pipeline {
+    display: flex;
+    align-items: stretch;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+    margin-bottom: var(--sp-4);
+  }
+  .hb-step {
+    flex: 1 1 0;
+    min-width: 110px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    padding: var(--sp-3);
+    text-align: center;
+    transition: background .25s, border-color .25s, box-shadow .25s;
+  }
+  .hb-step .hb-name { font-family: var(--font-mono); font-weight: 700; font-size: var(--fs-xs); }
+  .hb-step .hb-sub { font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-faint); margin-top: 0.3em; }
+  .hb-step.active { animation: hb-pulse 0.8s ease-in-out infinite; border-color: var(--accent-2); }
+  .hb-step.pass {
+    background: color-mix(in srgb, var(--signal-green) 20%, var(--surface-2));
+    border-color: var(--signal-green);
+  }
+  .hb-step.fail {
+    background: color-mix(in srgb, var(--signal-red) 22%, var(--surface-2));
+    border-color: var(--signal-red);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--signal-red) 30%, transparent);
+  }
+  .hb-arrow { display: flex; align-items: center; font-family: var(--font-mono); color: var(--text-faint); }
+  @keyframes hb-pulse { 0%,100% { background: var(--surface-2); } 50% { background: color-mix(in srgb, var(--accent-2) 25%, var(--surface-2)); } }
+
+  .hb-log {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    min-height: 6.5em;
+    line-height: 1.7;
+    background: var(--surface-2);
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3);
+    white-space: pre-wrap;
+  }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Registry &amp; Distribution · Sub-topic 35 / 36</p>
+  <h1>Harbor</h1>
+  <p class="lead">
+    <a href="containerd.html">containerd</a> pulls images from a registry over the OCI distribution API — but the
+    spec only defines how bytes move, not who is allowed to push them, whether they're safe to run, or what
+    happens when the same image needs to exist in ten datacenters. Harbor is that missing layer: an open-source
+    <strong>enterprise container registry</strong> that wraps a plain OCI-conformant registry with project-based
+    access control, automated vulnerability scanning, artifact signing, and replication — turning "a place images
+    live" into "a place images are governed."
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Harbor is <strong>not</strong> a registry implementation written from scratch — under the hood it runs the
+    same open-source <span class="term" title="The OCI/CNCF project (formerly Docker Distribution) that implements the registry HTTP API: content-addressable blob storage, manifests, and the push/pull protocol every registry speaks.">Distribution</span>
+    registry that Docker Hub and most other registries are built on, for the actual blob storage and the
+    push/pull wire protocol. Harbor's job is everything *around* that: a control-plane API and UI, a Postgres
+    database of projects/users/policies/scan-results, a job queue for async work (scanning, replication, garbage
+    collection), and a pluggable scanner (Trivy by default). It graduated CNCF on <strong>June 15, 2020</strong>,
+    the 11th project to do so, after originating at VMware in 2016 to solve exactly this gap for enterprises
+    running Kubernetes on-prem or across clouds who couldn't just point every cluster at a public registry.
+  </div>
+
+  <h2>The problem: a registry that only stores bytes isn't enough</h2>
+  <p>
+    Docker Hub and the plain Distribution registry solve a narrow problem well: given an image name and tag,
+    store its layers content-addressably and serve them back fast. That's sufficient for a single team pushing to
+    a single namespace, but it breaks down the moment an organization needs answers to questions the distribution
+    spec was never designed to answer: <em>Which teams can push to which repositories? Does this image contain a
+    critical CVE, and should that block deployment? Is this really the image our CI pipeline built, or did
+    someone tamper with it in transit? How do we keep a copy of these images in three regions without every
+    cluster hammering one central registry on every pull?</em> Each answer requires state and policy that has
+    nothing to do with storing blobs — which is exactly what Harbor adds as a layer on top.
+  </p>
+
+  <h2>The moving parts</h2>
+  <ul>
+    <li><strong>Core</strong> — the central API server (Go). Every request from the Portal, the Docker/OCI CLI,
+      or a CI pipeline's <code>docker push</code>/<code>pull</code> hits Core first, which checks auth and RBAC
+      against Postgres before proxying blob traffic to the Registry component.</li>
+    <li><strong>Registry</strong> — an embedded instance of the CNCF Distribution project. This is the piece that
+      actually receives and stores OCI blobs and manifests on disk or object storage (S3, Azure Blob, GCS, etc.);
+      Harbor doesn't reimplement the distribution protocol, it governs access to it.</li>
+    <li><strong>Portal</strong> — the Angular web UI: browsing projects and repositories, viewing scan results,
+      configuring policies, managing users and robot accounts.</li>
+    <li><strong>Job Service</strong> — an async worker pool (backed by Redis queues) that runs everything that
+      shouldn't block a request: triggering vulnerability scans, executing replication rules, garbage-collecting
+      unreferenced blobs, firing webhooks.</li>
+    <li><strong>Trivy (scanner adapter)</strong> — Harbor talks to scanners through a generic <strong>Scanner
+      Adapter API</strong>, not a hardcoded integration. Trivy ships as the default, but Clair or a commercial
+      scanner can be plugged in the same way — Job Service invokes whichever adapter is configured whenever a
+      scan is triggered.</li>
+    <li><strong>PostgreSQL &amp; Redis</strong> — Postgres holds all metadata (projects, members, policies, scan
+      results, replication rules); Redis backs the Job Service queues and short-lived caching.</li>
+  </ul>
+  <p>
+    All of this ships as one Helm chart (or <code>docker compose</code> for small setups) — from a cluster's
+    point of view, Harbor is just another Deployment plus a Postgres and Redis it depends on, fronted by an
+    Ingress that terminates TLS and load-balances across Core/Portal.
+  </p>
+
+  <h2>Projects: the unit of multi-tenancy</h2>
+  <p>
+    Every repository in Harbor lives inside a <strong>project</strong> — the boundary for access control, quotas,
+    and policy. A project can be public (anyone can pull) or private, and members are assigned one of several
+    roles: <strong>Project Admin</strong> (full control including policy and membership), <strong>Maintainer</strong>
+    and <strong>Developer</strong> (push/pull with varying config rights), <strong>Guest</strong> and
+    <strong>Limited Guest</strong> (read-only, with Limited Guest also hiding vulnerability details). For
+    non-human callers — CI/CD pipelines, mainly — Harbor issues <strong>robot accounts</strong>: credentials
+    scoped to specific actions on specific projects (e.g. "push to <code>library/*</code> only"), with an
+    expiration date, so a leaked CI secret doesn't hand out a permanent admin credential.
+  </p>
+
+  <h2>Security pipeline: scan, sign, and gate</h2>
+  <p>
+    Two independent policies turn Harbor from passive storage into an active gate:
+  </p>
+  <ul>
+    <li><strong>Vulnerability scanning</strong> — every push (or a scheduled re-scan, since new CVEs are
+      discovered against old images constantly) can trigger Trivy against the image's OS packages and language
+      dependencies. Results are stored per-digest and surfaced in the Portal with a severity breakdown.</li>
+    <li><strong>"Prevent vulnerable images from running"</strong> — a per-project policy that blocks <code>pull</code>
+      (not just deployment — Harbor has no idea what happens to an image after it leaves the registry, so
+      the pull itself is the enforcement point) whenever the latest scan reports a CVE at or above a configured
+      severity threshold, with an optional CVE allowlist for exceptions the security team has explicitly accepted.</li>
+    <li><strong>Content trust / signing</strong> — Harbor originally used Notary (TUF-based signing, the same
+      lineage as <a href="tuf.html">TUF</a>), but deprecated that integration starting in v2.6 and dropped it
+      entirely in v2.9. The current path is <strong>Cosign</strong> (from the Sigstore project) or the OCI-native
+      <strong>Notation</strong>, both of which store a signature as an ordinary OCI artifact attached to the
+      image's digest rather than in a separate trust server. A project can require "only signed images may be
+      pulled" the same way it requires "no critical CVEs."</li>
+  </ul>
+
+  <h2>Try it: run an image through the pipeline</h2>
+  <p>
+    Pick an image and a policy setting, then run it through Harbor's push → scan → sign → gate → pull sequence.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Harbor push-scan-sign-gate pipeline</div>
+
+    <div class="hb-controls">
+      <span class="mono muted" style="font-size: var(--fs-xs);">Image:</span>
+      <select id="hbImage">
+        <option value="clean">webapp:2.3 — clean build, 0 critical/high CVEs</option>
+        <option value="vuln">webapp:1.0-legacy — 1 critical, 2 high CVEs</option>
+      </select>
+      <label class="check"><input type="checkbox" id="hbPolicy" checked /> Policy: block pull on critical/high CVE</label>
+    </div>
+
+    <div class="hb-pipeline" id="hbPipeline"></div>
+
+    <div class="row" style="margin-bottom: var(--sp-4);">
+      <button class="btn" id="hbRun">Run pipeline</button>
+      <button class="btn ghost" id="hbReset">Reset</button>
+    </div>
+
+    <div class="hb-log" id="hbLog">Pick an image and a policy setting, then run the pipeline…</div>
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">What to notice</span>
+    Signing always succeeds and scanning always <em>completes</em> — the CVEs are just reported. The only step
+    that can actually block anything is the <strong>policy gate</strong>, evaluated at pull time against the
+    latest scan result. Toggle the policy off with the vulnerable image selected: the scan still reports a
+    critical CVE, but the pull now goes through anyway, because nothing enforces the finding. Scanning without a
+    policy is just a dashboard; the gate is what makes it a control.
+  </div>
+
+  <h2>Replication</h2>
+  <p>
+    Harbor can replicate repositories to or from another Harbor instance, or to/from most major registries
+    (Docker Hub, ECR, GCR/Artifact Registry, ACR, Quay, and others) via replication rules filtered by project,
+    repository name, or tag, and triggered manually, on a schedule, or automatically on every push. This is how
+    a multi-region deployment keeps a local copy of its images near each cluster instead of every region pulling
+    across a WAN link to one origin registry — the same problem, at a different layer, that
+    <strong>Dragonfly</strong> (next up) solves with peer-to-peer distribution once images are already local to a
+    region and thousands of nodes need to pull them at once.
+  </p>
+
+  <h2>Where you'd reach for it</h2>
+  <ul>
+    <li><strong>A private, policy-enforced registry</strong> — you need to run your own registry (compliance,
+      data residency, air-gapped environments) but still want RBAC, scanning, and signing rather than bare
+      Distribution.</li>
+    <li><strong>Supply-chain gates before deployment</strong> — CI pushes to Harbor, and a project policy blocks
+      any image with unpatched critical CVEs or without a valid signature from ever being pullable, independent
+      of whatever is doing the deploying (Argo CD, Flux, plain <code>kubectl</code>).</li>
+    <li><strong>Multi-region or multi-cluster image distribution</strong> — replication rules keep a local mirror
+      near each cluster instead of every pull crossing a long network path back to one registry.</li>
+  </ul>
+
+  <div class="callout warn">
+    <span class="callout-title">Often confused with</span>
+    <strong>Harbor vs. a plain registry (Distribution/Docker Hub):</strong> Harbor <em>embeds</em> a Distribution
+    registry for storage — it doesn't replace it — and adds the project/RBAC/scan/sign/replication layer on top;
+    a bare registry has none of that. <strong>Harbor vs. Quay:</strong> Red Hat's Quay covers similar ground
+    (scanning, RBAC, replication) but isn't a CNCF project; teams choose between them mostly on ecosystem fit
+    (Quay ties closely to OpenShift) rather than a fundamental architectural difference. <strong>Harbor vs.
+    Dragonfly:</strong> Harbor decides <em>whether</em> an image may be pulled and stores the canonical copy;
+    Dragonfly accelerates <em>how</em> a large fan-out of nodes actually pulls it, and commonly sits in front of
+    or alongside a registry like Harbor rather than replacing it.
+  </div>
+
+  <h2>Why it graduated</h2>
+  <p>
+    Harbor started at VMware in 2016 as an internal project to run a compliant private registry across VMware's
+    own Kubernetes platforms, joined CNCF at the Sandbox level in 2018, moved to Incubating later that same year,
+    and graduated on <strong>June 15, 2020</strong> — the 11th CNCF project to reach Graduated status. The
+    graduation case rested on broad production adoption across many organizations (not just VMware), an open
+    governance model with a multi-vendor maintainer base, and demonstrated integration with the rest of the
+    cloud-native security stack — pluggable scanners, Kubernetes-native deployment via Helm, and (at the time)
+    Notary, later replaced by Sigstore/Cosign as that ecosystem matured.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. What does the "Registry" component inside Harbor actually do, versus "Core"?</p>
+      <button class="quiz-option" data-val="a">Registry runs the web UI; Core stores the actual image layers on disk.</button>
+      <button class="quiz-option" data-val="b">Registry is an embedded Distribution instance that stores OCI blobs/manifests and speaks the push/pull protocol; Core is the API server that enforces auth and RBAC before proxying to it.</button>
+      <button class="quiz-option" data-val="c">Registry and Core are the same process; the split is only a naming convention in the Helm chart.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. In the pipeline demo, turning off the "block pull on critical/high CVE" policy while using the vulnerable image still lets Trivy report a critical finding, but the pull now succeeds. What does that show?</p>
+      <button class="quiz-option" data-val="a">Trivy only scans images when the policy is enabled.</button>
+      <button class="quiz-option" data-val="b">Cosign signing automatically overrides any vulnerability policy.</button>
+      <button class="quiz-option" data-val="c">Scanning and enforcement are separate: a scan result is just data until a policy is configured to act on it at pull time.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. What's the point of a robot account instead of using a normal admin user's credentials in a CI pipeline?</p>
+      <button class="quiz-option" data-val="a">It's scoped to specific actions on specific projects and has an expiration date, so a leaked CI secret doesn't grant broad, permanent access.</button>
+      <button class="quiz-option" data-val="b">Robot accounts get faster push/pull throughput than human accounts.</button>
+      <button class="quiz-option" data-val="c">Robot accounts are required to trigger vulnerability scans; human accounts cannot.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var els = {
+    image: document.getElementById("hbImage"),
+    policy: document.getElementById("hbPolicy"),
+    pipeline: document.getElementById("hbPipeline"),
+    run: document.getElementById("hbRun"),
+    reset: document.getElementById("hbReset"),
+    log: document.getElementById("hbLog")
+  };
+
+  var steps = [
+    { key: "push", name: "PUSH", sub: "registry" },
+    { key: "scan", name: "SCAN", sub: "trivy" },
+    { key: "sign", name: "SIGN", sub: "cosign" },
+    { key: "gate", name: "GATE", sub: "policy" },
+    { key: "pull", name: "PULL", sub: "client" }
+  ];
+
+  var running = false;
+
+  function render() {
+    els.pipeline.innerHTML = "";
+    steps.forEach(function (s, i) {
+      var div = document.createElement("div");
+      div.className = "hb-step";
+      div.id = "hbStep-" + s.key;
+      div.innerHTML = '<div class="hb-name">' + s.name + '</div><div class="hb-sub">' + s.sub + '</div>';
+      els.pipeline.appendChild(div);
+      if (i < steps.length - 1) {
+        var arrow = document.createElement("div");
+        arrow.className = "hb-arrow";
+        arrow.textContent = "→";
+        els.pipeline.appendChild(arrow);
+      }
+    });
+  }
+
+  function stepEl(key) { return document.getElementById("hbStep-" + key); }
+
+  function setStatus(key, status) {
+    var el = stepEl(key);
+    if (!el) return;
+    el.classList.remove("active", "pass", "fail");
+    if (status) el.classList.add(status);
+  }
+
+  function resetAll() {
+    steps.forEach(function (s) { setStatus(s.key, null); });
+    els.log.textContent = "Pick an image and a policy setting, then run the pipeline…";
+  }
+
+  function log(msg) { els.log.textContent = msg; }
+  function appendLog(msg) { els.log.textContent += "\n" + msg; }
+
+  function profile(image) {
+    return image === "vuln"
+      ? { tag: "webapp:1.0-legacy", critical: 1, high: 2, medium: 1 }
+      : { tag: "webapp:2.3", critical: 0, high: 0, medium: 2 };
+  }
+
+  function run() {
+    if (running) return;
+    running = true;
+    els.run.disabled = true;
+    resetAll();
+
+    var image = els.image.value;
+    var policyOn = els.policy.checked;
+    var p = profile(image);
+    var blocking = p.critical + p.high > 0;
+
+    var delay = 0;
+    var step = 550;
+
+    delay += 0;
+    setTimeout(function () {
+      setStatus("push", "active");
+      log("client: docker push harbor.example.com/library/" + p.tag);
+    }, delay);
+
+    delay += step;
+    setTimeout(function () {
+      setStatus("push", "pass");
+      appendLog("core: auth OK (robot$ci-pipeline) — registry: blob layers stored, manifest recorded");
+      setStatus("scan", "active");
+      appendLog("jobservice: scan job queued for " + p.tag);
+    }, delay);
+
+    delay += step;
+    setTimeout(function () {
+      setStatus("scan", "pass");
+      appendLog(
+        "trivy: scan complete — " + p.critical + " critical, " + p.high + " high, " + p.medium + " medium"
+      );
+      setStatus("sign", "active");
+    }, delay);
+
+    delay += step;
+    setTimeout(function () {
+      setStatus("sign", "pass");
+      appendLog("cosign: signature generated and pushed as an OCI artifact attached to the digest");
+      setStatus("gate", "active");
+      appendLog(
+        "policy: \"block pull on critical/high CVE\" is " + (policyOn ? "ENABLED" : "disabled")
+      );
+    }, delay);
+
+    delay += step;
+    setTimeout(function () {
+      var gateBlocks = policyOn && blocking;
+      setStatus("gate", gateBlocks ? "fail" : "pass");
+      if (gateBlocks) {
+        appendLog("core: latest scan exceeds severity threshold — pull will be DENIED");
+      } else {
+        appendLog("core: no blocking policy violation — pull will be ALLOWED");
+      }
+      setStatus("pull", "active");
+    }, delay);
+
+    delay += step;
+    setTimeout(function () {
+      var gateBlocks = policyOn && blocking;
+      setStatus("pull", gateBlocks ? "fail" : "pass");
+      if (gateBlocks) {
+        appendLog("client: docker pull " + p.tag + " -> 403 Forbidden (denied by vulnerability policy)");
+      } else {
+        appendLog("client: docker pull " + p.tag + " -> 200 OK, image retrieved");
+      }
+      running = false;
+      els.run.disabled = false;
+    }, delay);
+  }
+
+  els.run.addEventListener("click", run);
+  els.reset.addEventListener("click", function () {
+    if (running) return;
+    resetAll();
+  });
+
+  render();
+  resetAll();
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
