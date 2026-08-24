@@ -360,7 +360,7 @@
       "summary": "An enterprise registry: RBAC, vulnerability scanning, signing, replication.",
       "prerequisites": ["containerd"],
       "file": "harbor.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "dragonfly",
