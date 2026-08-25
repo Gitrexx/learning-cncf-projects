@@ -1,0 +1,530 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dragonfly — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring: traditional-pull vs P2P-swarm race visualizer. ---- */
+  .df-controls { display: flex; gap: var(--sp-4); flex-wrap: wrap; align-items: center; margin-bottom: var(--sp-4); }
+  .df-controls select { font-family: var(--font-mono); font-size: var(--fs-sm); }
+  .df-controls label.lbl {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+  }
+
+  .df-compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--sp-5);
+    margin-bottom: var(--sp-4);
+  }
+  @media (max-width: 760px) {
+    .df-compare { grid-template-columns: 1fr; }
+  }
+
+  .df-panel {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    padding: var(--sp-4);
+  }
+  .df-panel h4 {
+    margin: 0 0 var(--sp-3);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .df-grid {
+    display: grid;
+    gap: 4px;
+    margin-bottom: var(--sp-3);
+  }
+  .df-cell {
+    aspect-ratio: 1 / 1;
+    border-radius: 3px;
+    background: var(--surface-3);
+    border: 1px solid var(--border);
+    transition: background .2s, border-color .2s, box-shadow .2s;
+  }
+  .df-cell.origin {
+    background: var(--signal-violet);
+    border-color: var(--signal-violet);
+  }
+  .df-cell.active {
+    background: color-mix(in srgb, var(--accent-2) 55%, var(--surface-3));
+    border-color: var(--accent-2);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-2) 35%, transparent);
+  }
+  .df-cell.done {
+    background: color-mix(in srgb, var(--signal-green) 60%, var(--surface-3));
+    border-color: var(--signal-green);
+  }
+
+  .df-stats {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    display: grid;
+    gap: 0.3em;
+  }
+  .df-stats strong { color: var(--text); }
+  .df-stats .df-origin-load { color: var(--signal-violet); font-weight: 700; }
+
+  .df-legend {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-faint);
+    display: flex;
+    gap: var(--sp-4);
+    flex-wrap: wrap;
+    margin-bottom: var(--sp-4);
+  }
+  .df-legend span { display: inline-flex; align-items: center; gap: 0.4em; }
+  .df-swatch { width: 0.8em; height: 0.8em; border-radius: 2px; display: inline-block; }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Registry &amp; Distribution · Sub-topic 36 / 36</p>
+  <h1>Dragonfly</h1>
+  <p class="lead">
+    <a href="harbor.html">Harbor</a> and plain <span class="term" title="The OCI/CNCF registry implementation that stores blobs and serves the push/pull HTTP API.">Distribution</span>
+    registries answer "is this image allowed, and where does the canonical copy live" — but they say nothing about
+    what happens when a Kubernetes autoscaling event, a rolling restart, or an AI training job spins up a thousand
+    nodes at once and every single one of them tries to pull the same multi-gigabyte image or model checkpoint from
+    that one registry in the same thirty seconds. Dragonfly is a <strong>peer-to-peer file and image distribution
+    system</strong>: instead of every node hammering the origin, one or a few nodes fetch it once and the rest get
+    it from each other, turning a network storm into a self-organizing swarm.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Dragonfly was open-sourced by Alibaba in November 2017 to solve exactly this problem at Alibaba's own scale —
+    hundreds of thousands of container pulls a day during deploys. It joined CNCF as a Sandbox project in October
+    2018, reached Incubating in April 2020, shipped the rearchitected Dragonfly 2.0 in 2021, and
+    <strong>graduated on January 14, 2026</strong> — the 36th CNCF Graduated project — backed by production use at
+    Alibaba, Ant Group, Datadog, DiDi, and Kuaishou, and a contributor base that grew from 45 people at 5 companies
+    to 271 people across 130+ companies since joining CNCF. It doesn't replace a registry like Harbor; it sits in
+    front of one, accelerating the "many nodes, one origin, right now" moment that a registry alone can't solve.
+  </div>
+
+  <h2>The problem: a registry is one place, a fleet is thousands</h2>
+  <p>
+    A registry — even a well-run one like Harbor, backed by object storage — has finite egress bandwidth and a
+    finite number of concurrent connections it can serve well. That's fine for steady-state traffic, but two
+    increasingly common cloud-native events break it: a <strong>fan-out event</strong>, where an autoscaler,
+    a canary rollout, or a cluster-wide restart asks hundreds or thousands of nodes to pull the same image inside
+    seconds of each other; and <strong>large artifacts</strong>, where the object being pulled isn't a 100&nbsp;MB
+    web app image but a 20–100&nbsp;GB AI model checkpoint that hundreds of GPU nodes need simultaneously before a
+    training or inference job can start. In both cases every node re-downloading the same bytes from the same
+    origin is wasted work — the bytes are already sitting on the node next to it — and the registry's bandwidth
+    becomes the bottleneck that determines how long the whole rollout takes.
+  </p>
+
+  <h2>Core architecture: four roles, split control and data plane</h2>
+  <p>
+    Dragonfly v2 separates <em>deciding who talks to whom</em> from <em>actually moving bytes</em>. Four components
+    do the work:
+  </p>
+  <ul>
+    <li><strong>Manager</strong> — the control-plane brain: cluster configuration, which Scheduler and Seed Peer
+      clusters belong together, RBAC, and a console UI. In Dragonfly's 2026 lightweight deployment mode it can be
+      dropped entirely, leaving the Scheduler as the sole coordinator for smaller installs.</li>
+    <li><strong>Scheduler</strong> — for every download request, picks the best parent peer(s) to download from,
+      using a <span class="term" title="The scheduler prefers a parent peer on the same host, then same rack, then same availability zone/IDC, before falling back to a peer anywhere else or to the origin — minimizing bytes crossing expensive or slow network hops.">network-topology-aware</span>
+      algorithm, and decides when a piece isn't available anywhere yet and someone has to fetch it from the source
+      ("back-to-source"). The Scheduler never moves file bytes itself — it only makes routing decisions over gRPC.</li>
+    <li><strong>Seed Peer</strong> — a root peer with extra capacity, purpose-built to fetch from the origin
+      registry/object-store on the Scheduler's instruction and then act as the first, most reliable source the
+      swarm can pull from. Preheating a rollout means telling Seed Peers to fetch an image before any workload
+      pod needs it, so the swarm is already primed when the real fan-out hits.</li>
+    <li><strong>Peer (dfdaemon)</strong> — runs on every node as a daemon. It's both a downloader and an uploader:
+      it fetches pieces (for itself or on behalf of the node) and immediately becomes a source other peers can pull
+      those same pieces from. Clients reach it either as an HTTP/HTTPS proxy (configured as a
+      <span class="term" title="containerd/Docker support registry mirror endpoints — dfdaemon presents itself as one, so the container runtime pulls through it with zero image-name changes.">registry mirror</span>
+      so <code>containerd</code> pulls need no changes) or directly over gRPC via the <code>dfget</code> client.</li>
+  </ul>
+
+  <h2>How a pull actually flows</h2>
+  <p>
+    A file (an image layer, a model shard) is split into <strong>pieces</strong> — small, independently
+    verifiable chunks — and identified by a task ID derived from its content digest, the same idea as OCI
+    content-addressing. When a node's <code>containerd</code> pulls an image through its configured mirror,
+    dfdaemon intercepts the request and asks the Scheduler for a plan. If some peer in the swarm already has
+    pieces of that task, the Scheduler routes the request to the closest one (same host &gt; same rack &gt; same
+    zone) instead of the origin. If nobody has it yet, the Scheduler triggers a Seed Peer (or the requesting peer
+    itself) to fetch from the source exactly once. The critical detail is that a peer doesn't wait to have the
+    <em>whole</em> file before it starts sharing — as soon as it holds a piece, it can serve that piece to another
+    peer, which is what lets the swarm grow piece-by-piece and node-by-node instead of one full download at a
+    time. Bytes then move directly peer-to-peer over HTTP or Dragonfly's newer <span class="term" title="A TLV (type-length-value) binary transfer protocol Dragonfly introduced to replace gRPC for the data plane; TCP-based Vortex cuts large-file download time roughly 50%, QUIC-based Vortex roughly 40%, versus gRPC.">Vortex</span>
+    protocol — the Scheduler is never in that data path, only in the routing decision.
+  </p>
+
+  <div class="callout note">
+    <span class="callout-title">Preheating and AI model distribution</span>
+    Because the Scheduler can trigger a Seed Peer proactively, an operator (or a CI/CD pipeline) can
+    <strong>preheat</strong> an image or model into the swarm ahead of a scheduled rollout, so the fan-out never
+    has a cold-start moment. Since 2026 Dragonfly also speaks the native Hugging Face and ModelScope download
+    protocols directly, so GPU clusters pulling the same model weights get the same P2P fan-out treatment images
+    already had — the piece-splitting and topology-aware routing don't care whether the bytes are a container
+    layer or a <code>.safetensors</code> shard.
+  </div>
+
+  <h2>Try it: race a fan-out event two ways</h2>
+  <p>
+    Pick a fleet size and how many concurrent connections the origin registry can serve, then run both scenarios
+    at once: every node pulling straight from the origin, versus one seed fetching once and the rest of the swarm
+    trading pieces peer-to-peer. Watch the origin's load and how many rounds each approach needs to finish.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Traditional pull vs. Dragonfly P2P swarm</div>
+
+    <div class="df-controls">
+      <label class="lbl">Fleet size:
+        <select id="dfSize">
+          <option value="24">24 nodes</option>
+          <option value="48" selected>48 nodes</option>
+          <option value="96">96 nodes</option>
+        </select>
+      </label>
+      <label class="lbl">Origin concurrent connections:
+        <select id="dfSlots">
+          <option value="2">2</option>
+          <option value="4" selected>4</option>
+          <option value="8">8</option>
+        </select>
+      </label>
+      <span class="lbl">Dragonfly peer fanout: fixed at 2 uploads/peer/round</span>
+    </div>
+
+    <div class="df-legend">
+      <span><span class="df-swatch" style="background: var(--signal-violet);"></span> fetching from origin</span>
+      <span><span class="df-swatch" style="background: color-mix(in srgb, var(--accent-2) 55%, var(--surface-3));"></span> downloading from a peer</span>
+      <span><span class="df-swatch" style="background: color-mix(in srgb, var(--signal-green) 60%, var(--surface-3));"></span> has the image</span>
+      <span><span class="df-swatch" style="background: var(--surface-3);"></span> waiting</span>
+    </div>
+
+    <div class="df-compare">
+      <div class="df-panel">
+        <h4>Traditional — everyone pulls from origin</h4>
+        <div class="df-grid" id="dfGridTrad"></div>
+        <div class="df-stats">
+          <div>Round: <strong id="dfTradRound">0</strong></div>
+          <div>Nodes with image: <strong id="dfTradDone">0</strong> / <span id="dfTradTotal">0</span></div>
+          <div>Origin connections this round: <strong class="df-origin-load" id="dfTradLoad">0</strong></div>
+          <div>Total origin transfers served: <strong id="dfTradOriginTotal">0</strong></div>
+        </div>
+      </div>
+      <div class="df-panel">
+        <h4>Dragonfly — seed &amp; peer-to-peer swarm</h4>
+        <div class="df-grid" id="dfGridDf"></div>
+        <div class="df-stats">
+          <div>Round: <strong id="dfDfRound">0</strong></div>
+          <div>Nodes with image: <strong id="dfDfDone">0</strong> / <span id="dfDfTotal">0</span></div>
+          <div>Origin connections this round: <strong class="df-origin-load" id="dfDfLoad">0</strong></div>
+          <div>Total origin transfers served: <strong id="dfDfOriginTotal">0</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <button class="btn" id="dfRun">Run race</button>
+      <button class="btn ghost" id="dfReset">Reset</button>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">What to notice</span>
+    In the traditional panel the origin's connection count stays pegged at your chosen limit round after round —
+    every single node's bytes came from the origin. In the Dragonfly panel the origin is only ever touched in
+    round 1, by the one seed peer; every other node's image came from a neighbor. Because a peer that just
+    finished can immediately serve two more, the "nodes with image" count in the swarm roughly doubles each round
+    instead of growing by a fixed amount — that exponential curve is why the swarm finishes in a handful of rounds
+    even at 96 nodes, while the origin-bound approach still needs one round per batch of "origin slots" nodes.
+  </div>
+
+  <h2>Where you'd reach for it</h2>
+  <ul>
+    <li><strong>Large fleets with synchronized pulls</strong> — big Kubernetes clusters where a deploy, a
+      cluster-wide restart, or an autoscaling spike asks hundreds or thousands of nodes to pull the same image at
+      once.</li>
+    <li><strong>Expensive or constrained bandwidth</strong> — cross-region or cross-cloud links, or an edge/branch
+      site with a limited backhaul, where re-pulling the same bytes over that link per-node is wasteful or slow.</li>
+    <li><strong>Large AI/ML artifacts</strong> — model checkpoints and weight shards that many GPU nodes need
+      before a training or inference job can start, where minutes of idle GPU time per node adds up fast.</li>
+    <li><strong>Multi-cluster or edge fleets</strong> — nodes that would otherwise all reach back to one central
+      registry over a long path benefit from an in-region swarm that only touches the origin once.</li>
+  </ul>
+
+  <div class="callout warn">
+    <span class="callout-title">Often confused with</span>
+    <strong>Dragonfly vs. "Dragonfly" the in-memory database:</strong> DragonflyDB, a Redis/Memcached-compatible
+    in-memory data store, is an entirely unrelated project that just happens to share the name — no relation to
+    CNCF's Dragonfly beyond that. <strong>Dragonfly vs. BitTorrent:</strong> the epidemic, piece-sharing idea is
+    the same lineage, but Dragonfly is purpose-built for cloud-native operations — a Kubernetes-aware Scheduler
+    with topology-based routing, per-organization Manager/RBAC, registry-mirror integration, and preheating —
+    rather than a public tracker-and-swarm protocol. <strong>Dragonfly vs. Harbor:</strong> Harbor decides whether
+    an image may exist and stores the canonical copy; Dragonfly doesn't store or govern anything — it accelerates
+    how a large fan-out of nodes actually pulls what's already in a registry like Harbor, and the two are commonly
+    deployed together rather than as alternatives.
+  </div>
+
+  <h2>Why it graduated</h2>
+  <p>
+    Dragonfly's graduation case rested on the same pillars CNCF looks for at this maturity tier: years of
+    production use at meaningful scale (Alibaba-scale image and, more recently, AI model distribution), adoption
+    beyond its founding company (Ant Group, Datadog, DiDi, Kuaishou among the named production users), and healthy
+    open governance — contributors grew roughly 6x (45 → 271 people) and spread across more than 130 companies
+    since joining CNCF, with commit activity up over 3,000%. It graduated on January 14, 2026 as the 36th CNCF
+    Graduated project, rounding out the registry-and-distribution area alongside Harbor: one project governing
+    what may be pulled, the other making the pull itself scale.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. In Dragonfly's architecture, what does the Scheduler actually do?</p>
+      <button class="quiz-option" data-val="a">It stores and forwards file pieces between peers directly.</button>
+      <button class="quiz-option" data-val="b">It decides, using topology-aware routing, which parent peer a downloading node should pull from — the bytes themselves move directly between peers, not through the Scheduler.</button>
+      <button class="quiz-option" data-val="c">It replaces the container registry entirely, serving as the sole source of image blobs.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">2. In the race demo, why does the origin's connection count in the Dragonfly panel drop to zero after round 1, while the traditional panel's stays pegged at the connection limit?</p>
+      <button class="quiz-option" data-val="a">After the seed peer fetches once from the origin, every other node gets the file from a peer that already has it, so the origin is never touched again; the traditional panel has no such sharing, so every node must queue for an origin connection.</button>
+      <button class="quiz-option" data-val="b">The Dragonfly panel's origin has a faster network link than the traditional panel's origin.</button>
+      <button class="quiz-option" data-val="c">The simulation caps the Dragonfly panel's origin at exactly one use regardless of fleet size, unrelated to peer sharing.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">3. Dragonfly and Harbor both showed up in "Registry &amp; Distribution." What's the actual division of labor between them?</p>
+      <button class="quiz-option" data-val="a">They're competing alternatives — a team picks one or the other, not both.</button>
+      <button class="quiz-option" data-val="b">Harbor is the P2P layer and Dragonfly is the registry that stores and governs images.</button>
+      <button class="quiz-option" data-val="c">Harbor governs and stores the canonical image (RBAC, scanning, signing); Dragonfly accelerates how a large fan-out of nodes actually pulls it, and the two are normally deployed together.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var els = {
+    size: document.getElementById("dfSize"),
+    slots: document.getElementById("dfSlots"),
+    run: document.getElementById("dfRun"),
+    reset: document.getElementById("dfReset"),
+    gridTrad: document.getElementById("dfGridTrad"),
+    gridDf: document.getElementById("dfGridDf"),
+    tradRound: document.getElementById("dfTradRound"),
+    tradDone: document.getElementById("dfTradDone"),
+    tradTotal: document.getElementById("dfTradTotal"),
+    tradLoad: document.getElementById("dfTradLoad"),
+    tradOriginTotal: document.getElementById("dfTradOriginTotal"),
+    dfRound: document.getElementById("dfDfRound"),
+    dfDone: document.getElementById("dfDfDone"),
+    dfTotal: document.getElementById("dfDfTotal"),
+    dfLoad: document.getElementById("dfDfLoad"),
+    dfOriginTotal: document.getElementById("dfDfOriginTotal")
+  };
+
+  var DIMS = {
+    24: { cols: 6, rows: 4 },
+    48: { cols: 8, rows: 6 },
+    96: { cols: 12, rows: 8 }
+  };
+
+  var FANOUT = 2;
+  var TICK_MS = 550;
+
+  var timer = null;
+  var running = false;
+  var trad = null;
+  var dfl = null;
+
+  function buildGrid(container, n) {
+    var dims = DIMS[n];
+    container.style.gridTemplateColumns = "repeat(" + dims.cols + ", 1fr)";
+    container.innerHTML = "";
+    var cells = [];
+    for (var i = 0; i < n; i++) {
+      var cell = document.createElement("div");
+      cell.className = "df-cell";
+      container.appendChild(cell);
+      cells.push(cell);
+    }
+    return cells;
+  }
+
+  function setCell(cell, state) {
+    cell.classList.remove("origin", "active", "done");
+    if (state) cell.classList.add(state);
+  }
+
+  function newState(n) {
+    return {
+      n: n,
+      done: 0,
+      round: 0,
+      originTotal: 0,
+      finished: false
+    };
+  }
+
+  function initTraditional(n, slots) {
+    var cells = buildGrid(els.gridTrad, n);
+    var st = newState(n);
+    st.cells = cells;
+    st.slots = slots;
+    st.remaining = n;
+    return st;
+  }
+
+  function initDragonfly(n) {
+    var cells = buildGrid(els.gridDf, n);
+    var st = newState(n);
+    st.cells = cells;
+    st.have = 1; // seed
+    st.pending = n - 1;
+    st.seeded = false;
+    return st;
+  }
+
+  function stepTraditional(st) {
+    if (st.finished) return;
+    st.round++;
+    var served = Math.min(st.remaining, st.slots);
+    var startIdx = st.n - st.remaining;
+    for (var i = 0; i < st.n; i++) setCell(st.cells[i], i < st.n - st.remaining ? "done" : null);
+    for (var j = 0; j < served; j++) {
+      setCell(st.cells[startIdx + j], "origin");
+    }
+    st.thisRoundLoad = served;
+    st.originTotal += served;
+    st.remaining -= served;
+    st.done = st.n - st.remaining;
+    if (st.remaining <= 0) st.finished = true;
+    render();
+  }
+
+  function stepDragonfly(st) {
+    if (st.finished) return;
+    st.round++;
+    if (!st.seeded) {
+      // round 1: seed fetches from origin
+      setCell(st.cells[0], "origin");
+      st.thisRoundLoad = 1;
+      st.originTotal += 1;
+      st.seeded = true;
+      st.done = 1;
+    } else {
+      var newly = Math.min(st.pending, st.have * FANOUT);
+      var startIdx = st.have;
+      for (var j = 0; j < newly; j++) {
+        setCell(st.cells[startIdx + j], "active");
+      }
+      // mark previously-have nodes as done
+      for (var k = 0; k < st.have; k++) setCell(st.cells[k], "done");
+      st.have += newly;
+      st.pending -= newly;
+      st.thisRoundLoad = 0;
+      st.done = st.have;
+      if (st.pending <= 0) {
+        st.finished = true;
+        for (var m = 0; m < st.have; m++) setCell(st.cells[m], "done");
+      }
+    }
+    render();
+  }
+
+  function render() {
+    if (trad) {
+      els.tradRound.textContent = trad.round;
+      els.tradDone.textContent = trad.done;
+      els.tradTotal.textContent = trad.n;
+      els.tradLoad.textContent = trad.finished ? 0 : (trad.thisRoundLoad || 0);
+      els.tradOriginTotal.textContent = trad.originTotal;
+    }
+    if (dfl) {
+      els.dfRound.textContent = dfl.round;
+      els.dfDone.textContent = dfl.done;
+      els.dfTotal.textContent = dfl.n;
+      els.dfLoad.textContent = dfl.finished ? 0 : (dfl.thisRoundLoad || 0);
+      els.dfOriginTotal.textContent = dfl.originTotal;
+    }
+  }
+
+  function tick() {
+    var a = trad.finished, b = dfl.finished;
+    if (!a) stepTraditional(trad);
+    if (!b) stepDragonfly(dfl);
+    if (trad.finished && dfl.finished) {
+      clearInterval(timer);
+      timer = null;
+      running = false;
+      els.run.disabled = false;
+      els.size.disabled = false;
+      els.slots.disabled = false;
+    }
+  }
+
+  function resetAll() {
+    if (timer) { clearInterval(timer); timer = null; }
+    running = false;
+    els.run.disabled = false;
+    els.size.disabled = false;
+    els.slots.disabled = false;
+    var n = parseInt(els.size.value, 10);
+    var slots = parseInt(els.slots.value, 10);
+    trad = initTraditional(n, slots);
+    dfl = initDragonfly(n);
+    render();
+  }
+
+  function run() {
+    if (running) return;
+    resetAll();
+    running = true;
+    els.run.disabled = true;
+    els.size.disabled = true;
+    els.slots.disabled = true;
+    timer = setInterval(tick, TICK_MS);
+  }
+
+  els.run.addEventListener("click", run);
+  els.reset.addEventListener("click", resetAll);
+  els.size.addEventListener("change", resetAll);
+  els.slots.addEventListener("change", resetAll);
+
+  resetAll();
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct
+          ? "Correct."
+          : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
