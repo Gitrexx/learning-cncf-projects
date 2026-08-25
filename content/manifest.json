@@ -370,7 +370,7 @@
       "summary": "Peer-to-peer image & file distribution at scale (graduated 2026).",
       "prerequisites": ["harbor"],
       "file": "dragonfly.html",
-      "status": "planned"
+      "status": "done"
     }
   ]
 }
