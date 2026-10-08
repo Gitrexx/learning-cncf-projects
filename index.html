@@ -146,8 +146,13 @@
   .crumb { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); }
   .crumb a { color: var(--text-muted); }
   .frame-actions { margin-left: auto; display: flex; gap: var(--sp-2); }
-  .iframe-shell { border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; box-shadow: var(--shadow-md); background: var(--surface); }
-  iframe.deepdive-frame { width: 100%; border: 0; display: block; height: calc(100vh - 150px); min-height: 480px; background: var(--bg); }
+  /* The deep-dive reads as part of the page: same column width, no card
+     chrome, iframe auto-sized to its content so only the page scrolls.
+     The negative margin offsets the embedded page's own small side padding
+     (room for widget shadows) so its text aligns with the breadcrumb. */
+  .view.item-view { max-width: calc(var(--maxw-deepdive) + 2 * var(--sp-6)); }
+  .iframe-shell { margin: 0 calc(-1 * var(--sp-3)); }
+  iframe.deepdive-frame { width: 100%; border: 0; display: block; height: 70vh; background: transparent; }
 
   /* Planned placeholder */
   .placeholder { text-align: center; padding: var(--sp-8) var(--sp-5); }
@@ -158,9 +163,8 @@
   /* Responsive: collapse sidebar under a disclosure on narrow screens */
   @media (max-width: 900px) {
     .app { grid-template-columns: 1fr; grid-template-areas: "brand" "topbar" "sidebar" "main"; }
-    .brand { border-right: 0; }
+    .brand { border-right: 0; position: static; }
     .sidebar { position: static; max-height: none; border-right: 0; border-bottom: 1px solid var(--border); }
-    iframe.deepdive-frame { height: 78vh; }
   }
 </style>
 

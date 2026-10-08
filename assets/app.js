@@ -203,7 +203,7 @@
   /* ------------------------- item (deep-dive) ------------------------- */
   function renderItem(item) {
     clear(el.main);
-    var view = h("div", { class: "view" });
+    var view = h("div", { class: "view item-view" });
     var sec = (state.manifest.sections || []).filter(function (s) { return s.id === item.sectionId; })[0];
 
     var head = h("div", { class: "frame-head" }, [
@@ -217,15 +217,14 @@
     view.appendChild(head);
 
     if (isDone(item)) {
-      var shell = h("div", { class: "iframe-shell" }, [
-        h("iframe", {
-          class: "deepdive-frame",
-          src: CONTENT_DIR + item.file,
-          title: item.title + " deep-dive",
-          loading: "lazy"
-        })
-      ]);
-      view.appendChild(shell);
+      var frame = h("iframe", {
+        class: "deepdive-frame",
+        src: CONTENT_DIR + item.file,
+        title: item.title + " deep-dive",
+        scrolling: "no",
+        onload: function () { fitFrame(frame); }
+      });
+      view.appendChild(h("div", { class: "iframe-shell" }, [frame]));
     } else {
       view.appendChild(renderPlanned(item));
     }
@@ -234,6 +233,23 @@
     document.title = item.title + " — " + state.manifest.topic;
     el.main.scrollTop = 0;
     window.scrollTo(0, 0);
+  }
+
+  // Size the iframe to its document so the deep-dive scrolls with the app
+  // page instead of inside its own box. Same-origin, so we can measure it;
+  // a ResizeObserver keeps it in sync as widgets expand/collapse.
+  function fitFrame(frame) {
+    var win = frame.contentWindow, doc;
+    try { doc = frame.contentDocument; } catch (e) { return; }
+    if (!doc || !doc.body) return;
+    doc.documentElement.classList.add("embedded");
+    function fit() {
+      var hgt = Math.ceil(doc.body.getBoundingClientRect().height);
+      if (hgt > 0) frame.style.height = hgt + "px";
+    }
+    fit();
+    if (win.ResizeObserver) new win.ResizeObserver(fit).observe(doc.body);
+    else win.addEventListener("resize", fit);
   }
 
   function renderPlanned(item) {
