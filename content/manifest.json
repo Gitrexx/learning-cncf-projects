@@ -371,6 +371,56 @@
       "prerequisites": ["harbor"],
       "file": "dragonfly.html",
       "status": "done"
+    },
+    {
+      "id": "kubevirt",
+      "title": "KubeVirt",
+      "sectionId": "foundations",
+      "order": 6,
+      "summary": "Run virtual machines as Kubernetes workloads, alongside containers (graduated 2026).",
+      "prerequisites": ["kubernetes"],
+      "file": "kubevirt.html",
+      "status": "planned"
+    },
+    {
+      "id": "karmada",
+      "title": "Karmada",
+      "sectionId": "foundations",
+      "order": 7,
+      "summary": "Multi-cluster, multi-cloud orchestration with native Kubernetes APIs (graduated 2026).",
+      "prerequisites": ["kubernetes"],
+      "file": "karmada.html",
+      "status": "planned"
+    },
+    {
+      "id": "buildpacks",
+      "title": "Cloud Native Buildpacks",
+      "sectionId": "delivery",
+      "order": 4,
+      "summary": "Turn source code into OCI images without a Dockerfile (graduated 2026).",
+      "prerequisites": ["containerd"],
+      "file": "buildpacks.html",
+      "status": "planned"
+    },
+    {
+      "id": "nats",
+      "title": "NATS",
+      "sectionId": "runtime",
+      "order": 6,
+      "summary": "Lightweight messaging: pub/sub, request-reply, and JetStream streaming (graduated 2026).",
+      "prerequisites": [],
+      "file": "nats.html",
+      "status": "planned"
+    },
+    {
+      "id": "kubeflow",
+      "title": "Kubeflow",
+      "sectionId": "runtime",
+      "order": 7,
+      "summary": "The AI/ML platform on Kubernetes: pipelines, training, tuning, model registry (graduated 2026).",
+      "prerequisites": ["kubernetes"],
+      "file": "kubeflow.html",
+      "status": "planned"
     }
   ]
 }
