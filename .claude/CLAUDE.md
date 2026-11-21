@@ -1,7 +1,7 @@
 # CNCF Graduated Projects — Learning Project
 
 ## What this is
-A personalized learning project for the **36 CNCF graduated projects**. Learner context: fluent
+A personalized learning project for the **41 CNCF graduated projects**. Learner context: fluent
 and comfortable with Kubernetes, but keeps running into the *names* of graduated projects in blogs
 and talks without knowing what they actually are, what problem they solve, or how they work. The
 goal is to turn each project from "a name I've seen" into real, working understanding — studied at
@@ -12,7 +12,7 @@ Deep-dives are interactive HTML pages in `/content`, planned by `/ROADMAP.md`, i
 
 ## Project structure
 - `/ROADMAP.md` — the guide: the full plan (source of truth for what to build and in what order),
-  a **landscape** of 36 projects across 8 sections.
+  a **landscape** of 41 projects across 8 sections.
 - `/content/manifest.json` — index of sub-topics with status (`planned`/`done`); what the app renders.
 - `/content/<slug>.html` — the deep-dive pages (created one at a time by the routine below).
 - `/assets/theme.css` — the shared design system; every deep-dive links `../assets/theme.css`.
@@ -80,6 +80,7 @@ Follow these rules whenever asked to add/continue learning content:
   scripts. It must run as-is on GitHub Pages.
 
 ## Scope note
-The list is pinned to the 36 CNCF **graduated** projects (verified from the `cncf/landscape` source,
-July 2026). If CNCF graduates a new project later, add it as a new item in the appropriate manifest
+The list is pinned to the 41 CNCF **graduated** projects (verified from the `cncf/landscape` source,
+November 2026 — the original 36 from July 2026 plus Buildpacks, Kubeflow, Karmada, NATS, and
+KubeVirt). If CNCF graduates a new project later, add it as a new item in the appropriate manifest
 section and a new entry in `ROADMAP.md`, then build its deep-dive like any other.
