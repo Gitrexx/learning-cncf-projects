@@ -380,7 +380,7 @@
       "summary": "Run virtual machines as Kubernetes workloads, alongside containers (graduated 2026).",
       "prerequisites": ["kubernetes"],
       "file": "kubevirt.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "karmada",
