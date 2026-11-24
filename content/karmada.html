@@ -1,0 +1,775 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Karmada — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring: propagation-flow stepper + multi-cluster propagation simulator. ---- */
+  .km-flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 6px; margin-bottom: var(--sp-4); }
+  .km-node {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    padding: var(--sp-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    color: var(--text-muted);
+    text-align: center;
+    transition: background .2s, border-color .2s, color .2s, box-shadow .2s;
+  }
+  .km-node b { display: block; color: var(--text); font-size: var(--fs-sm); }
+  .km-node.past { border-color: color-mix(in srgb, var(--signal-green) 55%, var(--border)); }
+  .km-node.cur {
+    border-color: var(--accent-2);
+    background: color-mix(in srgb, var(--accent-2) 16%, var(--surface-2));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-2) 30%, transparent);
+    color: var(--text);
+  }
+  .km-node[data-plane="host"]   { border-top: 4px solid var(--signal-violet); }
+  .km-node[data-plane="member"] { border-top: 4px solid var(--signal-green); }
+  .km-step {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    padding: var(--sp-4);
+    min-height: 170px;
+    margin-bottom: var(--sp-3);
+  }
+  .km-step h4 { margin: 0 0 var(--sp-2); }
+  .km-step pre { margin: var(--sp-3) 0 0; }
+
+  .km-top { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--sp-3) var(--sp-5); margin-bottom: var(--sp-4); }
+  .km-top label { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); display: grid; gap: 4px; }
+  .km-top label output { color: var(--text); font-weight: 700; }
+  .km-top input[type=range] { width: 100%; accent-color: var(--accent); }
+  .km-top > * { min-width: 0; }
+  .km-top select { font-family: var(--font-mono); font-size: var(--fs-sm); width: 100%; max-width: 100%; }
+  .km-check { display: flex !important; align-items: center; gap: .5em; grid-template-columns: none; }
+
+  .km-clusters { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--sp-3); margin-bottom: var(--sp-4); }
+  .km-cluster {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    padding: var(--sp-3);
+    cursor: pointer;
+    transition: border-color .15s, box-shadow .15s, opacity .2s;
+  }
+  .km-cluster:hover { border-color: var(--accent); }
+  .km-cluster.sel { border-color: var(--accent-2); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-2) 30%, transparent); }
+  .km-cluster.down { border-color: var(--signal-red); background: color-mix(in srgb, var(--signal-red) 8%, var(--surface-2)); }
+  .km-cluster.excluded { opacity: .55; }
+  .km-cluster h4 { margin: 0; font-family: var(--font-mono); font-size: var(--fs-sm); display: flex; justify-content: space-between; gap: var(--sp-2); }
+  .km-meta { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); margin: 2px 0 var(--sp-2); }
+  .km-state { font-family: var(--font-mono); font-size: var(--fs-xs); }
+  .km-state.ok { color: var(--signal-green); }
+  .km-state.bad { color: var(--signal-red); }
+  .km-pods { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; min-height: 18px; margin: var(--sp-2) 0; }
+  .km-pod {
+    aspect-ratio: 1 / 1;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 1px solid var(--accent-strong);
+    animation: km-pop .3s ease-out;
+  }
+  .km-pod.new { background: var(--accent-2); border-color: var(--accent-2); }
+  .km-pod.dying { background: var(--signal-red); border-color: var(--signal-red); opacity: .45; }
+  .km-pod.free { background: transparent; border: 1px dashed var(--border-strong); animation: none; }
+  @keyframes km-pop { from { transform: scale(.2); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .km-count { font-family: var(--font-mono); font-size: var(--fs-md); font-weight: 700; }
+  .km-cluster .km-knobs { display: grid; gap: 4px; margin-top: var(--sp-2); }
+  .km-cluster .km-knobs label { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 6px; }
+  .km-cluster .km-knobs input[type=range] { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
+  .km-cluster .km-knobs label.off { opacity: .4; }
+  .km-cluster .btn { margin-top: var(--sp-2); font-size: var(--fs-xs); padding: 4px 10px; }
+
+  .km-out { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); }
+  @media (max-width: 760px) { .km-out { grid-template-columns: 1fr; } }
+  .km-out > div { min-width: 0; }
+  .km-out h4 { margin: 0 0 var(--sp-2); font-family: var(--font-mono); font-size: var(--fs-xs); letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); }
+  .km-out pre { margin: 0; max-height: 330px; overflow: auto; font-size: var(--fs-xs); }
+  .km-diff { color: var(--signal-amber); font-weight: 700; }
+  .km-log {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    background: var(--surface-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3);
+    max-height: 170px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    margin: var(--sp-4) 0 0;
+  }
+  .km-log .ok { color: var(--signal-green); }
+  .km-log .warn { color: var(--signal-amber); }
+  .km-log .bad { color: var(--signal-red); }
+  .km-verdict { font-family: var(--font-mono); font-size: var(--fs-sm); margin-bottom: var(--sp-3); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Foundations &amp; Orchestration · Sub-topic 7 / 41</p>
+  <h1>Karmada</h1>
+  <p class="lead">
+    You know how to run one Kubernetes cluster. Almost nobody runs one: there's a cluster per region, per cloud,
+    per environment, per regulatory boundary, plus the on-prem ones and the edge ones. Each of them is its own API
+    server, so "deploy this app to three regions, weighted by capacity, and move it if a region dies" becomes a
+    pile of scripts and a CD tool looping over kubeconfigs. Karmada (short for <em>Kubernetes Armada</em>) is a
+    <strong>control plane for your control planes</strong>. You point <code>kubectl</code> at it, apply a
+    <em>completely ordinary</em> Deployment, and a separate policy object decides which member clusters get it,
+    how many replicas each gets, and what to change per cluster. Karmada then keeps those clusters in line, the
+    way a Deployment controller keeps Pods in line.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Karmada was started at Huawei and open-sourced in 2021 with partners including Alibaba Cloud and several large
+    Chinese enterprises. It grew directly out of experience with Kubernetes Federation (KubeFed). It joined the CNCF
+    Sandbox in September 2021 and moved to Incubating in December 2023. CNCF voted it to Graduated on
+    <strong>September 3, 2026</strong> and announced it at KubeCon + CloudNativeCon China. At graduation it had
+    1,200+ contributors from about 290 organizations. Named production users include Bloomberg, Trip.com,
+    Alibaba Cloud, Huawei Cloud, Wellhub, and vivo, many of them running large multi-cloud and AI-training fleets
+    behind one Karmada control plane.
+  </div>
+
+  <h2>The problem: N clusters, N sources of truth</h2>
+  <p>
+    Teams run many clusters for good reasons: <strong>blast radius</strong> (a bad upgrade takes out one cluster,
+    not the company), <strong>latency and data residency</strong> (an EU cluster for EU users and EU data),
+    <strong>capacity and price</strong> (burst to whichever cloud has GPUs today), and <strong>scale limits</strong>
+    (a single cluster tops out at a few thousand nodes). Kubernetes itself has no concept of "another cluster." The
+    usual workarounds each solve part of it:
+  </p>
+  <ul>
+    <li><strong>GitOps fan-out</strong> (an Argo CD ApplicationSet, or Flux in every cluster) gets the same
+      manifests everywhere. It doesn't <em>schedule</em>. It won't split 30 replicas by free capacity, and it won't
+      move them when a cluster fails.</li>
+    <li><strong>Hand-maintained per-cluster overlays</strong> (Kustomize, Helm values per cluster) drift, and every
+      new cluster means editing N folders.</li>
+    <li><strong>KubeFed</strong> (Federation v2), the original SIG-Multicluster attempt, made you rewrite every
+      resource as a wrapper type: <code>FederatedDeployment</code> containing a <code>template</code>, a
+      <code>placement</code>, and <code>overrides</code>. Existing tooling, Helm charts, and CRDs didn't
+      understand the wrappers, adoption stalled, and the project was archived in 2023.</li>
+  </ul>
+  <p>
+    Karmada keeps KubeFed's good idea (template + placement + overrides) and drops the bad one. The template stays
+    a <strong>native, unmodified Kubernetes resource</strong>. Placement and overrides become <em>separate
+    policy objects</em> that select resources, much as a NetworkPolicy selects Pods. Your existing Helm chart works
+    against Karmada unchanged.
+  </p>
+
+  <h2>Architecture: a Kubernetes API with nothing behind it</h2>
+  <p>
+    The Karmada control plane usually runs as Pods inside an ordinary "host" cluster, but it is a
+    <strong>separate API endpoint with its own etcd</strong>. Its API server is the real
+    <code>kube-apiserver</code> binary, so it accepts Deployments, Services, ConfigMaps, and any CRD. It has
+    <em>no nodes and no kubelets</em>, though. A Deployment you create there is stored and never runs. Karmada calls
+    it a <span class="term" title="A native Kubernetes object (Deployment, Service, CRD instance…) stored in the Karmada API server as the desired state. It never runs on the Karmada control plane itself; it is the template that gets propagated to member clusters.">resource template</span>.
+    Karmada's own components turn templates into workloads in the member clusters:
+  </p>
+  <table>
+    <thead><tr><th>Component</th><th>What it does</th><th>Kubernetes analogy</th></tr></thead>
+    <tbody>
+      <tr><td><code>karmada-apiserver</code> + etcd</td><td>Stores resource templates, Karmada's policy CRDs, and the <code>Cluster</code> objects representing members.</td><td>kube-apiserver + etcd</td></tr>
+      <tr><td><code>karmada-aggregated-apiserver</code></td><td>Serves the <code>Cluster</code> API plus a <code>clusters/&lt;name&gt;/proxy</code> subresource, so you can <code>kubectl</code> <em>through</em> Karmada into any member.</td><td>an aggregated API server</td></tr>
+      <tr><td><code>karmada-controller-manager</code></td><td>The resource <em>detector</em> (matches templates to policies), the binding controller, the execution and work-status controllers, cluster health, and failover/eviction.</td><td>kube-controller-manager</td></tr>
+      <tr><td><code>karmada-scheduler</code></td><td>Picks member clusters and splits replicas, using a filter → score → assign-replicas plugin pipeline.</td><td>kube-scheduler, but the "nodes" are clusters</td></tr>
+      <tr><td><code>karmada-scheduler-estimator</code></td><td>One per member (optional). Answers over gRPC: "how many replicas of this shape could actually fit?", based on real node resources rather than cluster totals.</td><td>(the kubelet's allocatable, summed and bin-packed)</td></tr>
+      <tr><td><code>karmada-webhook</code>, <code>karmada-descheduler</code>, <code>karmada-search</code>, <code>karmada-metrics-adapter</code></td><td>Validation/defaulting; rebalancing replicas that turned unschedulable; a cross-cluster search/cache; serving member metrics to FederatedHPA.</td><td>admission webhooks, descheduler, metrics-server</td></tr>
+      <tr><td><code>karmada-agent</code> (in a member)</td><td>Only for <strong>Pull</strong>-mode clusters. Runs inside the member, watches its own Work objects on the Karmada API, and applies them locally.</td><td>a kubelet that pulls from the control plane</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Push vs. Pull membership</h3>
+  <p>
+    A member joins in one of two modes. <strong>Push</strong> (<code>karmadactl join</code>): Karmada holds
+    credentials for the member's API server and its execution controller applies manifests directly. Nothing runs
+    in the member, but the control plane must be able to reach it. <strong>Pull</strong>
+    (<code>karmadactl register</code>): a <code>karmada-agent</code> in the member dials out to Karmada, pulls its
+    work, and reports status. Use Pull for clusters behind NAT or firewalls, at the edge, or where you don't want a
+    central component holding admin credentials for every cluster. The two modes can be mixed freely.
+  </p>
+
+  <h2>The propagation pipeline: template → binding → work → cluster</h2>
+  <p>
+    Karmada's data model is a chain of objects. Each is produced by a controller watching the previous one, the
+    same Deployment → ReplicaSet → Pod pattern you already know. Step through it:
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Follow one Deployment through Karmada</div>
+    <div class="km-flow" id="kmFlow"></div>
+    <div class="km-step" id="kmStep"></div>
+    <div class="row">
+      <button class="btn ghost" id="kmPrev">◀ Back</button>
+      <button class="btn" id="kmNext">Next step ▶</button>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">The insight to take away</span>
+    <strong>ResourceBinding is to Karmada what a Pod's <code>spec.nodeName</code> is to Kubernetes</strong>: the
+    scheduler's only output is "which clusters, how many replicas each," written into the binding. Everything after
+    that (overrides, rendering, applying, status) is mechanical. To find out where something landed and why, look at
+    the binding: <code>kubectl get rb -n &lt;ns&gt; -o yaml</code>.
+  </div>
+
+  <h2>PropagationPolicy: where, and how many</h2>
+  <p>
+    A <code>PropagationPolicy</code> (namespaced) or <code>ClusterPropagationPolicy</code> (cluster-wide, and the
+    only kind that can select cluster-scoped resources such as ClusterRoles) has two halves:
+    <code>resourceSelectors</code> (which templates; by apiVersion/kind/name/labels) and <code>placement</code>
+    (where they go). The main placement fields:
+  </p>
+  <ul>
+    <li><code>clusterAffinity</code>: eligible clusters by name, label, or field (<code>provider</code>,
+      <code>region</code>, <code>zone</code>). <code>clusterAffinities</code> is an <em>ordered</em> list of
+      fallback groups: use the first group that can fit the workload, and fall over to the next if it can't.</li>
+    <li><code>clusterTolerations</code>: like Pod tolerations. Clusters carry
+      <span class="term" title="Like node taints: key/value/effect marks on a Cluster object. NoSchedule keeps new workloads off it; NoExecute evicts workloads already there unless the policy tolerates the taint (optionally for tolerationSeconds).">taints</span>
+      (for example <code>cluster.karmada.io/not-ready:NoExecute</code>), and the policy says which ones it tolerates.</li>
+    <li><code>spreadConstraints</code>: "spread across at least 2 regions and at most 3 clusters"
+      (<code>spreadByField: region</code>, <code>minGroups</code>, <code>maxGroups</code>).</li>
+    <li><code>replicaScheduling</code>, the most important one. It decides what happens to
+      <code>spec.replicas</code>:
+      <ul>
+        <li><strong>Duplicated</strong>: every selected cluster gets the full replica count. Typical for
+          active-active setups where each region must stand alone.</li>
+        <li><strong>Divided + Weighted, static</strong>: split the replicas by
+          <code>staticWeightList</code> (for example us:2, eu:1). Remainders go to the higher-weight clusters.</li>
+        <li><strong>Divided + Weighted, dynamic</strong> (<code>dynamicWeight: AvailableReplicas</code>): the weight
+          is each cluster's <em>current free capacity</em> for this Pod shape, as reported by the
+          scheduler-estimator, so emptier clusters get more.</li>
+        <li><strong>Divided + Aggregated</strong>: pack the replicas into as <em>few</em> clusters as possible,
+          largest free capacity first. Good for chatty workloads where cross-cluster traffic is expensive.</li>
+      </ul>
+    </li>
+  </ul>
+<pre><code>apiVersion: policy.karmada.io/v1alpha1
+kind: PropagationPolicy
+metadata: { name: web, namespace: shop }
+spec:
+  resourceSelectors:
+  - { apiVersion: apps/v1, kind: Deployment, name: web }
+  propagateDeps: true            # also ship the ConfigMaps/Secrets it mounts
+  placement:
+    clusterAffinity:
+      clusterNames: [member-us, member-eu, member-ap]
+    replicaScheduling:
+      replicaSchedulingType: Divided
+      replicaDivisionPreference: Weighted
+      weightPreference:
+        staticWeightList:
+        - { targetCluster: { clusterNames: [member-us] }, weight: 2 }
+        - { targetCluster: { clusterNames: [member-eu, member-ap] }, weight: 1 }</code></pre>
+
+  <h2>OverridePolicy: the same app, slightly different everywhere</h2>
+  <p>
+    Real clusters differ. Each region pulls from its own registry mirror, the EU needs a different storage class,
+    the on-prem cluster needs a proxy env var. An <code>OverridePolicy</code> selects the same templates and lists
+    <code>overrideRules</code>, each scoped to a set of <code>targetCluster</code>s and carrying
+    <span class="term" title="Typed mutations applied while rendering a Work for a specific cluster: imageOverrider (registry/repository/tag), commandOverrider and argsOverrider, labelsOverrider and annotationsOverrider, fieldOverrider for embedded JSON/YAML, and plaintext JSON-patch for anything else.">overriders</span>.
+    The overrides are applied when the binding controller renders each cluster's Work. The template in the Karmada
+    API stays clean and identical for everyone.
+  </p>
+<pre><code>apiVersion: policy.karmada.io/v1alpha1
+kind: OverridePolicy
+metadata: { name: regional-registry, namespace: shop }
+spec:
+  resourceSelectors:
+  - { apiVersion: apps/v1, kind: Deployment, name: web }
+  overrideRules:
+  - targetCluster: { clusterNames: [member-eu] }
+    overriders:
+      imageOverrider:
+      - { component: Registry, operator: replace, value: europe-docker.pkg.dev/acme }</code></pre>
+
+  <h2>Try it: propagate, override, then lose a cluster</h2>
+  <p>
+    Below are four member clusters and one Deployment template (<code>shop/web</code>, image
+    <code>ghcr.io/acme/web:1.8</code>). Pick a scheduling strategy and replica count, then adjust each cluster's
+    static <strong>weight</strong> and free <strong>capacity</strong> (what its scheduler-estimator would report).
+    Click a cluster card to see the exact manifest Karmada renders for it. Turn on the OverridePolicy to see the
+    per-cluster manifests diverge. Then press <strong>Fail cluster</strong> to watch failover reschedule the lost
+    replicas.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Karmada propagation simulator</div>
+    <div class="km-top">
+      <label>spec.replicas: <output id="kmRepOut"></output>
+        <input type="range" id="kmRep" min="1" max="40" value="12" />
+      </label>
+      <label>replicaScheduling:
+        <select id="kmMode">
+          <option value="dup">Duplicated</option>
+          <option value="static" selected>Divided · Weighted (staticWeightList)</option>
+          <option value="dynamic">Divided · Weighted (dynamicWeight: AvailableReplicas)</option>
+          <option value="agg">Divided · Aggregated</option>
+        </select>
+      </label>
+      <label class="km-check"><input type="checkbox" id="kmOverride" /> OverridePolicy: per-region image registry</label>
+      <label class="km-check"><input type="checkbox" id="kmTolerate" /> clusterTolerations: tolerate not-ready (no failover)</label>
+    </div>
+
+    <div class="km-verdict" id="kmVerdict"></div>
+    <div class="km-clusters" id="kmClusters"></div>
+
+    <div class="km-out">
+      <div>
+        <h4>PropagationPolicy (generated from your settings)</h4>
+        <pre><code id="kmPolicy"></code></pre>
+      </div>
+      <div>
+        <h4 id="kmWorkTitle">Work for selected cluster</h4>
+        <pre><code id="kmWork"></code></pre>
+      </div>
+    </div>
+    <pre class="km-log" id="kmLog"></pre>
+    <div class="row" style="margin-top: var(--sp-3);">
+      <button class="btn ghost" id="kmReset">Reset clusters</button>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">What to notice</span>
+    With <strong>Duplicated</strong>, failover does nothing to the survivors. Each already runs the full count, and
+    the failed cluster's copy is just gone. With <strong>Divided</strong>, the lost replicas are <em>re-divided</em>
+    among the survivors under the same rule, and the template's total stays at <code>spec.replicas</code>. That is
+    the multi-cluster version of a ReplicaSet replacing Pods from a dead node. If capacity runs out, the remainder
+    can't be placed and the binding reports it as unschedulable. Real Karmada also does <em>graceful eviction</em>:
+    the new replicas become healthy on the survivors before the old Work is purged.
+  </div>
+
+  <h2>Failover, in detail</h2>
+  <p>
+    The cluster-status controller probes each member's <code>/healthz</code> (Push) or watches the agent's lease
+    (Pull), and sets the <code>Cluster</code>'s <code>Ready</code> condition. A not-ready cluster can then be
+    tainted <code>NoExecute</code>. Recent releases make which conditions taint which clusters explicit and
+    configurable (via <code>ClusterTaintPolicy</code>) instead of hard-coded, because automatic eviction across a
+    whole region is a big decision. Workloads whose policy doesn't tolerate the taint are evicted: the scheduler
+    re-runs for their bindings and excludes the tainted cluster, and the binding records a <em>graceful eviction
+    task</em> so the old placement is only cleaned up once the replacements are healthy (or a timeout passes).
+    Separately, <strong>application failover</strong> (<code>spec.failover.application</code> in the policy) moves
+    a workload that is <em>unhealthy</em> in a healthy cluster, using the health that the resource interpreter
+    reports, after a <code>tolerationSeconds</code> grace period.
+  </p>
+
+  <h2>Beyond Deployments</h2>
+  <ul>
+    <li><strong>Resource Interpreter Framework</strong>. Karmada needs to know how to read and write replicas,
+      aggregate status, judge health, and find dependencies for each kind. It ships answers for built-in kinds.
+      For your CRDs (a Kubeflow PyTorchJob, a Flink job, an Argo Rollout) you supply them as Lua scripts in a
+      <code>ResourceInterpreterCustomization</code> or as a webhook. That's how Karmada schedules arbitrary
+      operators' resources, not just core types.</li>
+    <li><strong>Status aggregation</strong>. The template's <code>.status</code> in Karmada is the merged status
+      from all members (for example the summed <code>readyReplicas</code>), so <code>kubectl rollout status</code>
+      against Karmada means something.</li>
+    <li><strong>FederatedHPA / CronFederatedHPA</strong>. An HPA that scales the <em>template's</em> total
+      replicas from metrics gathered across members (via karmada-metrics-adapter). The scheduler then re-divides
+      the new total. Scale up in one place and it spreads across clusters.</li>
+    <li><strong>Multi-cluster networking</strong>. <code>MultiClusterService</code> and the SIG-Multicluster
+      <code>ServiceExport</code>/<code>ServiceImport</code> API expose a service across clusters. Pod-to-pod
+      connectivity itself comes from a CNI-level mesh (Cilium ClusterMesh, Submariner) or a service mesh.</li>
+    <li><strong>Multi-cluster AI/batch</strong>. Priority and preemption in policies, multi-component scheduling
+      (a training job's launcher and workers kept together), and integration with Volcano and Kueue-style queueing.
+      This is a big part of why Karmada's adoption rose with GPU scarcity.</li>
+  </ul>
+
+  <h2>Where you'd reach for it</h2>
+  <ul>
+    <li><strong>Multi-region active-active</strong>: one manifest, Duplicated or Divided across regions, with
+      automatic failover when a region's cluster goes dark.</li>
+    <li><strong>Multi-cloud capacity</strong>: Divided by dynamic weight, so replicas flow to wherever there is
+      room (and GPUs) right now.</li>
+    <li><strong>Platform teams with dozens to hundreds of clusters</strong>: a single API for app teams, where the
+      app team writes a Deployment and the platform's policies decide placement.</li>
+    <li><strong>Hybrid and edge</strong>: Pull-mode agents for clusters the center can't reach directly.</li>
+  </ul>
+
+  <div class="callout warn">
+    <span class="callout-title">Often confused with</span>
+    <strong>Karmada vs. Argo CD / Flux:</strong> GitOps tools <em>deliver</em> manifests from Git. Karmada
+    <em>schedules and fails over</em> workloads across clusters. They compose well: Argo CD syncs Git into the
+    Karmada API server as if it were one cluster, and Karmada fans the workloads out.
+    <strong>Karmada vs. Cluster API:</strong> Cluster API <em>creates and upgrades the clusters</em> (their
+    machines and control planes). Karmada orchestrates <em>workloads across</em> clusters that already exist.
+    <strong>Karmada vs. Open Cluster Management / Clusternet / Rancher Fleet:</strong> neighbors in the same space
+    (hub-and-spoke cluster management with ManifestWork-style objects). Karmada's distinguishing bet is the native
+    Kubernetes API for templates plus a real replica scheduler. <strong>Karmada vs. KubeFed:</strong> same goal.
+    KubeFed's wrapper types are the mistake Karmada was designed to avoid.
+  </div>
+
+  <h2>Why it graduated</h2>
+  <p>
+    The graduation case had the usual pillars. <strong>Production use at scale</strong>: Trip.com, Bloomberg, vivo,
+    Alibaba Cloud, Huawei Cloud, and many others run fleets from dozens to hundreds of clusters through it.
+    <strong>Broad contribution</strong>: from 500+ contributors at incubation to 1,200+ across about 290
+    organizations. <strong>Governance and security maturity</strong>: a third-party security audit, a formal
+    steering committee, and stable v1alpha1 policy APIs that operators have relied on for years. Underneath is a
+    shift in how people run Kubernetes. "One big cluster" lost to "many clusters," and multi-cluster scheduling went
+    from a niche to a platform requirement, with AI training capacity spread across clouds as the latest push.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. You <code>kubectl apply</code> a Deployment to the Karmada API server but create no PropagationPolicy. What happens?</p>
+      <button class="quiz-option" data-val="a">Karmada copies it to every member cluster by default.</button>
+      <button class="quiz-option" data-val="b">It's stored as a resource template and nothing runs. No policy matched, so no ResourceBinding exists and the Karmada control plane has no nodes of its own.</button>
+      <button class="quiz-option" data-val="c">It runs on the host cluster where the Karmada components are installed.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. Where would you look to see which clusters a workload was scheduled to, and how many replicas each got?</p>
+      <button class="quiz-option" data-val="a">The PropagationPolicy's status.</button>
+      <button class="quiz-option" data-val="b">The Deployment template's <code>spec</code>.</button>
+      <button class="quiz-option" data-val="c">The ResourceBinding's <code>spec.clusters</code>, written by karmada-scheduler.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. Your EU cluster must pull images from an EU registry mirror. How do you do this without forking the manifest?</p>
+      <button class="quiz-option" data-val="a">An OverridePolicy with an <code>imageOverrider</code> targeting the EU cluster. It's applied when that cluster's Work is rendered.</button>
+      <button class="quiz-option" data-val="b">A second Deployment template named <code>web-eu</code>.</button>
+      <button class="quiz-option" data-val="c">A <code>spreadConstraints</code> entry on region.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">4. A cluster sits behind a firewall, and the Karmada control plane can't open connections to it. What do you do?</p>
+      <button class="quiz-option" data-val="a">Karmada can't manage it. Use a GitOps tool instead.</button>
+      <button class="quiz-option" data-val="b">Register it in Pull mode. A karmada-agent inside the cluster dials out, pulls its Work objects, and applies them locally.</button>
+      <button class="quiz-option" data-val="c">Use Duplicated scheduling so it doesn't need to be contacted.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+  function el(id) { return document.getElementById(id); }
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+  /* ---------- Flow stepper ---------- */
+  var STEPS = [
+    { n: "template", label: "Deployment", plane: "host",
+      t: "1 · Resource template",
+      d: "You apply a plain apps/v1 Deployment to the Karmada API server. It's stored in Karmada's etcd and has no status yet. No kubelet will ever see this copy.",
+      c: "kubectl --kubeconfig karmada.config apply -f web-deployment.yaml\nkubectl --kubeconfig karmada.config get deploy web -n shop   # 0/0 ready… for now" },
+    { n: "policy", label: "PropagationPolicy", plane: "host",
+      t: "2 · Detector matches a policy",
+      d: "The resource detector in karmada-controller-manager watches all templates. It finds the PropagationPolicy whose resourceSelectors match (by explicit priority, then specificity), labels the template with the policy it's bound to, and creates a binding.",
+      c: "kubectl get propagationpolicy -n shop\nkubectl get deploy web -n shop -o jsonpath='{.metadata.labels}'" },
+    { n: "rb", label: "ResourceBinding", plane: "host",
+      t: "3 · ResourceBinding created",
+      d: "A ResourceBinding (ClusterResourceBinding for cluster-scoped kinds) records the template's reference, its replica count and per-replica resource requirements (pulled out by the resource interpreter), and the policy's placement. spec.clusters is still empty.",
+      c: "kubectl get resourcebinding -n shop\n# web-deployment   SCHEDULED=False" },
+    { n: "sched", label: "karmada-scheduler", plane: "host",
+      t: "4 · Scheduling",
+      d: "karmada-scheduler runs filter plugins (affinity, taints/tolerations, API enablement, spread constraints) and score plugins over the Cluster objects, then assigns replicas per the replicaScheduling strategy, asking each cluster's scheduler-estimator for real free capacity if dynamic. Result: spec.clusters = [{name: member-us, replicas: 6}, …].",
+      c: "kubectl get rb web-deployment -n shop -o jsonpath='{.spec.clusters}'\n# [{\"name\":\"member-us\",\"replicas\":6},{\"name\":\"member-eu\",\"replicas\":3},…]" },
+    { n: "work", label: "Work ×N", plane: "host",
+      t: "5 · Binding controller renders Works",
+      d: "For each scheduled cluster, the binding controller copies the template, sets replicas to that cluster's share, applies matching OverridePolicies, and writes the result into a Work object in that cluster's execution namespace, karmada-es-<cluster>. A Work is the 'Pod spec' of the multi-cluster world: the exact manifest for one cluster.",
+      c: "kubectl get work -A | grep web\n# karmada-es-member-us   web-6c9f…   APPLIED=True" },
+    { n: "apply", label: "member cluster", plane: "member",
+      t: "6 · Apply in the member",
+      d: "Push mode: the execution controller in Karmada applies the Work's manifest to the member's API server using stored credentials. Pull mode: the karmada-agent inside the member watches its own karmada-es namespace and applies it locally. Either way, the member's own Deployment controller, scheduler, and kubelets take it from there.",
+      c: "kubectl --kubeconfig karmada.config get --raw /apis/cluster.karmada.io/v1alpha1/clusters/member-us/proxy/apis/apps/v1/namespaces/shop/deployments/web\n# or: karmadactl get deploy -n shop --operation-scope members" },
+    { n: "status", label: "aggregated status", plane: "host",
+      t: "7 · Status flows back",
+      d: "The work-status controller copies each member object's status into its Work, then into the binding's aggregatedStatus. The resource interpreter merges them into the template's .status. Now the Deployment in Karmada reports 12/12 ready across all clusters, and its health feeds application failover.",
+      c: "kubectl --kubeconfig karmada.config get deploy web -n shop\n# NAME  READY   UP-TO-DATE  AVAILABLE\n# web   12/12   12          12" }
+  ];
+  var cur = 0;
+  var flow = el("kmFlow");
+  STEPS.forEach(function (s, i) {
+    var d = document.createElement("div");
+    d.className = "km-node";
+    d.setAttribute("data-plane", s.plane);
+    d.innerHTML = "<b>" + (i + 1) + "</b>" + esc(s.label);
+    flow.appendChild(d);
+  });
+  function renderStep() {
+    var nodes = flow.children;
+    for (var i = 0; i < nodes.length; i++) nodes[i].className = "km-node" + (i < cur ? " past" : i === cur ? " cur" : "");
+    var s = STEPS[cur];
+    el("kmStep").innerHTML = "<h4>" + esc(s.t) + "</h4><p>" + esc(s.d) + "</p><pre><code>" + esc(s.c) + "</code></pre>";
+    el("kmPrev").disabled = cur === 0;
+    el("kmNext").textContent = cur === STEPS.length - 1 ? "Start over ↺" : "Next step ▶";
+  }
+  el("kmNext").addEventListener("click", function () { cur = cur === STEPS.length - 1 ? 0 : cur + 1; renderStep(); });
+  el("kmPrev").addEventListener("click", function () { if (cur > 0) { cur--; renderStep(); } });
+  renderStep();
+
+  /* ---------- Propagation simulator ---------- */
+  var IMAGE = "ghcr.io/acme/web:1.8";
+  var DEFAULTS = [
+    { name: "member-us", provider: "aws", region: "us-east-1", mode: "Push", weight: 2, cap: 14, registry: "123456789.dkr.ecr.us-east-1.amazonaws.com/acme" },
+    { name: "member-eu", provider: "gcp", region: "europe-west1", mode: "Push", weight: 1, cap: 8, registry: "europe-docker.pkg.dev/acme" },
+    { name: "member-ap", provider: "alibaba", region: "ap-southeast-1", mode: "Push", weight: 1, cap: 6, registry: "registry.ap-southeast-1.aliyuncs.com/acme" },
+    { name: "member-edge", provider: "onprem", region: "factory-1", mode: "Pull", weight: 0, cap: 4, registry: "harbor.corp.local/acme" }
+  ];
+  var clusters, selected, assign = {}, prevAssign = {}, lastFailed = null;
+  var rep = el("kmRep"), mode = el("kmMode"), ovr = el("kmOverride"), tol = el("kmTolerate");
+  var logBox = el("kmLog");
+
+  function logLine(text, cls) {
+    var s = document.createElement("span");
+    if (cls) s.className = cls;
+    s.textContent = text + "\n";
+    logBox.appendChild(s);
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+
+  // Divide n by weights: floor shares, then remainder by largest fractional part, ties to higher weight.
+  function divideByWeight(n, list) {
+    var total = list.reduce(function (a, c) { return a + c.w; }, 0);
+    var out = {};
+    if (total <= 0) return out;
+    var rest = n, frac = [];
+    list.forEach(function (c) {
+      var exact = n * c.w / total, f = Math.floor(exact);
+      out[c.name] = f; rest -= f;
+      frac.push({ name: c.name, r: exact - f, w: c.w });
+    });
+    frac.sort(function (a, b) { return b.r - a.r || b.w - a.w; });
+    for (var i = 0; rest > 0 && frac.length; i = (i + 1) % frac.length) { out[frac[i].name]++; rest--; }
+    return out;
+  }
+
+  // Fill clusters up to capacity, most free first (Aggregated).
+  function aggregate(n, list) {
+    var out = {}, sorted = list.slice().sort(function (a, b) { return b.cap - a.cap; });
+    sorted.forEach(function (c) { var take = Math.min(c.cap, n); if (take > 0) out[c.name] = take; n -= take; });
+    return { out: out, left: n };
+  }
+
+  // Cap a weighted division at capacity, redistributing overflow to clusters with room.
+  function capped(n, list) {
+    var out = {}, left = n, pool = list.filter(function (c) { return c.cap > 0; }).map(function (c) { return { name: c.name, w: c.w, cap: c.cap }; });
+    list.forEach(function (c) { out[c.name] = 0; });
+    var guard = 0;
+    while (left > 0 && pool.length && guard++ < 20) {
+      var share = divideByWeight(left, pool.map(function (p) { return { name: p.name, w: p.w > 0 ? p.w : 0 }; }));
+      if (!Object.keys(share).length) break;
+      var placed = 0;
+      pool.forEach(function (p) {
+        var room = p.cap - out[p.name], give = Math.min(room, share[p.name] || 0);
+        out[p.name] += give; placed += give;
+      });
+      left -= placed;
+      pool = pool.filter(function (p) { return out[p.name] < p.cap && p.w > 0; });
+      if (placed === 0) break;
+    }
+    return { out: out, left: left };
+  }
+
+  function eligible() {
+    return clusters.filter(function (c) { return !c.down || tol.checked; });
+  }
+
+  // Schedule; when keepFrom is given (failover), survivors keep current replicas and only the delta is placed.
+  function schedule(keepFrom) {
+    var n = +rep.value, m = mode.value, el2 = eligible(), res = {}, left = 0;
+    if (m === "dup") {
+      el2.forEach(function (c) { res[c.name] = n; });
+      return { out: res, left: 0 };
+    }
+    var list = el2.map(function (c) {
+      return { name: c.name, w: m === "static" ? c.weight : c.cap, cap: m === "static" ? 9999 : c.cap };
+    });
+    if (m === "static") list = list.filter(function (c) { return c.w > 0; });
+    if (keepFrom) {
+      var kept = 0;
+      list.forEach(function (c) { res[c.name] = Math.min(keepFrom[c.name] || 0, n); kept += res[c.name]; });
+      var delta = n - kept;
+      var room = list.map(function (c) { return { name: c.name, w: c.w, cap: Math.max(0, c.cap - res[c.name]) }; });
+      var extra = m === "agg" ? aggregate(delta, room) : capped(delta, room);
+      Object.keys(extra.out).forEach(function (k) { res[k] = (res[k] || 0) + extra.out[k]; });
+      return { out: res, left: extra.left };
+    }
+    var r = m === "agg" ? aggregate(n, list) : capped(n, list);
+    return r;
+  }
+
+  function policyYaml() {
+    var m = mode.value, names = clusters.map(function (c) { return c.name; });
+    var y = "apiVersion: policy.karmada.io/v1alpha1\nkind: PropagationPolicy\nmetadata: { name: web, namespace: shop }\nspec:\n" +
+      "  resourceSelectors:\n  - { apiVersion: apps/v1, kind: Deployment, name: web }\n  placement:\n" +
+      "    clusterAffinity:\n      clusterNames: [" + names.join(", ") + "]\n";
+    if (tol.checked) y += "    clusterTolerations:\n    - key: cluster.karmada.io/not-ready\n      operator: Exists\n      effect: NoExecute\n";
+    y += "    replicaScheduling:\n";
+    if (m === "dup") y += "      replicaSchedulingType: Duplicated\n";
+    else if (m === "agg") y += "      replicaSchedulingType: Divided\n      replicaDivisionPreference: Aggregated\n";
+    else {
+      y += "      replicaSchedulingType: Divided\n      replicaDivisionPreference: Weighted\n      weightPreference:\n";
+      if (m === "dynamic") y += "        dynamicWeight: AvailableReplicas\n";
+      else {
+        y += "        staticWeightList:\n";
+        clusters.forEach(function (c) { if (c.weight > 0) y += "        - { targetCluster: { clusterNames: [" + c.name + "] }, weight: " + c.weight + " }\n"; });
+      }
+    }
+    return y;
+  }
+
+  function workYaml(c) {
+    var r = assign[c.name] || 0;
+    var image = IMAGE, overridden = ovr.checked;
+    if (overridden) image = c.registry + "/web:1.8";
+    var lines = [
+      "# Work in namespace karmada-es-" + c.name,
+      "apiVersion: work.karmada.io/v1alpha1",
+      "kind: Work",
+      "metadata:",
+      "  name: web-deployment",
+      "  namespace: karmada-es-" + c.name,
+      "spec:",
+      "  workload:",
+      "    manifests:",
+      "    - apiVersion: apps/v1",
+      "      kind: Deployment",
+      "      metadata: { name: web, namespace: shop }",
+      "      spec:",
+      "        replicas: " + r + (mode.value !== "dup" ? "        # ← this cluster's share" : ""),
+      "        template:",
+      "          spec:",
+      "            containers:",
+      "            - name: web",
+      "              image: " + image + (overridden ? "   # ← OverridePolicy" : "")
+    ];
+    return lines.map(function (l) {
+      return l.indexOf("← OverridePolicy") >= 0 ? '<span class="km-diff">' + esc(l) + "</span>" : esc(l);
+    }).join("\n");
+  }
+
+  function render() {
+    el("kmRepOut").textContent = rep.value;
+    var m = mode.value, box = el("kmClusters");
+    box.innerHTML = "";
+    var total = 0;
+    clusters.forEach(function (c) {
+      var r = assign[c.name] || 0, prev = prevAssign[c.name] || 0;
+      total += c.down && !tol.checked ? 0 : r;
+      var card = document.createElement("div");
+      var excluded = m === "static" && c.weight === 0;
+      card.className = "km-cluster" + (c.name === selected ? " sel" : "") + (c.down ? " down" : "") + (excluded ? " excluded" : "");
+      var pods = "";
+      var show = Math.min(r, 40);
+      for (var i = 0; i < show; i++) pods += '<span class="km-pod' + (c.down ? " dying" : i >= prev ? " new" : "") + '"></span>';
+      if (m !== "static" && m !== "dup" && !c.down) for (var j = show; j < Math.min(c.cap, 40); j++) pods += '<span class="km-pod free"></span>';
+      if (c.down && lastFailed === c.name && prev > 0 && !tol.checked) for (var k = 0; k < Math.min(prev, 40); k++) pods += '<span class="km-pod dying"></span>';
+      card.innerHTML =
+        "<h4><span>" + esc(c.name) + '</span><span class="km-count">' + r + "</span></h4>" +
+        '<div class="km-meta">' + esc(c.provider) + " · " + esc(c.region) + " · " + c.mode + "</div>" +
+        '<div class="km-state ' + (c.down ? "bad" : "ok") + '">' + (c.down ? "Ready=False · tainted not-ready:NoExecute" : "Ready=True") + "</div>" +
+        '<div class="km-pods">' + pods + "</div>" +
+        '<div class="km-knobs">' +
+          '<label class="' + (m === "static" ? "" : "off") + '">static weight <output>' + c.weight + '</output><input type="range" min="0" max="5" value="' + c.weight + '" data-k="weight" /></label>' +
+          '<label class="' + (m === "dynamic" || m === "agg" ? "" : "off") + '">free capacity <output>' + c.cap + '</output><input type="range" min="0" max="20" value="' + c.cap + '" data-k="cap" /></label>' +
+        "</div>" +
+        '<button class="btn ' + (c.down ? "" : "ghost") + '" data-act="fail">' + (c.down ? "Recover cluster" : "Fail cluster") + "</button>";
+      card.addEventListener("click", function (e) {
+        if (e.target.closest("input, button")) return;
+        selected = c.name; render();
+      });
+      card.querySelectorAll("input[type=range]").forEach(function (inp) {
+        inp.addEventListener("input", function () {
+          c[inp.getAttribute("data-k")] = +inp.value;
+          inp.previousElementSibling.textContent = inp.value;
+        });
+        inp.addEventListener("change", function () { reschedule("policy/cluster change"); });
+      });
+      card.querySelector("[data-act=fail]").addEventListener("click", function () { toggleFail(c); });
+      box.appendChild(card);
+    });
+
+    var target = m === "dup" ? +rep.value * eligible().length : +rep.value;
+    var verdict = el("kmVerdict");
+    if (m === "dup") verdict.textContent = "Duplicated: " + eligible().length + " clusters × " + rep.value + " = " + target + " Pods total.";
+    else if (unplaced > 0) verdict.innerHTML = '<span style="color: var(--signal-red)">' + unplaced + " replica(s) unschedulable: not enough free capacity on eligible clusters (binding Scheduled=False).</span>";
+    else verdict.textContent = "Divided: " + total + "/" + rep.value + " replicas placed across " + Object.keys(assign).filter(function (k) { return assign[k] > 0; }).length + " cluster(s).";
+
+    el("kmPolicy").textContent = policyYaml();
+    var sc = clusters.filter(function (c) { return c.name === selected; })[0];
+    el("kmWorkTitle").textContent = "Work for " + sc.name + (assign[sc.name] ? "" : " (none: not scheduled here)");
+    el("kmWork").innerHTML = assign[sc.name] ? workYaml(sc) : esc("# no Work in karmada-es-" + sc.name + ":\n# the scheduler gave this cluster 0 replicas, so the binding\n# controller didn't render a Work (or deleted the old one).");
+  }
+
+  var unplaced = 0;
+  function summary(a) {
+    return clusters.filter(function (c) { return a[c.name]; }).map(function (c) { return c.name + "=" + a[c.name]; }).join(", ") || "(none)";
+  }
+  function reschedule(reason, keep) {
+    prevAssign = keep ? assign : {};
+    var r = schedule(keep ? assign : null);
+    assign = {};
+    Object.keys(r.out).forEach(function (k) { if (r.out[k] > 0) assign[k] = r.out[k]; });
+    unplaced = r.left || 0;
+    if (!keep) prevAssign = assign;
+    logLine("scheduler (" + reason + "): spec.clusters → " + summary(assign) + (unplaced ? "  [" + unplaced + " unschedulable]" : ""), unplaced ? "bad" : "");
+    render();
+    if (keep) setTimeout(function () { prevAssign = assign; lastFailed = null; render(); }, 1600);
+  }
+
+  function toggleFail(c) {
+    if (!c.down) {
+      c.down = true; lastFailed = c.name;
+      logLine(c.name + ": health probe failed → Cluster Ready=False; taint cluster.karmada.io/not-ready:NoExecute", "bad");
+      if (tol.checked) {
+        logLine("  policy tolerates the taint → no eviction; " + (assign[c.name] || 0) + " replicas stay assigned to an unreachable cluster", "warn");
+        render(); return;
+      }
+      var had = assign[c.name] || 0;
+      if (!had) { logLine("  no replicas were scheduled here; nothing to evict"); reschedule("cluster excluded"); return; }
+      logLine("  graceful eviction task added to ResourceBinding; rescheduling " + (mode.value === "dup" ? "(Duplicated: survivors unchanged)" : had + " replicas onto survivors"), "warn");
+      var keep = {}; Object.keys(assign).forEach(function (k) { if (k !== c.name) keep[k] = assign[k]; });
+      assign = keep;
+      reschedule("failover", true);
+      setTimeout(function () { logLine("  replacements healthy → Work in karmada-es-" + c.name + " purged", "ok"); }, 1600);
+    } else {
+      c.down = false;
+      logLine(c.name + ": Ready=True, taint removed. Existing placement is kept (no automatic rebalance); the descheduler or a policy change moves replicas back.", "ok");
+      render();
+    }
+  }
+
+  function reset() {
+    clusters = DEFAULTS.map(function (c) { var o = {}; for (var k in c) o[k] = c[k]; o.down = false; return o; });
+    selected = clusters[0].name;
+    logBox.innerHTML = "";
+    lastFailed = null;
+    reschedule("initial");
+  }
+
+  rep.addEventListener("input", function () { el("kmRepOut").textContent = rep.value; });
+  rep.addEventListener("change", function () { reschedule("spec.replicas=" + rep.value); });
+  mode.addEventListener("change", function () { reschedule("strategy changed"); });
+  ovr.addEventListener("change", function () {
+    logLine(ovr.checked ? "OverridePolicy regional-registry created → binding controller re-renders every Work with its region's registry" : "OverridePolicy deleted → Works re-rendered with the template image", "warn");
+    render();
+  });
+  tol.addEventListener("change", function () { reschedule(tol.checked ? "tolerations added" : "tolerations removed"); });
+  el("kmReset").addEventListener("click", reset);
+  reset();
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct ? "Correct." : "Not quite. The highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>

@@ -390,7 +390,7 @@
       "summary": "Multi-cluster, multi-cloud orchestration with native Kubernetes APIs (graduated 2026).",
       "prerequisites": ["kubernetes"],
       "file": "karmada.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "buildpacks",
