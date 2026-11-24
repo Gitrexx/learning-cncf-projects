@@ -1,0 +1,690 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>KubeVirt — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring: VM-in-a-Pod stack explorer + live-migration simulator. ---- */
+  .kv-stack-wrap {
+    display: grid;
+    grid-template-columns: minmax(220px, 300px) 1fr;
+    gap: var(--sp-5);
+    align-items: start;
+  }
+  @media (max-width: 760px) { .kv-stack-wrap { grid-template-columns: 1fr; } }
+
+  .kv-stack { display: grid; gap: 6px; }
+  .kv-layer {
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    color: var(--text);
+    cursor: pointer;
+    transition: background .15s, border-color .15s, box-shadow .15s;
+  }
+  .kv-layer small { display: block; color: var(--text-faint); font-size: var(--fs-xs); }
+  .kv-layer:hover { border-color: var(--accent); }
+  .kv-layer.sel {
+    border-color: var(--accent-2);
+    background: color-mix(in srgb, var(--accent-2) 16%, var(--surface-2));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-2) 30%, transparent);
+  }
+  .kv-layer[data-scope="cluster"] { border-left: 4px solid var(--signal-violet); }
+  .kv-layer[data-scope="node"]    { border-left: 4px solid var(--accent); }
+  .kv-layer[data-scope="pod"]     { border-left: 4px solid var(--accent-2); }
+  .kv-layer[data-scope="guest"]   { border-left: 4px solid var(--signal-green); }
+  .kv-indent-1 { margin-left: 12px; }
+  .kv-indent-2 { margin-left: 24px; }
+  .kv-indent-3 { margin-left: 36px; }
+  .kv-indent-4 { margin-left: 48px; }
+
+  .kv-detail {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    padding: var(--sp-4);
+    min-height: 260px;
+  }
+  .kv-detail h4 { margin: 0 0 var(--sp-2); }
+  .kv-detail dl { display: grid; grid-template-columns: max-content 1fr; gap: var(--sp-1) var(--sp-3); margin: var(--sp-3) 0 0; font-size: var(--fs-sm); }
+  .kv-detail dt { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; padding-top: 2px; }
+  .kv-detail dd { margin: 0; }
+
+  .kv-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--sp-3) var(--sp-5); margin-bottom: var(--sp-4); }
+  .kv-controls label { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); display: grid; gap: 4px; }
+  .kv-controls label output { color: var(--text); font-weight: 700; }
+  .kv-controls input[type=range] { width: 100%; accent-color: var(--accent); }
+  .kv-controls select { font-family: var(--font-mono); font-size: var(--fs-sm); }
+
+  .kv-mig { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-5); margin-bottom: var(--sp-4); }
+  @media (max-width: 760px) { .kv-mig { grid-template-columns: 1fr; } }
+  .kv-mem {
+    display: grid;
+    grid-template-columns: repeat(16, 1fr);
+    gap: 3px;
+  }
+  .kv-page {
+    aspect-ratio: 1 / 1;
+    border-radius: 2px;
+    background: var(--surface-3);
+    border: 1px solid var(--border);
+    transition: background .2s, border-color .2s;
+  }
+  .kv-page.sent  { background: color-mix(in srgb, var(--signal-green) 60%, var(--surface-3)); border-color: var(--signal-green); }
+  .kv-page.dirty { background: color-mix(in srgb, var(--signal-amber) 70%, var(--surface-3)); border-color: var(--signal-amber); }
+  .kv-page.xfer  { background: color-mix(in srgb, var(--accent-2) 60%, var(--surface-3)); border-color: var(--accent-2); }
+
+  .kv-panel { border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--surface-2); padding: var(--sp-4); }
+  .kv-panel h4 { margin: 0 0 var(--sp-3); font-family: var(--font-mono); font-size: var(--fs-xs); letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); }
+
+  .kv-bars { display: flex; align-items: flex-end; gap: 4px; height: 140px; border-bottom: 1px solid var(--border-strong); padding-bottom: 2px; }
+  .kv-bar { flex: 1; max-width: 34px; background: var(--accent); border-radius: 2px 2px 0 0; position: relative; min-height: 2px; transition: height .25s; }
+  .kv-bar.throttled { background: var(--signal-amber); }
+  .kv-bar.final { background: var(--signal-green); }
+  .kv-bar.fail { background: var(--signal-red); }
+  .kv-threshold { position: relative; height: 0; border-top: 1px dashed var(--signal-green); margin-top: -1px; }
+  .kv-axis { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); margin-top: 4px; }
+
+  .kv-log {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    background: var(--surface-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3);
+    max-height: 190px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    margin: 0;
+  }
+  .kv-log .ok { color: var(--signal-green); }
+  .kv-log .warn { color: var(--signal-amber); }
+  .kv-log .bad { color: var(--signal-red); }
+
+  .kv-legend { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); display: flex; gap: var(--sp-4); flex-wrap: wrap; margin-bottom: var(--sp-3); }
+  .kv-legend span { display: inline-flex; align-items: center; gap: .4em; }
+  .kv-sw { width: .8em; height: .8em; border-radius: 2px; display: inline-block; }
+  .kv-verdict { font-family: var(--font-mono); font-size: var(--fs-sm); margin-top: var(--sp-3); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · Foundations &amp; Orchestration · Sub-topic 6 / 41</p>
+  <h1>KubeVirt</h1>
+  <p class="lead">
+    Most companies running Kubernetes still have a second platform next to it: a VMware (or Hyper-V, or
+    OpenStack) estate full of virtual machines that can't be containerized, at least not yet — a Windows app, a
+    vendor appliance, a legacy monolith with a kernel module, a database a vendor will only support on a VM.
+    KubeVirt deletes that second platform. It's a set of Kubernetes controllers and CRDs that let you declare a
+    <code>VirtualMachine</code> the same way you declare a <code>Deployment</code>, and then runs that VM —
+    a real KVM guest with its own kernel — <strong>inside an ordinary Pod</strong>, so the scheduler, the CNI,
+    the CSI driver, RBAC, quotas, and <code>kubectl</code> all just work for it.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Started at Red Hat in 2016, KubeVirt entered the CNCF Sandbox in September 2019, moved to Incubating in April
+    2022, and was <strong>announced as Graduated on November 10, 2026</strong> at KubeCon + CloudNativeCon North
+    America — ten years after its first commit. It's the engine under <strong>Red Hat OpenShift
+    Virtualization</strong>, <strong>SUSE Harvester</strong>, and a long list of other "VMs on Kubernetes"
+    products, with production users including ByteDance, Cloudflare, CoreWeave, and NVIDIA, and roughly 2,000+
+    contributors from 500+ organizations. The timing is not an accident: Broadcom's acquisition of VMware and the
+    licensing changes that followed sent a wave of enterprises looking for an exit, and "move the VMs onto the
+    Kubernetes platform you already run" became the most popular answer.
+  </div>
+
+  <h2>The problem: two platforms, two of everything</h2>
+  <p>
+    Running VMs and containers on separate stacks means two schedulers, two networking models, two storage
+    systems, two sets of RBAC and audit, two monitoring pipelines, two on-call rotations, and two licensing bills.
+    Worse, the VM side doesn't speak the Kubernetes API, so none of your GitOps, policy engines, or operators can
+    touch it. Earlier attempts at convergence ran containers <em>inside</em> VMs (fine, but still two control
+    planes) or bolted Kubernetes onto OpenStack. KubeVirt inverts it: <strong>Kubernetes is the only control
+    plane, and a VM is just another workload type</strong> that it schedules.
+  </p>
+  <p>
+    The key design bet: don't teach the kubelet about VMs. Instead, put the hypervisor process —
+    <span class="term" title="QEMU is the userspace machine emulator that provides a VM's virtual hardware (disks, NICs, display). With the Linux kernel's KVM module it runs guest CPU instructions directly on the host CPU via hardware virtualization (Intel VT-x / AMD-V), so the guest runs at near-native speed.">QEMU/KVM</span>,
+    managed by <span class="term" title="libvirt is the standard Linux virtualization management API/daemon. It takes an XML 'domain' definition and starts, stops, migrates, and monitors the corresponding QEMU process.">libvirt</span>
+    — inside a container in a Pod. Then the VM <em>inherits</em> everything Kubernetes already does for Pods:
+    the scheduler places it, cgroups bound its resources, the CNI gives it a network, a PVC gives it a disk.
+  </p>
+
+  <h2>The object model</h2>
+  <p>KubeVirt adds CRDs that mirror the patterns you already know:</p>
+  <table>
+    <thead><tr><th>KubeVirt object</th><th>Kubernetes analogy</th><th>What it is</th></tr></thead>
+    <tbody>
+      <tr><td><code>VirtualMachine</code> (VM)</td><td>StatefulSet with replicas 0/1</td><td>The durable, declarative definition. Has a <code>runStrategy</code> (<code>Always</code>, <code>Halted</code>, <code>Manual</code>, <code>RerunOnFailure</code>…) that decides whether an instance should exist. Survives stop/start.</td></tr>
+      <tr><td><code>VirtualMachineInstance</code> (VMI)</td><td>Pod</td><td>A <em>running</em> VM. Created by the VM controller when the VM should be on; deleted when it's stopped. One VMI ↔ one virt-launcher Pod.</td></tr>
+      <tr><td><code>VirtualMachineInstanceMigration</code></td><td>(a one-shot Job)</td><td>A request to live-migrate a VMI to another node. Creating it is what <code>virtctl migrate</code> does.</td></tr>
+      <tr><td><code>VirtualMachinePool</code> / <code>VirtualMachineInstanceReplicaSet</code></td><td>ReplicaSet</td><td>N identical VMs from a template, for stateless VM fleets.</td></tr>
+      <tr><td><code>VirtualMachineInstancetype</code> / <code>VirtualMachinePreference</code></td><td>(cloud instance sizes)</td><td>Reusable "t-shirt sizes" (CPU/memory) and guest preferences (firmware, disk bus) so each VM spec stays short.</td></tr>
+      <tr><td><code>DataVolume</code> (from CDI)</td><td>PVC + an init job</td><td>A PVC that the Containerized Data Importer populates — importing a qcow2 from HTTP, cloning another PVC, or pulling a disk from a container registry.</td></tr>
+    </tbody>
+  </table>
+
+<pre><code>apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: legacy-app
+spec:
+  runStrategy: Always
+  dataVolumeTemplates:              # CDI: create + populate the root disk PVC
+  - metadata: { name: legacy-app-root }
+    spec:
+      source: { registry: { url: "docker://quay.io/containerdisks/fedora:latest" } }
+      storage: { resources: { requests: { storage: 30Gi } } }
+  template:                         # ← this becomes the VMI
+    spec:
+      domain:
+        cpu: { cores: 2 }
+        memory: { guest: 4Gi }
+        devices:
+          disks:      [ { name: root, disk: { bus: virtio } } ]
+          interfaces: [ { name: default, masquerade: {} } ]
+      networks: [ { name: default, pod: {} } ]
+      volumes:  [ { name: root, dataVolume: { name: legacy-app-root } } ]</code></pre>
+  <p>
+    <code>kubectl apply</code> that, then <code>virtctl console legacy-app</code> to get a serial console, or
+    <code>virtctl vnc</code> for a graphical one. <code>kubectl get vmi</code> shows it running on a node like any Pod.
+  </p>
+
+  <h2>The component chain</h2>
+  <p>
+    KubeVirt is a classic operator-style system. Following a VM from <code>kubectl apply</code> to a booted guest:
+  </p>
+  <ol>
+    <li><strong>virt-operator</strong> installs and upgrades everything else, driven by a single
+      <code>KubeVirt</code> CR (which also holds cluster-wide config such as feature gates and migration defaults).</li>
+    <li><strong>virt-api</strong> serves the CRDs' validating/mutating webhooks and the
+      <span class="term" title="Extra API endpoints hanging off a resource, like pods/exec or pods/log. KubeVirt adds VMI subresources such as console, vnc, pause, and migrate, exposed via the aggregated API.">subresources</span>
+      — console, VNC, pause, start/stop — that <code>virtctl</code> talks to.</li>
+    <li><strong>virt-controller</strong> (cluster-wide, leader-elected) watches VMs and creates VMIs; for each
+      VMI it renders a <strong>virt-launcher Pod</strong> spec with the right CPU/memory requests, device
+      requests (e.g. <code>devices.kubevirt.io/kvm</code>), volumes, and networks — then hands it to the
+      <em>normal Kubernetes scheduler</em>.</li>
+    <li><strong>virt-handler</strong> (a DaemonSet, one per node) sees that a VMI's Pod landed on its node. It
+      prepares node-level plumbing and talks to the virt-launcher over a local socket, telling it to define and
+      start the domain. It also reports VMI status back and drives the node side of live migration.</li>
+    <li><strong>virt-launcher</strong> (one Pod per VM) runs a small Go supervisor plus libvirt; libvirt spawns
+      the <strong>QEMU</strong> process that <em>is</em> the VM. If the guest shuts down, QEMU exits, the Pod
+      completes, and the VMI ends.</li>
+  </ol>
+
+  <h2>Try it: click down through the stack</h2>
+  <p>
+    Each layer below is a real thing you can see with <code>kubectl</code> or <code>ps</code>. Click one to see
+    who creates it, what it owns, and how you'd inspect it. Notice how the line between "Kubernetes' job" and
+    "KubeVirt's job" falls.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">VM-in-a-Pod stack explorer</div>
+    <div class="kv-stack-wrap">
+      <div class="kv-stack" id="kvStack"></div>
+      <div class="kv-detail" id="kvDetail"></div>
+    </div>
+    <div class="kv-legend" style="margin-top: var(--sp-4);">
+      <span><span class="kv-sw" style="background: var(--signal-violet);"></span> cluster-wide</span>
+      <span><span class="kv-sw" style="background: var(--accent);"></span> per node</span>
+      <span><span class="kv-sw" style="background: var(--accent-2);"></span> inside the VM's Pod</span>
+      <span><span class="kv-sw" style="background: var(--signal-green);"></span> the guest</span>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">The insight to take away</span>
+    The VM's resource accounting, placement, eviction, and network identity all belong to <strong>the
+    virt-launcher Pod</strong>. That's why a VM shows up in your Pod quotas, why a node drain affects it, why
+    Prometheus and your CNI's NetworkPolicies see it, and why you can't "just" move it — moving a running VM means
+    moving a process with gigabytes of live memory to a different Pod on a different node. That's live migration.
+  </div>
+
+  <h2>Storage and networking</h2>
+  <p>
+    <strong>Disks</strong> are Kubernetes volumes. A VM disk can be a PVC (the normal case — via a
+    <code>DataVolume</code> so CDI imports or clones the image into it), a
+    <span class="term" title="A VM disk image packaged inside an OCI container image. It's ephemeral: changes are lost on restart, which makes it ideal for stateless or test VMs and for distributing golden images through any container registry.">containerDisk</span>
+    (an ephemeral disk image shipped in a container image), a <code>cloudInitNoCloud</code> volume for first-boot
+    config, or ConfigMaps/Secrets exposed as disks. Whatever CSI driver backs your PVCs — Ceph via Rook, a SAN
+    driver, Longhorn, Portworx — is your VM storage. Snapshots and clones map onto CSI snapshots.
+  </p>
+  <p>
+    <strong>Networking</strong> starts with the Pod network: the virt-launcher Pod gets a normal Pod IP from your
+    CNI, and KubeVirt connects the guest's virtual NIC to it — <code>masquerade</code> (NAT the guest behind the
+    Pod IP; the default, and migration-friendly) or <code>bridge</code> (hand the Pod's IP to the guest
+    directly). Services, Ingress, and NetworkPolicy apply to the VM because they apply to its Pod. VMs that need
+    to sit on an existing VLAN — the common case in a VMware migration, where VMs keep their IPs — get
+    <strong>secondary networks via Multus</strong> (bridge, SR-IOV, OVN-Kubernetes localnet), declared as
+    <code>NetworkAttachmentDefinition</code>s.
+  </p>
+
+  <h2>Live migration: moving a running VM</h2>
+  <p>
+    Pods are disposable — evict one and its controller makes another. VMs aren't: people expect a VM to survive a
+    node drain or a kernel patch without rebooting. KubeVirt does this the way every hypervisor does —
+    <span class="term" title="Copy all guest memory to the destination while the guest keeps running, then repeatedly re-copy only the pages it dirtied during the previous round, until the remaining set is small enough to send during a brief pause.">pre-copy</span>
+    live migration — but orchestrated with Kubernetes objects:
+  </p>
+  <ol>
+    <li>A <code>VirtualMachineInstanceMigration</code> is created — by you (<code>virtctl migrate</code>), or
+      automatically when a node is drained and the VMI's <code>evictionStrategy</code> is
+      <code>LiveMigrate</code> (virt-api's eviction webhook turns the eviction into a migration).</li>
+    <li>virt-controller creates a <strong>second virt-launcher Pod</strong> (the target) and lets the scheduler
+      place it on another node.</li>
+    <li>The source and target virt-handlers set up a migration proxy; libvirt on the source streams memory to
+      QEMU on the target. Round 1 copies all of RAM while the guest keeps running.</li>
+    <li>Every subsequent round re-sends only the pages the guest <em>dirtied</em> during the previous round. If
+      the guest dirties memory slower than the network can copy it, each round is shorter than the last.</li>
+    <li>When the remainder is small enough to send within the allowed downtime, the source pauses the guest,
+      sends the last pages plus CPU/device state, and the target resumes it. Pause is typically milliseconds. The
+      source Pod completes; the VMI's <code>status.nodeName</code> now points at the new node.</li>
+  </ol>
+  <p>
+    Requirements fall out of the mechanism: the disk must be reachable from both nodes (a
+    <strong>ReadWriteMany</strong> PVC, or KubeVirt's newer storage live-migration to copy it), and the network
+    binding must let the guest keep its identity (masquerade is fine; a plain pod-network <code>bridge</code>
+    binding is not migratable). Tuning lives in the <code>KubeVirt</code> CR's migration config and in
+    <code>MigrationPolicy</code> objects that select VMIs by label: <code>bandwidthPerMigration</code>,
+    <code>completionTimeoutPerGiB</code> (how long to keep trying, scaled by VM size),
+    <code>allowAutoConverge</code>, and <code>allowPostCopy</code>.
+  </p>
+
+  <h2>Try it: will this migration converge?</h2>
+  <p>
+    Below is a 4&nbsp;GiB guest (256 squares = 16&nbsp;MiB each). Set how fast the workload dirties memory and
+    how much bandwidth the migration gets, then start. Watch each round re-send only the pages that turned amber
+    while the previous round was in flight. If dirty rate ≥ bandwidth, rounds never shrink — then try turning on
+    auto-converge (which throttles the guest's vCPUs so it dirties less) or post-copy.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Pre-copy live-migration simulator</div>
+    <div class="kv-controls">
+      <label>Guest dirty rate: <output id="kvDirtyOut"></output>
+        <input type="range" id="kvDirty" min="10" max="1500" step="10" value="300" />
+      </label>
+      <label>Migration bandwidth: <output id="kvBwOut"></output>
+        <input type="range" id="kvBw" min="100" max="2000" step="50" value="1000" />
+      </label>
+      <label>Max allowed downtime: <output id="kvDtOut"></output>
+        <input type="range" id="kvDt" min="50" max="1000" step="50" value="300" />
+      </label>
+      <label>When it won't converge:
+        <select id="kvMode">
+          <option value="none">nothing (time out &amp; abort)</option>
+          <option value="auto">allowAutoConverge (throttle vCPUs)</option>
+          <option value="post">allowPostCopy (switch early)</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="kv-legend">
+      <span><span class="kv-sw" style="background: var(--surface-3); border:1px solid var(--border);"></span> not yet on target</span>
+      <span><span class="kv-sw" style="background: color-mix(in srgb, var(--accent-2) 60%, var(--surface-3));"></span> copying this round</span>
+      <span><span class="kv-sw" style="background: color-mix(in srgb, var(--signal-green) 60%, var(--surface-3));"></span> clean on target</span>
+      <span><span class="kv-sw" style="background: color-mix(in srgb, var(--signal-amber) 70%, var(--surface-3));"></span> dirtied again by guest</span>
+    </div>
+
+    <div class="kv-mig">
+      <div class="kv-panel">
+        <h4>Guest memory (source → target)</h4>
+        <div class="kv-mem" id="kvMem"></div>
+        <div class="kv-verdict" id="kvVerdict">Ready. Ratio dirty/bandwidth decides everything.</div>
+      </div>
+      <div class="kv-panel">
+        <h4>Data to send per round (MiB)</h4>
+        <div class="kv-bars" id="kvBars"></div>
+        <div class="kv-axis" id="kvAxis">green line = what fits in the downtime budget</div>
+        <pre class="kv-log" id="kvLog"></pre>
+      </div>
+    </div>
+
+    <div class="row">
+      <button class="btn" id="kvStart">Start migration</button>
+      <button class="btn ghost" id="kvReset">Reset</button>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <span class="callout-title">What the knobs really trade</span>
+    <strong>Auto-converge</strong> keeps the guest on the source but steals CPU time from it (QEMU starts at a
+    20% throttle and raises it each round) — the app slows down, but a failed network mid-migration is harmless.
+    <strong>Post-copy</strong> flips the guest to the target immediately and pulls missing pages on demand when
+    it touches them — it always converges, but for that window the VM's state is split across two hosts, so if
+    the network or either node fails, the VM is lost. That's why both are off by default and usually enabled
+    per workload via a <code>MigrationPolicy</code>.
+  </div>
+
+  <h2>Where you'd reach for it</h2>
+  <ul>
+    <li><strong>VMware exit / consolidation</strong> — move existing VMs (often with the
+      <span class="term" title="Migration Toolkit for Virtualization (upstream project Forklift): bulk-imports VMs from vSphere, oVirt, OpenStack, or OVA files into KubeVirt, converting disks and drivers along the way.">Forklift/MTV</span>
+      tooling) onto the Kubernetes platform you already operate, keeping their IPs via Multus.</li>
+    <li><strong>Mixed applications</strong> — a containerized front end that talks to a database or vendor
+      appliance that must stay a VM, now in the same namespace, behind the same Services and policies.</li>
+    <li><strong>Non-Linux or kernel-specific workloads</strong> — Windows servers, custom kernels, or anything
+      needing hardware isolation stronger than a container.</li>
+    <li><strong>Infrastructure-as-a-service on Kubernetes</strong> — clouds and GPU providers that sell VMs
+      but want one Kubernetes-based control plane underneath (GPU passthrough, vGPU, and DRA-based GPU claims
+      are first-class).</li>
+    <li><strong>Labs, CI, and edge</strong> — throwaway VMs from containerDisks for testing OS images, or
+      hyperconverged edge boxes (Harvester) where one small cluster runs both.</li>
+  </ul>
+
+  <div class="callout warn">
+    <span class="callout-title">Often confused with</span>
+    <strong>KubeVirt vs. Kata Containers / gVisor / Firecracker:</strong> those run <em>containers</em> inside a
+    lightweight VM (or sandbox) for isolation — you still ship an OCI image and the VM is invisible plumbing.
+    KubeVirt runs a <em>full, persistent VM</em> with its own disk, firmware, and OS that you manage as a VM.
+    <strong>KubeVirt vs. Cluster API:</strong> Cluster API creates VMs to
+    <em>become Kubernetes nodes</em>; KubeVirt VMs are <em>workloads</em> (though Cluster API Provider KubeVirt
+    does use KubeVirt VMs as nested cluster nodes). <strong>KubeVirt vs. OpenShift Virtualization /
+    Harvester:</strong> those are products; KubeVirt is the upstream engine inside both.
+  </div>
+
+  <h2>Why it graduated</h2>
+  <p>
+    The graduation case rested on the usual three pillars, all at real scale. <strong>Production adoption</strong>
+    far beyond Red Hat — ByteDance, Cloudflare, CoreWeave, NVIDIA, plus every vendor shipping a "VMs on Kubernetes"
+    product. <strong>Diverse contribution</strong> — on the order of 2,000 contributors from 500+ organizations
+    including NVIDIA, Microsoft, AMD, Intel, SUSE, and Red Hat. And <strong>governance and security
+    maturity</strong> — a completed third-party security audit, a formal steering committee, and the CNCF Code of
+    Conduct. Behind that is the market moment: the post-Broadcom VMware migration wave turned "one platform for VMs
+    and containers" from a nice idea into a budget line, and KubeVirt was the open, vendor-neutral way to do it.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. Which component actually decides which node a new VM runs on?</p>
+      <button class="quiz-option" data-val="a">virt-handler, because it runs on every node and knows which ones have KVM.</button>
+      <button class="quiz-option" data-val="b">The ordinary kube-scheduler — virt-controller just renders a virt-launcher Pod with the right requests and lets Kubernetes place it.</button>
+      <button class="quiz-option" data-val="c">libvirt, which picks a host from its own resource pool.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. A migration of a busy database VM keeps running round after round without finishing. What's happening?</p>
+      <button class="quiz-option" data-val="a">The target Pod can't be scheduled, so the migration is stuck pending.</button>
+      <button class="quiz-option" data-val="b">The PVC is ReadWriteOnce, so memory can't be copied.</button>
+      <button class="quiz-option" data-val="c">The guest dirties memory about as fast as the network can copy it, so each pre-copy round leaves as much to send as the last — the remainder never fits the downtime budget.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. Why does a KubeVirt VM automatically count against namespace ResourceQuotas and get covered by NetworkPolicy?</p>
+      <button class="quiz-option" data-val="a">Because the VM runs inside a virt-launcher Pod, and quotas, cgroups, the CNI, and NetworkPolicy all apply to that Pod.</button>
+      <button class="quiz-option" data-val="b">Because KubeVirt reimplements quota and policy enforcement for VMs.</button>
+      <button class="quiz-option" data-val="c">It doesn't — VMs are outside Kubernetes' accounting and need separate policy.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">4. What's the main risk you accept when enabling <code>allowPostCopy</code>?</p>
+      <button class="quiz-option" data-val="a">The guest's vCPUs are throttled heavily and the app slows down.</button>
+      <button class="quiz-option" data-val="b">After the switchover the VM's memory lives partly on each host, so a network or node failure during that window loses the VM.</button>
+      <button class="quiz-option" data-val="c">The VM's IP address changes after migration.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- Stack explorer ---------- */
+  var LAYERS = [
+    { id: "op", scope: "cluster", indent: 0, name: "virt-operator · virt-api · virt-controller", sub: "Deployments in the kubevirt namespace",
+      title: "Cluster-wide control plane",
+      created: "virt-operator from the KubeVirt CR; it deploys virt-api and virt-controller.",
+      owns: "CRD lifecycle and upgrades (operator); admission webhooks + console/VNC/migrate subresources (api); turning VMs into VMIs and VMIs into virt-launcher Pods, plus migration orchestration (controller).",
+      k8s: "These are ordinary controllers watching CRDs — the same pattern as any operator you've run.",
+      inspect: "kubectl -n kubevirt get pods\nkubectl get kubevirt -n kubevirt -o yaml" },
+    { id: "node", scope: "node", indent: 0, name: "Node", sub: "Linux host with /dev/kvm",
+      title: "The worker node",
+      created: "Your infrastructure. KubeVirt only needs hardware virtualization (VT-x / AMD-V) exposed — bare metal, or nested virt for labs.",
+      owns: "The KVM kernel module that runs guest instructions directly on the CPU. KubeVirt's device plugin advertises it as the extended resource devices.kubevirt.io/kvm.",
+      k8s: "The kubelet doesn't know VMs exist; it only sees Pods requesting a device resource.",
+      inspect: "kubectl get node NODE -o jsonpath='{.status.allocatable}'\nls -l /dev/kvm" },
+    { id: "handler", scope: "node", indent: 1, name: "virt-handler", sub: "DaemonSet Pod, one per node",
+      title: "virt-handler — the node agent",
+      created: "virt-operator, as a DaemonSet.",
+      owns: "Watching VMIs scheduled to its node, preparing node-side networking/storage, telling the local virt-launcher to define/start/stop the domain over a Unix socket, reporting status back to the VMI, and acting as the source/target endpoint during live migration.",
+      k8s: "Think 'a kubelet for VMs' — but it delegates the actual process lifecycle to the Pod the real kubelet started.",
+      inspect: "kubectl -n kubevirt get pods -l kubevirt.io=virt-handler -o wide" },
+    { id: "launcher", scope: "pod", indent: 2, name: "virt-launcher-<vm>-xxxxx", sub: "one Pod per running VM (the VMI)",
+      title: "virt-launcher Pod — the VM's Kubernetes identity",
+      created: "virt-controller, for each VMI, then scheduled by kube-scheduler and started by the kubelet like any Pod.",
+      owns: "The VM's resource requests/limits (guest memory + overhead), its Pod IP and NetworkPolicy, its mounted PVCs, its node placement, its eviction behavior. Delete this Pod and the VM is gone.",
+      k8s: "This is where the magic happens: the Pod is the unit Kubernetes schedules, isolates, networks, and accounts for.",
+      inspect: "kubectl get pods -l kubevirt.io/domain=legacy-app -o wide\nkubectl get vmi legacy-app" },
+    { id: "compute", scope: "pod", indent: 3, name: "compute container: virt-launcher + libvirt", sub: "Go supervisor, virtqemud",
+      title: "libvirt inside the Pod",
+      created: "The container image KubeVirt ships; the virt-launcher Go process starts libvirt's daemon in the same container.",
+      owns: "Translating the VMI spec into a libvirt domain XML, starting QEMU, handling graceful shutdown, and running the libvirt side of migration (streaming memory to the target).",
+      k8s: "One libvirt per VM, scoped to one Pod — not one shared host libvirt like classic virtualization. Blast radius = one VM.",
+      inspect: "kubectl exec POD -c compute -- virsh list --all\nkubectl exec POD -c compute -- virsh dumpxml 1" },
+    { id: "qemu", scope: "pod", indent: 4, name: "qemu-kvm process", sub: "the VM itself, as a Linux process",
+      title: "QEMU + KVM — the virtual hardware",
+      created: "libvirt, inside the compute container's cgroup.",
+      owns: "Virtual CPUs (as threads executing via KVM), guest RAM (a big memory mapping in this process), and emulated/virtio devices: disks backed by the Pod's volumes, NICs wired to the Pod's network namespace.",
+      k8s: "Because QEMU lives in the Pod's cgroup, memory limits, CPU pinning (dedicatedCpuPlacement), and OOM behavior are all Kubernetes-controlled.",
+      inspect: "ps aux | grep qemu-kvm   # on the node" },
+    { id: "guest", scope: "guest", indent: 4, name: "Guest OS", sub: "its own kernel: Linux, Windows…",
+      title: "The guest",
+      created: "Booted by QEMU from the root disk (a PVC populated by CDI, or a containerDisk), configured on first boot via cloud-init or Sysprep volumes.",
+      owns: "Its own kernel, init system, users, and filesystems. Kubernetes can't see inside — it sees a Pod. The optional qemu-guest-agent reports guest IPs, OS info, and filesystem freeze for snapshots.",
+      k8s: "Health checks: VMIs support liveness/readiness probes (TCP/HTTP into the guest, or via guest agent), so Services only route to a booted guest.",
+      inspect: "virtctl console legacy-app\nvirtctl ssh user@vm/legacy-app\nkubectl get vmi legacy-app -o jsonpath='{.status.interfaces}'" }
+  ];
+
+  var stack = document.getElementById("kvStack");
+  var detail = document.getElementById("kvDetail");
+
+  function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+  function showLayer(id) {
+    var L = LAYERS.filter(function (l) { return l.id === id; })[0];
+    stack.querySelectorAll(".kv-layer").forEach(function (b) { b.classList.toggle("sel", b.dataset.id === id); });
+    detail.innerHTML =
+      "<h4>" + esc(L.title) + "</h4>" +
+      "<dl>" +
+      "<dt>Created by</dt><dd>" + esc(L.created) + "</dd>" +
+      "<dt>Owns</dt><dd>" + esc(L.owns) + "</dd>" +
+      "<dt>K8s angle</dt><dd>" + esc(L.k8s) + "</dd>" +
+      "<dt>Inspect</dt><dd><pre><code>" + esc(L.inspect) + "</code></pre></dd>" +
+      "</dl>";
+  }
+
+  LAYERS.forEach(function (L) {
+    var b = document.createElement("button");
+    b.className = "kv-layer" + (L.indent ? " kv-indent-" + L.indent : "");
+    b.dataset.id = L.id;
+    b.dataset.scope = L.scope;
+    b.innerHTML = esc(L.name) + "<small>" + esc(L.sub) + "</small>";
+    b.addEventListener("click", function () { showLayer(L.id); });
+    stack.appendChild(b);
+  });
+  showLayer("launcher");
+
+  /* ---------- Live-migration simulator ---------- */
+  var MEM_MIB = 4096, PAGES = 256, PAGE_MIB = MEM_MIB / PAGES;
+  var MAX_ROUNDS = 14, TICK = 750;
+
+  var el = function (id) { return document.getElementById(id); };
+  var dirty = el("kvDirty"), bw = el("kvBw"), dt = el("kvDt"), mode = el("kvMode");
+  var mem = el("kvMem"), bars = el("kvBars"), log = el("kvLog"), verdict = el("kvVerdict");
+  var startBtn = el("kvStart"), resetBtn = el("kvReset");
+
+  var cells = [];
+  for (var i = 0; i < PAGES; i++) {
+    var c = document.createElement("div");
+    c.className = "kv-page";
+    mem.appendChild(c);
+    cells.push(c);
+  }
+
+  function labels() {
+    el("kvDirtyOut").textContent = dirty.value + " MiB/s";
+    el("kvBwOut").textContent = bw.value + " MiB/s (~" + (bw.value * 8 / 1000).toFixed(1) + " Gbit/s)";
+    el("kvDtOut").textContent = dt.value + " ms";
+  }
+
+  var state = null, timer = null;
+
+  function logLine(text, cls) {
+    var s = document.createElement("span");
+    if (cls) s.className = cls;
+    s.textContent = text + "\n";
+    log.appendChild(s);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function reset() {
+    if (timer) { clearInterval(timer); timer = null; }
+    state = null;
+    cells.forEach(function (c) { c.className = "kv-page"; });
+    bars.innerHTML = "";
+    log.innerHTML = "";
+    verdict.textContent = "Ready. Ratio dirty/bandwidth decides everything.";
+    [dirty, bw, dt, mode, startBtn].forEach(function (x) { x.disabled = false; });
+    labels();
+  }
+
+  function addBar(mib, cls, maxMib, budgetMib) {
+    var b = document.createElement("div");
+    b.className = "kv-bar" + (cls ? " " + cls : "");
+    b.style.height = Math.max(2, Math.min(100, (mib / maxMib) * 100)) + "%";
+    b.title = mib.toFixed(0) + " MiB";
+    bars.appendChild(b);
+    el("kvAxis").textContent = "green bar = final stop-and-copy · budget at this bandwidth: " + budgetMib.toFixed(0) + " MiB";
+  }
+
+  function pickPages(set, n) {
+    // choose n pages to dirty, biased toward a hot working set (first 40% of memory)
+    var out = [];
+    for (var k = 0; k < n; k++) {
+      var idx = Math.random() < 0.75 ? Math.floor(Math.random() * PAGES * 0.4) : Math.floor(Math.random() * PAGES);
+      out.push(idx);
+    }
+    out.forEach(function (i) { set[i] = true; });
+  }
+
+  function finish(text, cls) {
+    clearInterval(timer); timer = null;
+    verdict.textContent = text;
+    logLine(text, cls);
+    [dirty, bw, dt, mode].forEach(function (x) { x.disabled = false; });
+    startBtn.disabled = false;
+  }
+
+  function step() {
+    var s = state;
+    s.round++;
+    var B = s.bw;
+    var D = s.dirtyRate * (1 - s.throttle);
+    var toSend = s.pending; // MiB
+    var t = toSend / B;     // seconds this round takes
+    var budget = B * s.downtime;
+
+    // Converged? final stop-and-copy
+    if (s.round > 1 && toSend <= budget) {
+      cells.forEach(function (c) { c.className = "kv-page sent"; });
+      addBar(toSend, "final", MEM_MIB, budget);
+      s.elapsed += t;
+      finish("Converged in " + s.round + " rounds (" + s.elapsed.toFixed(1) + " s). Guest paused " +
+        (t * 1000).toFixed(0) + " ms for final " + toSend.toFixed(0) + " MiB, resumed on target node.", "ok");
+      return;
+    }
+
+    // Post-copy switchover once pre-copy is clearly not converging
+    if (s.mode === "post" && s.round > 3 && toSend >= s.prev * 0.9) {
+      cells.forEach(function (c) { if (!c.classList.contains("sent")) c.className = "kv-page xfer"; });
+      addBar(toSend, "throttled", MEM_MIB, budget);
+      logLine("round " + s.round + ": switching to post-copy — guest now runs on TARGET; " +
+        toSend.toFixed(0) + " MiB fetched on demand / in background", "warn");
+      s.elapsed += 0.05 + toSend / B;
+      setTimeout(function () { cells.forEach(function (c) { c.className = "kv-page sent"; }); }, 400);
+      finish("Completed via post-copy (" + s.elapsed.toFixed(1) + " s). Always converges — but during the last " +
+        (toSend / B).toFixed(1) + " s a network/node failure would have lost the VM.", "warn");
+      return;
+    }
+
+    // Timeout / give up
+    if (s.round > MAX_ROUNDS || s.elapsed > s.timeout) {
+      finish("Aborted: not converging (completionTimeoutPerGiB exceeded). VM still running on source; " +
+        "the VirtualMachineInstanceMigration is marked Failed.", "bad");
+      bars.lastChild && bars.lastChild.classList.add("fail");
+      return;
+    }
+
+    // A pre-copy round: send all pending pages; guest dirties pages meanwhile.
+    var dirtySet = {};
+    var dirtiedMiB = Math.min(MEM_MIB, D * t);
+    pickPages(dirtySet, Math.round(dirtiedMiB / PAGE_MIB));
+    var uniqueDirty = Object.keys(dirtySet).length;
+    cells.forEach(function (c, i) {
+      if (c.classList.contains("dirty") || !c.classList.contains("sent")) c.className = "kv-page xfer";
+    });
+    setTimeout(function () {
+      cells.forEach(function (c, i) { c.className = "kv-page " + (dirtySet[i] ? "dirty" : "sent"); });
+    }, TICK * 0.55);
+
+    addBar(toSend, s.throttle > 0 ? "throttled" : "", MEM_MIB, budget);
+    logLine("round " + s.round + ": sent " + toSend.toFixed(0) + " MiB in " + t.toFixed(2) + " s; guest dirtied " +
+      (uniqueDirty * PAGE_MIB).toFixed(0) + " MiB" + (s.throttle > 0 ? " (vCPU throttle " + Math.round(s.throttle * 100) + "%)" : ""));
+
+    s.elapsed += t;
+    s.prev = toSend;
+    s.pending = Math.max(PAGE_MIB, uniqueDirty * PAGE_MIB);
+
+    // Auto-converge: kick in when progress stalls, raise throttle each round (QEMU: 20% initial, +10%/step, max 99%)
+    if (s.mode === "auto" && s.round >= 2 && s.pending >= toSend * 0.8) {
+      s.throttle = s.throttle === 0 ? 0.2 : Math.min(0.99, s.throttle + 0.1);
+      logLine("  auto-converge: throttling guest vCPUs to " + Math.round(s.throttle * 100) + "%", "warn");
+    }
+  }
+
+  function start() {
+    reset();
+    [dirty, bw, dt, mode, startBtn].forEach(function (x) { x.disabled = true; });
+    state = {
+      round: 0, elapsed: 0, throttle: 0, prev: MEM_MIB,
+      pending: MEM_MIB,
+      dirtyRate: +dirty.value, bw: +bw.value, downtime: +dt.value / 1000,
+      mode: mode.value,
+      timeout: 150 * (MEM_MIB / 1024) / 20 // scaled-down completionTimeoutPerGiB for the demo
+    };
+    logLine("migration created: target virt-launcher Pod scheduled on node-b; pre-copy begins");
+    logLine("dirty/bandwidth ratio = " + (state.dirtyRate / state.bw).toFixed(2) + (state.dirtyRate < state.bw ? " (< 1: rounds should shrink)" : " (≥ 1: rounds won't shrink)"));
+    timer = setInterval(step, TICK);
+  }
+
+  [dirty, bw, dt].forEach(function (x) { x.addEventListener("input", labels); });
+  startBtn.addEventListener("click", start);
+  resetBtn.addEventListener("click", reset);
+  reset();
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) {
+          if (o.getAttribute("data-val") === answer) o.classList.add("correct");
+        });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct ? "Correct." : "Not quite — the highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
