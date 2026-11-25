@@ -1,0 +1,834 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cloud Native Buildpacks — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring: lifecycle stepper + layer-cache / rebase simulator. ---- */
+  .bp-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+  .bp-apps { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-4); }
+  .bp-apps .btn.sel { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-2) 45%, transparent); }
+
+  .bp-phases { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 6px; margin-bottom: var(--sp-4); }
+  .bp-phase {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    padding: var(--sp-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    color: var(--text-muted);
+    text-align: center;
+    transition: background .2s, border-color .2s, box-shadow .2s, color .2s;
+  }
+  .bp-phase b { display: block; color: var(--text); font-size: var(--fs-sm); }
+  .bp-phase.past { border-color: color-mix(in srgb, var(--signal-green) 55%, var(--border)); }
+  .bp-phase.cur {
+    border-color: var(--accent-2);
+    background: color-mix(in srgb, var(--accent-2) 16%, var(--surface-2));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-2) 30%, transparent);
+    color: var(--text);
+  }
+
+  .bp-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: var(--sp-4); margin-bottom: var(--sp-3); }
+  @media (max-width: 760px) { .bp-grid { grid-template-columns: 1fr; } }
+  .bp-panel {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    padding: var(--sp-3) var(--sp-4);
+    min-height: 210px;
+    min-width: 0;
+  }
+  .bp-panel h4 { margin: 0 0 var(--sp-2); font-size: var(--fs-sm); font-family: var(--font-mono); color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+  .bp-panel pre { margin: var(--sp-2) 0 0; font-size: var(--fs-xs); }
+  .bp-files { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); margin-bottom: var(--sp-2); }
+
+  .bp-group { border: 1px dashed var(--border-strong); border-radius: var(--r-sm); padding: var(--sp-2); margin-bottom: var(--sp-2); font-family: var(--font-mono); font-size: var(--fs-xs); }
+  .bp-group.win { border-style: solid; border-color: var(--signal-green); background: color-mix(in srgb, var(--signal-green) 8%, var(--surface)); }
+  .bp-group.lose { opacity: .6; }
+  .bp-group .bp-gname { font-weight: 700; color: var(--text); }
+  .bp-bp { display: flex; justify-content: space-between; gap: var(--sp-2); padding: 2px 0; }
+  .bp-ok { color: var(--signal-green); font-weight: 700; }
+  .bp-no { color: var(--signal-red); font-weight: 700; }
+  .bp-skip { color: var(--text-faint); }
+
+  .bp-stack { display: flex; flex-direction: column-reverse; gap: 3px; }
+  .bp-layer {
+    display: flex; justify-content: space-between; gap: var(--sp-2);
+    font-family: var(--font-mono); font-size: var(--fs-xs);
+    padding: 5px var(--sp-2);
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--border-strong);
+    background: var(--surface);
+    animation: bp-in .3s ease-out;
+  }
+  .bp-layer .bp-lname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .bp-layer .bp-ltag { white-space: nowrap; color: var(--text-muted); }
+  .bp-layer[data-kind="run"]   { border-left-color: var(--signal-violet); }
+  .bp-layer[data-kind="life"]  { border-left-color: var(--text-faint); }
+  .bp-layer[data-kind="bp"]    { border-left-color: var(--accent); }
+  .bp-layer[data-kind="app"]   { border-left-color: var(--accent-2); }
+  .bp-layer[data-kind="meta"]  { border-left-color: var(--signal-amber); }
+  .bp-layer.new    { background: color-mix(in srgb, var(--signal-amber) 14%, var(--surface)); }
+  .bp-layer.reused .bp-ltag { color: var(--signal-green); }
+  .bp-layer.swapped { background: color-mix(in srgb, var(--signal-violet) 16%, var(--surface)); }
+  @keyframes bp-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+  .bp-cacheonly { margin-top: var(--sp-3); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
+  .bp-cacheonly span { display: inline-block; margin: 2px 4px 2px 0; padding: 2px 6px; border: 1px dashed var(--border-strong); border-radius: var(--r-sm); }
+
+  .bp-verdict { font-family: var(--font-mono); font-size: var(--fs-sm); margin: var(--sp-3) 0; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-sm); background: var(--surface-3); }
+  .bp-docker { font-family: var(--font-mono); font-size: var(--fs-xs); }
+  .bp-docker div { padding: 3px var(--sp-2); border-radius: var(--r-sm); margin-bottom: 2px; border-left: 4px solid var(--border-strong); background: var(--surface); }
+  .bp-docker div.hit  { border-left-color: var(--signal-green); }
+  .bp-docker div.miss { border-left-color: var(--signal-red); background: color-mix(in srgb, var(--signal-red) 10%, var(--surface)); }
+  .bp-legend { display: flex; flex-wrap: wrap; gap: var(--sp-3); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); margin: var(--sp-2) 0 var(--sp-3); }
+  .bp-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  .bp-log {
+    font-family: var(--font-mono); font-size: var(--fs-xs);
+    background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--r-sm);
+    padding: var(--sp-3); max-height: 170px; overflow-y: auto; white-space: pre-wrap; margin: var(--sp-3) 0 0;
+  }
+  .bp-log .ok { color: var(--signal-green); }
+  .bp-log .warn { color: var(--signal-amber); }
+  .bp-log .bad { color: var(--signal-red); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · CI/CD, GitOps &amp; Autoscaling · Sub-topic 20 / 41</p>
+  <h1>Cloud Native Buildpacks</h1>
+  <p class="lead">
+    Every container you've deployed started as an image, and most of those images came from a
+    <code>Dockerfile</code> someone copy-pasted, tweaked, and then forgot about. Multiply that by a few hundred
+    services and you get hundreds of slightly different base images, build steps, and cache strategies, and every OS
+    CVE means rebuilding all of them. <strong>Cloud Native Buildpacks</strong> (CNB, or just "Buildpacks") replace
+    the Dockerfile with a <em>contract</em>. You hand your source code to a <strong>builder</strong>. Small, reusable
+    programs called buildpacks detect what the code is ("a Node app with a lockfile"), each contributes its own
+    image layers, and a standard <strong>lifecycle</strong> assembles a production OCI image with an SBOM attached.
+    Because the layers are structured, the lifecycle can later swap the OS layers underneath thousands of images
+    without rebuilding any of them. That operation is called <code>rebase</code>.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    The buildpack idea comes from <strong>Heroku</strong> (2011), where <code>git push heroku main</code> turned
+    source into a running app with no build file, and from <strong>Cloud Foundry</strong>, which adopted it. In 2018
+    Heroku and Pivotal joined forces to rebuild the concept on OCI images and a written spec, and Cloud Native
+    Buildpacks entered the CNCF Sandbox in <strong>October 2018</strong>. It moved to Incubating in November 2020.
+    The TOC voted it Graduated on <strong>July 17, 2026</strong>, and CNCF announced the graduation on August 11, 2026.
+    You've probably used it without knowing: <code>mvn spring-boot:build-image</code>, Google Cloud Run's
+    "deploy from source," Heroku's current platform generation, and GitLab Auto DevOps all build with buildpacks.
+  </div>
+
+  <h2>The problem: Dockerfiles don't scale across a fleet</h2>
+  <p>
+    A Dockerfile is a <strong>script</strong>: an ordered list of instructions, each producing one layer stacked on
+    the previous. That is simple and very flexible, and for one service it's fine. Across an organization, four
+    things go wrong:
+  </p>
+  <ul>
+    <li><strong>Every team re-solves the same problem.</strong> Which base image, how to install the JDK, how to
+      cache <code>node_modules</code>, run as non-root, set memory flags for the JVM. Good practice spreads by
+      copy-paste and decays the same way.</li>
+    <li><strong>The cache is linear.</strong> Layer <em>N</em> is only reused if layers 1…N−1 were. Change something
+      early, like a new runtime version or a patched base image, and everything after it rebuilds.</li>
+    <li><strong>Patching the OS means rebuilding the world.</strong> A glibc or OpenSSL CVE in the base image
+      requires a full rebuild, test, and push of every image built <code>FROM</code> it. A platform team can't do
+      that itself. It has to chase every app team.</li>
+    <li><strong>No inventory.</strong> What exactly is inside that image? Without an SBOM produced at build time,
+      you're reverse-engineering it with a scanner afterward.</li>
+  </ul>
+  <p>
+    Buildpacks move image construction from "each app writes a script" to "the platform provides a builder, and the
+    app provides only its source." That's the same shift Kubernetes made for deployment: declare <em>what</em>, and
+    let a standard machine decide <em>how</em>.
+  </p>
+
+  <h2>The vocabulary</h2>
+  <p>CNB has a handful of nouns. Get them straight and the rest is mechanical.</p>
+  <table>
+    <thead><tr><th>Term</th><th>What it is</th><th>Analogy</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Buildpack</strong></td><td>A directory (shipped as an OCI image) with <code>buildpack.toml</code>, an executable <code>bin/detect</code>, and an executable <code>bin/build</code>. It does one job, e.g. "install Node.js" or "run <code>npm ci</code>."</td><td>One reusable, versioned chunk of a Dockerfile</td></tr>
+      <tr><td><strong>Order / group</strong></td><td>A builder's ordered list of buildpack <em>groups</em>. Detection picks the first group where every non-optional buildpack passes.</td><td>A <code>switch</code> over app types</td></tr>
+      <tr><td><strong>Build image</strong></td><td>The base image the build runs <em>in</em>: compilers, headers, <code>git</code>. Never shipped.</td><td>The first stage of a multi-stage build</td></tr>
+      <tr><td><strong>Run image</strong></td><td>The base image the app runs <em>on</em>: a minimal OS (e.g. Ubuntu Jammy "base", or a distroless-like "tiny").</td><td>The final <code>FROM</code></td></tr>
+      <tr><td><strong>Lifecycle</strong></td><td>The reference implementation of the spec: a set of binaries (<code>analyzer</code>, <code>detector</code>, <code>restorer</code>, <code>builder</code>, <code>exporter</code>, <code>creator</code>, <code>rebaser</code>, <code>launcher</code>) that run the buildpacks and assemble the image.</td><td><code>docker build</code>'s engine</td></tr>
+      <tr><td><strong>Builder</strong></td><td>An image that bundles a build image + the lifecycle + a set of buildpacks + an order, and points at a run image. E.g. <code>paketobuildpacks/builder-jammy-java-tiny</code>, <code>heroku/builder:24</code>.</td><td>A curated, versioned "golden Dockerfile" for every language</td></tr>
+      <tr><td><strong>Platform</strong></td><td>Whatever invokes the lifecycle: the <code>pack</code> CLI, kpack on Kubernetes, a Tekton task, Spring Boot's plugin, Heroku, Cloud Run.</td><td>The CI system calling <code>docker build</code></td></tr>
+    </tbody>
+  </table>
+  <p>
+    The project is mostly a <strong>specification</strong> with two halves: the
+    <span class="term" title="The contract between the lifecycle and buildpacks: what bin/detect and bin/build receive (env vars like CNB_LAYERS_DIR, CNB_BP_PLAN_PATH), what exit codes mean, and how layers, launch.toml, and SBOM files must be laid out.">Buildpack API</span>
+    and the
+    <span class="term" title="The contract between a platform (pack, kpack, …) and the lifecycle: which phase binaries to run in what order, their flags and inputs, and how results such as report.toml are written.">Platform API</span>,
+    both versioned independently. The CNCF project ships the spec, the lifecycle, the <code>pack</code> CLI, and
+    libraries. The buildpacks themselves mostly come from <strong>implementations</strong>: Paketo (a Cloud Foundry
+    Foundation project), Heroku, and Google Cloud each publish their own builders.
+  </p>
+
+  <h2>Anatomy of a buildpack</h2>
+  <p>
+    A buildpack is two executables, written in any language (Go and shell are common), that talk to the lifecycle
+    through files and environment variables.
+  </p>
+  <h3><code>bin/detect</code>: "is this mine?"</h3>
+  <p>
+    Runs against the source tree. Exit <code>0</code> = pass, <code>100</code> = fail (any other code is an error).
+    On pass it can write a <span class="term" title="A TOML document of [[provides]] and [[requires]] entries. During detect, each buildpack in a group says what it can provide and what it needs; a group only passes if every requirement is met by some provider. The resolved entries are handed to each buildpack's bin/build.">build plan</span>
+    saying what it <em>provides</em> and <em>requires</em>. The Node engine buildpack provides <code>node</code>; the
+    npm-install buildpack requires <code>node</code>. A group passes only if every requirement is satisfied, which
+    is how buildpacks compose without knowing each other directly.
+  </p>
+<pre><code># written by node-engine's bin/detect to $CNB_BUILD_PLAN_PATH
+[[provides]]
+name = "node"
+
+[[requires]]
+name = "node"
+[requires.metadata]
+version = "22.*"          # from package.json "engines", .nvmrc, or BP_NODE_VERSION</code></pre>
+
+  <h3><code>bin/build</code>: "contribute layers"</h3>
+  <p>
+    Runs in the build container with the source at <code>/workspace</code> and a private directory
+    <code>$CNB_LAYERS_DIR</code>. Each subdirectory it creates is a <strong>layer</strong>, and a sibling
+    <code>&lt;layer&gt;.toml</code> declares what that layer is for, using three flags:
+  </p>
+<pre><code># /layers/paketo-buildpacks_node-engine/node.toml
+[types]
+launch = true    # ship it in the final image
+build  = true    # expose it (PATH, env) to later buildpacks in this build
+cache  = true    # keep it in the build cache for the next build
+
+[metadata]
+version = "22.11.0"   # free-form; the buildpack compares this next time to decide "reuse or rebuild"</code></pre>
+  <table>
+    <thead><tr><th>Flags</th><th>Typical use</th><th>In the final image?</th></tr></thead>
+    <tbody>
+      <tr><td><code>launch</code></td><td>JRE, Node runtime, <code>node_modules</code>, a compiled binary's helpers</td><td>Yes, as its own OCI layer</td></tr>
+      <tr><td><code>build</code> + <code>cache</code></td><td>JDK, Go toolchain, <code>~/.m2</code>, Go build cache, npm cache</td><td>No. Restored for the next build only</td></tr>
+      <tr><td><code>launch</code> + <code>cache</code></td><td>Runtimes that are also needed during the next build</td><td>Yes, and kept in cache</td></tr>
+    </tbody>
+  </table>
+  <p>
+    The buildpack also writes <code>launch.toml</code> to declare <strong>processes</strong>
+    (<code>web</code>, <code>worker</code>, …). The lifecycle sets the image's entrypoint to its own
+    <code>launcher</code>, which loads each layer's environment (<code>PATH</code>, <code>JAVA_TOOL_OPTIONS</code>,
+    …) and then <code>exec</code>s the chosen process. That's why a buildpack image "just works" with
+    <code>docker run</code> and with a plain Pod spec without a <code>command:</code>.
+  </p>
+<pre><code>[[processes]]
+type = "web"
+command = ["node", "server.js"]
+default = true</code></pre>
+
+  <h2>The lifecycle: analyze → detect → restore → build → export</h2>
+  <p>
+    The platform runs the lifecycle phases in order (or all at once with <code>creator</code>, which is what
+    <code>pack build</code> does for trusted builders). An optional, still-experimental <code>extend</code> phase
+    lets <span class="term" title="A special kind of buildpack that outputs Dockerfiles instead of layers (bin/generate instead of bin/build). The lifecycle applies them to the build or run base image, e.g. to apt-get install a system library. Images whose run base was modified this way are marked non-rebasable.">image extensions</span>
+    apply Dockerfile snippets to the base images, for the rare case where an app needs an OS package. Step through it
+    below with a real sample app, then use the simulator to rebuild and rebase it.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Lifecycle stepper + layer-cache &amp; rebase simulator</div>
+    <div class="bp-apps" id="bpApps"></div>
+    <div class="bp-phases" id="bpPhases"></div>
+    <div class="bp-grid">
+      <div class="bp-panel" id="bpPhasePanel"></div>
+      <div class="bp-panel">
+        <h4 id="bpImgTitle">Image: (not built yet)</h4>
+        <div class="bp-stack" id="bpStack"></div>
+        <div class="bp-cacheonly" id="bpCache"></div>
+      </div>
+    </div>
+    <div class="bp-legend">
+      <span><i style="background: var(--signal-violet)"></i>run image</span>
+      <span><i style="background: var(--text-faint)"></i>lifecycle</span>
+      <span><i style="background: var(--accent)"></i>buildpack layer</span>
+      <span><i style="background: var(--accent-2)"></i>app layer</span>
+      <span><i style="background: var(--signal-amber)"></i>config / SBOM</span>
+      <span><i style="background: color-mix(in srgb, var(--signal-amber) 40%, var(--surface))"></i>new upload</span>
+    </div>
+    <div class="bp-row">
+      <button class="btn ghost" id="bpPrev">◀ Back</button>
+      <button class="btn" id="bpNext">Next phase ▶</button>
+    </div>
+    <div class="bp-verdict" id="bpVerdict"></div>
+    <div class="bp-row">
+      <button class="btn ghost" id="bpEditCode">Edit app code</button>
+      <button class="btn ghost" id="bpEditDeps">Change dependencies</button>
+      <button class="btn ghost" id="bpBumpRt">Bump runtime version</button>
+      <button class="btn ghost" id="bpCve">Publish patched run image (CVE)</button>
+      <button class="btn" id="bpRebase">pack rebase</button>
+    </div>
+    <div class="bp-grid" style="margin-top: var(--sp-3);">
+      <div class="bp-panel" style="min-height: 0;">
+        <h4>Same change with a hand-written Dockerfile</h4>
+        <div class="bp-docker" id="bpDocker"></div>
+      </div>
+      <div class="bp-panel" style="min-height: 0;">
+        <h4>Platform log</h4>
+        <pre class="bp-log" id="bpLog" style="margin-top: 0;"></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">What to notice</span>
+    <strong>Edit app code</strong>: only the app layer is new. Every buildpack layer keeps its digest and isn't
+    re-uploaded. <strong>Change dependencies</strong>: the dependency layer is rebuilt but the runtime layer is
+    reused, because each buildpack decides cache validity for <em>its own</em> layers (by comparing lockfile
+    checksums or versions in the layer metadata) instead of inheriting a linear chain. <strong>Patched run
+    image + rebase</strong>: only the run-image layers change, there's no build at all, and the operation is a
+    manifest rewrite in the registry. The Dockerfile column shows that a base-image change invalidates every line.
+  </div>
+
+  <h3>What each phase actually does</h3>
+  <table>
+    <thead><tr><th>Phase</th><th>Binary</th><th>Mechanism</th></tr></thead>
+    <tbody>
+      <tr><td>analyze</td><td><code>analyzer</code></td><td>Checks registry access, and reads the <em>previous</em> image's <code>io.buildpacks.lifecycle.metadata</code> label: which layers it had, their digests and their <code>.toml</code> metadata. No image pull needed, only the config.</td></tr>
+      <tr><td>detect</td><td><code>detector</code></td><td>Runs <code>bin/detect</code> for the builder's order groups and resolves the build plan. Writes <code>group.toml</code> (the chosen buildpacks) and <code>plan.toml</code>.</td></tr>
+      <tr><td>restore</td><td><code>restorer</code></td><td>Restores layer <code>.toml</code> metadata from the previous image, and the actual contents of <code>cache=true</code> layers from the cache (a volume or a cache image).</td></tr>
+      <tr><td>extend <span class="badge">experimental</span></td><td><code>extender</code></td><td>Applies extension-generated Dockerfiles to the build (or run) base image.</td></tr>
+      <tr><td>build</td><td><code>builder</code></td><td>Runs each chosen buildpack's <code>bin/build</code> in order. A buildpack that sees matching metadata (same version, same lockfile checksum) can leave a launch layer's contents empty and keep its <code>.toml</code>, meaning "reuse the layer from the previous image."</td></tr>
+      <tr><td>export</td><td><code>exporter</code></td><td>Builds the image: run-image layers + launcher + each launch layer + one app layer (<code>/workspace</code>) + config + SBOM layer. Layers whose digest matches the previous image are <em>referenced</em>, not re-uploaded. It also writes the cache. Timestamps are fixed to 1980 so identical inputs give byte-identical layers (reproducible builds).</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout note">
+    <span class="callout-title">Why "created 46 years ago"?</span>
+    <code>docker images</code> shows buildpack images as created in 1980. That isn't a bug. The lifecycle normalizes
+    all timestamps so the same source, buildpacks, and base produce the same digest. That makes caching and
+    "did anything actually change?" checks trivial.
+  </div>
+
+  <h2>Rebase: patching thousands of images without a build</h2>
+  <p>
+    This is the feature that makes platform teams adopt buildpacks. An OCI image is a <strong>manifest</strong>
+    listing layer digests, plus a config. With a Dockerfile, the app layers were produced by commands that ran
+    <em>on top of</em> the base, so you can't safely swap the base out from under them. Buildpack layers are
+    different. The spec requires app and buildpack layers to sit on top of the run image through a defined
+    <span class="term" title="Application Binary Interface: the run image maintainers promise that patch updates keep the same OS release (e.g. Ubuntu 24.04) and library ABI, so binaries and runtimes in the upper layers keep working on the patched base.">ABI-compatible</span>
+    interface. Their contents don't depend on the run image's bytes.
+  </p>
+  <p>
+    So <code>pack rebase myapp</code> (the <code>rebaser</code> binary) does the following: read the image's manifest,
+    drop the old run-image layer digests from the bottom, put the new run image's digests in their place, keep every
+    other digest unchanged, update the config and labels, and push the new manifest. No layer is downloaded, nothing
+    is executed, and nothing is uploaded except a few KB of JSON. Rebasing an image takes seconds, so a
+    platform can roll a base-image CVE fix across a whole fleet in an afternoon. kpack does it automatically whenever
+    a new run image appears.
+  </p>
+  <div class="callout warn">
+    <span class="callout-title">The caveat</span>
+    Rebase is only safe within an ABI-compatible line (Ubuntu 22.04 → 22.04 patched, not 22.04 → 24.04). Changing the
+    OS version needs a full rebuild, which is a builder change. If an image extension modified the run image, the
+    lifecycle labels it <code>io.buildpacks.rebasable=false</code> and refuses to rebase it.
+  </div>
+
+  <h2>The SBOM comes for free</h2>
+  <p>
+    Each buildpack knows exactly what it installed (Node 22.11.0 from this URL with this checksum; these 412 npm
+    packages), so it writes <code>&lt;layer&gt;.sbom.cdx.json</code> / <code>.spdx.json</code> / <code>.syft.json</code>
+    next to its layers. The exporter collects these into a dedicated SBOM layer in the image. You can pull it with
+    <code>pack sbom download myapp</code> and feed it to a scanner like Grype, or attach it with an attestation tool.
+    This is "SBOM by construction" rather than "SBOM by scanning," which matters once supply-chain policy (see the
+    in-toto and TUF deep-dives) starts asking for one.
+  </p>
+
+  <h2>Platforms: how you actually run it</h2>
+  <h3><code>pack</code> on a laptop or in CI</h3>
+<pre><code>pack build ghcr.io/acme/web \
+  --builder paketobuildpacks/builder-jammy-base \
+  --env BP_NODE_VERSION=22 \
+  --publish                     # write straight to the registry, no local daemon image
+
+pack inspect ghcr.io/acme/web   # buildpacks used, processes, run image
+pack rebase  ghcr.io/acme/web   # swap in the newest run image
+pack sbom download ghcr.io/acme/web -o ./sbom</code></pre>
+  <p>
+    <code>pack</code> uses a Docker or Podman daemon only to <em>run the lifecycle container</em>. The build itself
+    is not a Docker build. Per-app settings live in a <code>project.toml</code> (env vars, include/exclude paths,
+    extra buildpacks) instead of a Dockerfile.
+  </p>
+
+  <h3>kpack on Kubernetes</h3>
+  <p>
+    <strong>kpack</strong> (originally from Pivotal/VMware, donated to the Buildpacks community organization in 2023)
+    is the Kubernetes-native platform, built as CRDs and controllers. A <code>ClusterStore</code> holds buildpacks, a
+    <code>ClusterStack</code> holds the build/run images, a <code>Builder</code> combines them, and an
+    <code>Image</code> resource says "keep <code>ghcr.io/acme/web</code> built from this Git repo." Its controller
+    creates <code>Build</code> Pods on every new commit, rebuilds when a buildpack version changes, and
+    <em>rebases</em> every Image when the stack's run image changes. It's continuous reconciliation of images, in the
+    same way a Deployment reconciles Pods. It fits naturally upstream of Argo CD or Flux.
+  </p>
+<pre><code>apiVersion: kpack.io/v1alpha2
+kind: Image
+metadata: { name: web, namespace: apps }
+spec:
+  tag: ghcr.io/acme/web
+  serviceAccountName: registry-push
+  builder: { kind: ClusterBuilder, name: default }
+  source:
+    git: { url: https://github.com/acme/web, revision: main }</code></pre>
+
+  <h3>Embedded everywhere else</h3>
+  <ul>
+    <li><strong>Spring Boot</strong>: <code>./mvnw spring-boot:build-image</code> / <code>bootBuildImage</code>
+      runs the lifecycle with Paketo's Java builder. That's the default containerization path for Spring apps.</li>
+    <li><strong>Google Cloud</strong>: Cloud Run / Cloud Functions source deploys use Google Cloud's buildpacks.</li>
+    <li><strong>Heroku</strong>: its newest platform generation builds apps with Heroku's Cloud Native Buildpacks.</li>
+    <li><strong>CI</strong>: Tekton catalog tasks, GitHub Actions (<code>buildpacks/github-actions</code>), GitLab
+      Auto DevOps.</li>
+  </ul>
+
+  <h2>Buildpacks vs. everything it gets confused with</h2>
+  <table>
+    <thead><tr><th>Tool</th><th>What it is</th><th>Relation to Buildpacks</th></tr></thead>
+    <tbody>
+      <tr><td>Dockerfile + BuildKit</td><td>An imperative build script + the engine that runs it</td><td>The alternative. Maximum flexibility, per-app maintenance, linear cache, no rebase.</td></tr>
+      <tr><td>Kaniko / Buildah</td><td>Engines that run Dockerfiles without a daemon (e.g. in a Pod)</td><td>Different layer of the problem. They execute Dockerfiles; buildpacks remove the Dockerfile.</td></tr>
+      <tr><td>Jib (Java), ko (Go)</td><td>Language-specific, Dockerfile-less image builders</td><td>Same idea for one language. Buildpacks are the multi-language, specified, pluggable version.</td></tr>
+      <tr><td>Paketo / Heroku / Google buildpacks</td><td>Buildpack <em>implementations</em> and builders</td><td>What you actually run. CNB is the spec + lifecycle they all target.</td></tr>
+      <tr><td>Source-to-Image (OpenShift S2I)</td><td>Red Hat's older source → image tool</td><td>Similar goal, no shared spec, no layer-level rebase.</td></tr>
+      <tr><td>Harbor, containerd</td><td>Where images are stored / how they're run</td><td>Downstream. Buildpacks produce ordinary OCI images that both handle as usual.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>When to reach for it, and when not</h3>
+  <ul>
+    <li><strong>Yes</strong>: a platform team supporting many services in mainstream languages (Java, Node, Go,
+      Python, .NET, Ruby, PHP) that wants consistent, secure-by-default images, SBOMs, and fleet-wide base patching.</li>
+    <li><strong>Yes</strong>: an internal developer platform with a "push code, get a running app" experience, the
+      Heroku model on Kubernetes.</li>
+    <li><strong>Think twice</strong>: images that need unusual OS packages, custom native toolchains, or very
+      specific layering. You'll spend time fighting the builder or writing your own buildpack/extension, and a
+      Dockerfile may be honestly simpler.</li>
+    <li><strong>Trade-off to accept</strong>: you give up control of the build in exchange for standardization. The
+      builder is now a product someone has to own, version, and update.</li>
+  </ul>
+
+  <h2>Why it graduated</h2>
+  <p>
+    The project's value is a <strong>stable, vendor-neutral spec</strong> that competing vendors (Heroku/Salesforce,
+    VMware/Broadcom through Paketo, Google) all build on, with a lifecycle they share instead of forking. At
+    graduation it had broad production use through those platforms and Spring Boot, plus end users running it
+    directly with pack and kpack. It also completed a third-party security audit (Quarkslab, via OSTIF), holds an
+    OpenSSF Best Practices badge, and runs a multi-vendor governance model. The stated next focus areas are OCI
+    artifact handling, SBOMs and supply-chain metadata, and WebAssembly targets.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. A builder's order has groups [Java], [Node], [Go]. Your repo has a <code>package.json</code> and a <code>go.mod</code>. What gets built?</p>
+      <button class="quiz-option" data-val="a">Both a Node and a Go image.</button>
+      <button class="quiz-option" data-val="b">The Node group: detection uses the first group in order where every non-optional buildpack passes.</button>
+      <button class="quiz-option" data-val="c">The build fails because two groups match.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. Where does the JDK used to compile a Java app end up?</p>
+      <button class="quiz-option" data-val="a">In the final image, next to the JRE.</button>
+      <button class="quiz-option" data-val="b">In the run image.</button>
+      <button class="quiz-option" data-val="c">In a <code>build</code> + <code>cache</code> layer: available during the build, restored next time, never exported to the image.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. A CVE is fixed in the run image's OpenSSL. What does <code>pack rebase</code> upload to the registry?</p>
+      <button class="quiz-option" data-val="a">Essentially just a new manifest and config. The new run-image layers already exist in the registry, and every app/buildpack layer keeps its digest.</button>
+      <button class="quiz-option" data-val="b">All layers, because the base changed.</button>
+      <button class="quiz-option" data-val="c">Only the app layer, after rebuilding it.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">4. You only change application source. Which layers does the exporter push?</p>
+      <button class="quiz-option" data-val="a">All buildpack layers, since the build re-ran.</button>
+      <button class="quiz-option" data-val="b">The app layer (and config). Runtime and dependency layers match the previous image's digests and are reused by reference.</button>
+      <button class="quiz-option" data-val="c">Nothing. Buildpacks cache the app layer too.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">5. What's the relationship between Cloud Native Buildpacks and Paketo?</p>
+      <button class="quiz-option" data-val="a">Paketo is the old name of CNB.</button>
+      <button class="quiz-option" data-val="b">Paketo is a competing standard.</button>
+      <button class="quiz-option" data-val="c">CNB is the spec, lifecycle, and pack CLI. Paketo is one implementation that ships buildpacks and builders conforming to it, as Heroku and Google do.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+  function el(id) { return document.getElementById(id); }
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  function hash(s) {
+    var h1 = 0x811c9dc5, h2 = 0x1234567;
+    for (var i = 0; i < s.length; i++) {
+      h1 = Math.imul(h1 ^ s.charCodeAt(i), 16777619) >>> 0;
+      h2 = Math.imul(h2 + s.charCodeAt(i), 2246822519) >>> 0;
+    }
+    return ("00000000" + h1.toString(16)).slice(-8) + ("0000" + h2.toString(16)).slice(-4);
+  }
+
+  /* ---------- Builder definition (a simplified Paketo-style order) ---------- */
+  var ORDER = [
+    { name: "java", bps: [
+      { id: "bellsoft-liberica", needs: "pom.xml", why: "provides jdk+jre" },
+      { id: "maven", needs: "pom.xml", why: "found pom.xml" },
+      { id: "executable-jar", needs: "pom.xml", why: "requires jvm-application" },
+      { id: "spring-boot", needs: "spring", optional: true, why: "Spring Boot manifest" } ] },
+    { name: "nodejs", bps: [
+      { id: "node-engine", needs: "package.json", why: "provides node" },
+      { id: "npm-install", needs: "package-lock.json", why: "found package-lock.json" },
+      { id: "npm-start", needs: "package.json", why: "found scripts.start" } ] },
+    { name: "go", bps: [
+      { id: "go-dist", needs: "go.mod", why: "provides go" },
+      { id: "go-build", needs: "go.mod", why: "found go.mod, main package" } ] }
+  ];
+
+  var APPS = {
+    node: { label: "Node.js app", files: ["package.json", "package-lock.json", "server.js", "src/"],
+      runtimeName: "node", runtimes: ["22.11.0", "22.12.0", "22.13.1", "22.14.0"], depsName: "package-lock.json",
+      process: 'web: node server.js',
+      layers: [
+        { bp: "node-engine", name: "node", launch: true, build: true, cache: true, key: "rt", mb: 48 },
+        { bp: "npm-install", name: "launch-modules", launch: true, build: false, cache: true, key: "deps", mb: 36 },
+        { bp: "npm-install", name: "npm-cache", launch: false, build: true, cache: true, key: "deps", mb: 60 } ],
+      appKey: ["code"], appMb: 2,
+      docker: [
+        { t: "FROM node:22-bookworm-slim", dep: ["base", "rt"] },
+        { t: "WORKDIR /app", dep: [] },
+        { t: "COPY package*.json ./", dep: ["deps"] },
+        { t: "RUN npm ci --omit=dev", dep: [] },
+        { t: "COPY . .", dep: ["code"] },
+        { t: 'CMD ["node", "server.js"]', dep: [] } ] },
+    java: { label: "Java / Spring Boot app", files: ["pom.xml", "spring-boot (in pom)", "src/main/java/"],
+      runtimeName: "jre", runtimes: ["21.0.5", "21.0.6", "21.0.7", "21.0.8"], depsName: "pom.xml dependencies",
+      process: 'web: java org.springframework.boot.loader.launch.JarLauncher',
+      layers: [
+        { bp: "bellsoft-liberica", name: "jdk", launch: false, build: true, cache: true, key: "rt", mb: 190 },
+        { bp: "bellsoft-liberica", name: "jre", launch: true, build: false, cache: true, key: "rt", mb: 58 },
+        { bp: "bellsoft-liberica", name: "helper", launch: true, build: false, cache: true, key: "rt", mb: 3 },
+        { bp: "maven", name: "m2-cache", launch: false, build: true, cache: true, key: "deps", mb: 140 },
+        { bp: "spring-boot", name: "spring-cloud-bindings", launch: true, build: false, cache: true, key: "const", mb: 1 } ],
+      appKey: ["code", "deps"], appMb: 42,
+      docker: [
+        { t: "FROM maven:3-eclipse-temurin-21 AS build", dep: ["rt"] },
+        { t: "COPY pom.xml . && RUN mvn dependency:go-offline", dep: ["deps"] },
+        { t: "COPY src ./src && RUN mvn package", dep: ["code"] },
+        { t: "FROM eclipse-temurin:21-jre", dep: ["base", "rt"] },
+        { t: "COPY --from=build /target/app.jar /app.jar", dep: ["code", "deps", "rt"] },
+        { t: 'ENTRYPOINT ["java","-jar","/app.jar"]', dep: [] } ] },
+    go: { label: "Go service", files: ["go.mod", "go.sum", "main.go", "internal/"],
+      runtimeName: "go", runtimes: ["1.23.4", "1.23.5", "1.24.0", "1.24.1"], depsName: "go.sum",
+      process: 'web: /layers/.../targets/bin/web',
+      layers: [
+        { bp: "go-dist", name: "go", launch: false, build: true, cache: true, key: "rt", mb: 75 },
+        { bp: "go-build", name: "gocache", launch: false, build: true, cache: true, key: "deps", mb: 210 },
+        { bp: "go-build", name: "targets", launch: true, build: false, cache: false, key: "all", mb: 14 } ],
+      appKey: [], appMb: 0.1,
+      docker: [
+        { t: "FROM golang:1.24 AS build", dep: ["rt"] },
+        { t: "COPY go.mod go.sum ./ && RUN go mod download", dep: ["deps"] },
+        { t: "COPY . . && RUN go build -o /web", dep: ["code"] },
+        { t: "FROM gcr.io/distroless/base-debian12", dep: ["base"] },
+        { t: "COPY --from=build /web /web", dep: ["code", "deps", "rt"] },
+        { t: 'ENTRYPOINT ["/web"]', dep: [] } ] }
+  };
+
+  var PHASES = ["analyze", "detect", "restore", "build", "export"];
+  var appId = "node", phase = -1;
+  var st, prev, cur, pendingChange;
+
+  function freshState() {
+    return { code: 1, deps: 1, rt: 0, base: 0, baseAvail: 0, built: 0 };
+  }
+  function runImage(v) { return "run-jammy-base:0.1." + (40 + v); }
+  function keyVal(app, key, s) {
+    if (key === "rt") return app.runtimes[s.rt % app.runtimes.length];
+    if (key === "deps") return "sha256:" + hash("deps" + s.deps).slice(0, 8);
+    if (key === "code") return "c" + s.code;
+    if (key === "const") return "1.13.0";
+    if (key === "all") return [s.code, s.deps, s.rt].join("/");
+    return "";
+  }
+
+  function computeImage(s) {
+    var app = APPS[appId];
+    var L = [];
+    var rb = runImage(s.base);
+    L.push({ kind: "run", name: rb + " · os layer", size: 29, d: hash("os" + s.base) });
+    L.push({ kind: "run", name: rb + " · ca-certs/tzdata", size: 2, d: hash("osx" + s.base) });
+    L.push({ kind: "life", name: "lifecycle launcher", size: 4, d: hash("launcher") });
+    app.layers.forEach(function (ly) {
+      if (!ly.launch) return;
+      var v = keyVal(app, ly.key, s);
+      L.push({ kind: "bp", name: ly.bp + "/" + ly.name + " (" + v + ")", size: ly.mb, d: hash(appId + ly.bp + ly.name + v) });
+    });
+    var av = app.appKey.map(function (k) { return keyVal(app, k, s); }).join("+");
+    if (app.appMb >= 1) L.push({ kind: "app", name: "app (/workspace)", size: app.appMb, d: hash(appId + "app" + av) });
+    else L.push({ kind: "app", name: "app (/workspace, source removed)", size: app.appMb, d: hash(appId + "app-empty") });
+    L.push({ kind: "meta", name: "config: launch.toml, process types", size: 0.01, d: hash(appId + "cfg") });
+    L.push({ kind: "meta", name: "SBOM layer (cdx/spdx/syft)", size: 0.3, d: hash(appId + "sbom" + s.code + s.deps + s.rt) });
+    return { layers: L, run: rb };
+  }
+
+  /* ---------- Rendering ---------- */
+  var logBox = el("bpLog");
+  function logLine(t, cls) {
+    var span = document.createElement("span");
+    if (cls) span.className = cls;
+    span.textContent = t + "\n";
+    logBox.appendChild(span);
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+
+  function renderApps() {
+    var box = el("bpApps"); box.innerHTML = "";
+    Object.keys(APPS).forEach(function (id) {
+      var b = document.createElement("button");
+      b.className = "btn" + (id === appId ? " sel" : " ghost");
+      b.textContent = APPS[id].label;
+      b.addEventListener("click", function () { appId = id; reset(); });
+      box.appendChild(b);
+    });
+  }
+
+  function renderPhases() {
+    var box = el("bpPhases"); box.innerHTML = "";
+    var sub = { analyze: "previous image", detect: "pick a group", restore: "cache → disk", build: "bin/build × N", export: "OCI image" };
+    PHASES.forEach(function (p, i) {
+      var d = document.createElement("div");
+      d.className = "bp-phase" + (i < phase ? " past" : i === phase ? " cur" : "");
+      d.innerHTML = "<b>" + p + "</b>" + sub[p];
+      box.appendChild(d);
+    });
+    el("bpNext").textContent = phase >= PHASES.length - 1 ? "Rebuild ▶" : (phase < 0 ? "Start build ▶" : "Next phase ▶");
+  }
+
+  function detectHtml() {
+    var app = APPS[appId];
+    var has = function (f) {
+      if (f === "spring") return appId === "java";
+      return app.files.indexOf(f) >= 0;
+    };
+    var won = false, html = "";
+    ORDER.forEach(function (g) {
+      if (won) { html += '<div class="bp-group lose"><span class="bp-gname">group: ' + g.name + '</span> <span class="bp-skip">— not tried (a group already passed)</span></div>'; return; }
+      var pass = true, rows = "";
+      g.bps.forEach(function (bp) {
+        var ok = has(bp.needs);
+        if (!ok && !bp.optional) pass = false;
+        rows += '<div class="bp-bp"><span>' + esc(bp.id) + (bp.optional ? " (optional)" : "") + '</span>' +
+          (ok ? '<span class="bp-ok">pass · ' + esc(bp.why) + '</span>' : '<span class="' + (bp.optional ? "bp-skip" : "bp-no") + '">exit 100 · no ' + esc(bp.needs) + '</span>') + "</div>";
+      });
+      if (pass) won = true;
+      html += '<div class="bp-group ' + (pass ? "win" : "lose") + '"><span class="bp-gname">group: ' + g.name + (pass ? " ✓ selected" : " ✗") + "</span>" + rows + "</div>";
+    });
+    return html;
+  }
+
+  function layerStatus(ly) {
+    if (!prev) return "new";
+    var hit = prev.layers.some(function (p) { return p.d === ly.d; });
+    return hit ? "reused" : "new";
+  }
+
+  function renderPanel() {
+    var app = APPS[appId], p = el("bpPhasePanel");
+    var files = '<div class="bp-files">source: ' + app.files.map(esc).join("  ") + "</div>";
+    if (phase < 0) {
+      p.innerHTML = "<h4>ready</h4>" + files + "<p>No Dockerfile here, just source. Press <strong>Start build</strong> to run <code>pack build acme/" + appId + " --builder paketobuildpacks/builder-jammy-base</code>.</p>";
+      return;
+    }
+    var name = PHASES[phase], body = "";
+    if (name === "analyze") {
+      body = prev
+        ? "<p>Previous image <code>acme/" + appId + "</code> found. Read its <code>io.buildpacks.lifecycle.metadata</code> label: " + prev.layers.length + " layers with digests and layer <code>.toml</code> metadata. Only the config is fetched, not the layers.</p>"
+        : "<p>No previous image <code>acme/" + appId + "</code> in the registry, so this is a cold build. Registry write access verified.</p>";
+    } else if (name === "detect") {
+      body = "<p>Running <code>bin/detect</code> over the builder's order:</p>" + detectHtml();
+    } else if (name === "restore") {
+      var rows = app.layers.filter(function (l) { return l.cache; }).map(function (l) {
+        var hit = st.built > 0;
+        return (hit ? "restored  " : "empty     ") + l.bp + "/" + l.name + (l.launch ? "  (metadata only: contents reused from image)" : "  (" + l.mb + " MB from cache)");
+      });
+      body = "<p>" + (st.built ? "Cache from the last build exists." : "Cache is empty (first build).") + "</p><pre><code>" + esc(rows.join("\n")) + "</code></pre>";
+    } else if (name === "build") {
+      var out = app.layers.map(function (l) {
+        var v = keyVal(app, l.key, cur.s), pv = prev ? keyVal(app, l.key, prev.s) : null;
+        var reuse = prev && v === pv && l.cache;
+        var flags = ["launch", "build", "cache"].filter(function (f) { return l[f]; }).join(",");
+        return (reuse ? "reuse   " : "build   ") + l.bp + "/" + l.name + "  [" + flags + "]  " + (l.key === "deps" ? app.depsName + " " : "") + v + (reuse ? "  (metadata matches)" : "");
+      });
+      out.push("launch.toml  →  " + app.process);
+      body = "<p>Each buildpack's <code>bin/build</code> compares its layer metadata with what was restored and decides independently.</p><pre><code>" + esc(out.join("\n")) + "</code></pre>";
+    } else if (name === "export") {
+      var nNew = 0, mb = 0;
+      cur.layers.forEach(function (l) { if (layerStatus(l) === "new") { nNew++; mb += l.size; } });
+      body = "<p>Exporter assembled <strong>" + cur.layers.length + " layers</strong> on <code>" + cur.run + "</code>. Uploaded <strong>" + nNew + "</strong> new layer(s), about <strong>" + mb.toFixed(1) + " MB</strong>. Everything else is referenced by digest. Cache written.</p>";
+    }
+    p.innerHTML = "<h4>phase: " + name + "</h4>" + files + body;
+  }
+
+  function renderImage(img, mode) {
+    var box = el("bpStack"); box.innerHTML = "";
+    if (!img) { el("bpImgTitle").textContent = "Image: (not built yet)"; el("bpCache").innerHTML = ""; return; }
+    el("bpImgTitle").textContent = "Image acme/" + appId + " @" + hash(img.layers.map(function (l) { return l.d; }).join()).slice(0, 10);
+    img.layers.forEach(function (l) {
+      var s = mode === "rebase" ? (l.kind === "run" ? "swapped" : "reused") : layerStatus(l);
+      if (mode === "rebase" && l.kind === "meta" && /config/.test(l.name)) s = "new";
+      var d = document.createElement("div");
+      d.className = "bp-layer " + s;
+      d.setAttribute("data-kind", l.kind);
+      d.title = l.name;
+      d.innerHTML = '<span class="bp-lname">' + esc(l.name) + '</span><span class="bp-ltag">' +
+        (s === "reused" ? "reused " : s === "swapped" ? "swapped " : "pushed ") + l.d.slice(0, 7) + " · " + (l.size < 1 ? (l.size * 1000).toFixed(0) + " KB" : l.size + " MB") + "</span>";
+      box.appendChild(d);
+    });
+    var c = APPS[appId].layers.filter(function (l) { return !l.launch; });
+    el("bpCache").innerHTML = "cache-only (not in image): " + c.map(function (l) { return "<span>" + esc(l.bp + "/" + l.name) + " " + l.mb + " MB</span>"; }).join("");
+  }
+
+  function renderDocker(change) {
+    var app = APPS[appId], box = el("bpDocker"), broke = false;
+    box.innerHTML = "";
+    app.docker.forEach(function (line, i) {
+      if (/^FROM/.test(line.t) && i > 0) broke = false; // new stage: its cache is independent
+      if (change && line.dep.indexOf(change) >= 0) broke = true;
+      var d = document.createElement("div");
+      d.className = !change ? "" : broke ? "miss" : "hit";
+      d.textContent = (change ? (broke ? "REBUILD  " : "CACHED   ") : "") + line.t;
+      box.appendChild(d);
+    });
+    if (!change) {
+      var n = document.createElement("div");
+      n.textContent = "(make a change above to see which lines' cache is invalidated)";
+      box.appendChild(n);
+    }
+  }
+
+  function verdict(t) { el("bpVerdict").textContent = t; }
+
+  /* ---------- Actions ---------- */
+  function advance() {
+    if (phase >= PHASES.length - 1) { startBuild("rebuild, no source changes"); return; }
+    if (phase < 0) { startBuild(null); return; }
+    phase++;
+    if (PHASES[phase] === "export" && !cur.exported) finishExport();
+    renderAll();
+  }
+
+  function startBuild(reason) {
+    if (phase === PHASES.length - 1 && cur) prev = cur;
+    st.base = st.baseAvail; // a fresh build always exports onto the newest run image
+    var s = {}; for (var k in st) s[k] = st[k];
+    var img = computeImage(s); img.s = s;
+    cur = img;
+    phase = 0;
+    logLine("$ pack build acme/" + appId + (reason ? "   # " + reason : ""), "");
+    renderAll();
+  }
+
+  function finishExport() {
+    cur.exported = true;
+    st.built++;
+    var nNew = cur.layers.filter(function (l) { return layerStatus(l) === "new"; });
+    logLine("  export: " + nNew.length + "/" + cur.layers.length + " layers pushed on " + cur.run, nNew.length <= 3 ? "ok" : "warn");
+    verdict(prev ? "Build #" + st.built + ": pushed " + nNew.map(function (l) { return l.name.split(" ")[0]; }).join(", ") + "." : "Build #1 (cold): every layer is new. Now try one of the changes below.");
+    renderDocker(pendingChange);
+    pendingChange = null;
+  }
+
+  function change(kind, label) {
+    if (!cur || phase < PHASES.length - 1) { verdict("Finish a build first (step through to export)."); return; }
+    if (kind === "code") st.code++;
+    if (kind === "deps") st.deps++;
+    if (kind === "rt") st.rt++;
+    logLine("~ " + label, "warn");
+    pendingChange = kind;
+    startBuild(label);
+    // run all phases straight through
+    while (phase < PHASES.length - 1) { phase++; }
+    finishExport();
+    renderAll();
+  }
+
+  function publishCve() {
+    st.baseAvail++;
+    logLine("! upstream published " + runImage(st.baseAvail) + " (OpenSSL CVE fix). Your image still runs on " + (cur ? cur.run : runImage(st.base)), "bad");
+    verdict("A patched run image exists. Either rebuild (full build) or press pack rebase (no build).");
+    renderDocker("base");
+  }
+
+  function rebase() {
+    if (!cur || phase < PHASES.length - 1) { verdict("Finish a build first."); return; }
+    if (st.baseAvail === cur.s.base) { verdict("Already on the newest run image (" + cur.run + "). Publish a patched run image first."); return; }
+    prev = cur;
+    var s = {}; for (var k in cur.s) s[k] = cur.s[k];
+    s.base = st.baseAvail; st.base = s.base;
+    var img = computeImage(s); img.s = s;
+    // SBOM and app layers keep their digests on rebase; only run layers + config change
+    img.layers.forEach(function (l, i) { if (l.kind !== "run" && !/config/.test(l.name)) l.d = prev.layers[i].d; });
+    cur = img;
+    logLine("$ pack rebase acme/" + appId + "   # " + prev.run + " → " + cur.run + ": rewrote manifest, 0 layers built, ~4 KB uploaded", "ok");
+    verdict("Rebased in seconds: run-image layers swapped, every buildpack and app layer kept its digest. No lifecycle phases ran.");
+    renderPhases(); renderPanelRebase();
+    renderImage(cur, "rebase");
+  }
+  function renderPanelRebase() {
+    el("bpPhasePanel").innerHTML = "<h4>rebaser</h4><p>Read manifest of <code>acme/" + appId +
+      "</code>. Replace the bottom run-image layer digests with those of <code>" + cur.run +
+      "</code>, keep every other digest, update the config's <code>runImage</code> metadata, and push the new manifest.</p><pre><code>" +
+      esc("lower layers:  " + prev.run + "  →  " + cur.run + "\nupper layers:  unchanged (" + (cur.layers.length - 2) + ")\nbuild run:     none\nbytes pushed:  manifest + config only") + "</code></pre>";
+  }
+
+  function renderAll() {
+    renderApps(); renderPhases(); renderPanel();
+    renderImage(phase === PHASES.length - 1 ? cur : (prev && phase >= 0 ? prev : null), null);
+    el("bpPrev").disabled = phase <= 0;
+  }
+
+  function reset() {
+    st = freshState(); prev = null; cur = null; phase = -1; pendingChange = null;
+    logBox.innerHTML = "";
+    verdict("Step through the first build. Each phase shows what the lifecycle does.");
+    renderDocker(null);
+    renderAll();
+  }
+
+  el("bpNext").addEventListener("click", advance);
+  el("bpPrev").addEventListener("click", function () { if (phase > 0) { phase--; renderAll(); } });
+  el("bpEditCode").addEventListener("click", function () { change("code", "edited application source"); });
+  el("bpEditDeps").addEventListener("click", function () { change("deps", "changed " + APPS[appId].depsName); });
+  el("bpBumpRt").addEventListener("click", function () { change("rt", "bumped " + APPS[appId].runtimeName + " version"); });
+  el("bpCve").addEventListener("click", publishCve);
+  el("bpRebase").addEventListener("click", rebase);
+  reset();
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) { if (o.getAttribute("data-val") === answer) o.classList.add("correct"); });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct ? "Correct." : "Not quite. The highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>

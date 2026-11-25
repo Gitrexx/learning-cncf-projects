@@ -400,7 +400,7 @@
       "summary": "Turn source code into OCI images without a Dockerfile (graduated 2026).",
       "prerequisites": ["containerd"],
       "file": "buildpacks.html",
-      "status": "planned"
+      "status": "done"
     },
     {
       "id": "nats",
