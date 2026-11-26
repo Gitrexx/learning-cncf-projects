@@ -1,0 +1,822 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NATS — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring: subject-routing + JetStream playground. ---- */
+  .nt-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; margin-bottom: var(--sp-3); }
+  .nt-row input[type="text"] { font-family: var(--font-mono); font-size: var(--fs-sm); min-width: 0; }
+  .nt-row label { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); }
+  .nt-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: var(--sp-3); }
+  .nt-presets button { font-family: var(--font-mono); font-size: var(--fs-xs); padding: 3px 8px; }
+  .nt-subs { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--sp-2); margin-bottom: var(--sp-3); }
+  .nt-sub {
+    border: 1px solid var(--border-strong);
+    border-left: 4px solid var(--accent);
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    padding: var(--sp-2);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    min-width: 0;
+    transition: box-shadow .2s, opacity .2s;
+  }
+  .nt-sub.queue { border-left-color: var(--signal-violet); }
+  .nt-sub.js { border-left-color: var(--signal-amber); }
+  .nt-sub.off { opacity: .5; border-style: dashed; }
+  .nt-sub.hit { box-shadow: 0 0 0 2px color-mix(in srgb, var(--signal-green) 55%, transparent); }
+  .nt-sub .nt-head { display: flex; justify-content: space-between; gap: 4px; align-items: center; }
+  .nt-sub .nt-name { font-weight: 700; color: var(--text); }
+  .nt-sub .nt-pat { color: var(--accent-strong); word-break: break-all; margin: 2px 0; }
+  .nt-sub .nt-meta { color: var(--text-faint); }
+  .nt-sub .nt-inbox { margin-top: 4px; max-height: 92px; overflow-y: auto; color: var(--text-muted); }
+  .nt-sub .nt-inbox div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nt-sub button { font-size: var(--fs-xs); padding: 1px 6px; }
+  .nt-stream {
+    border: 1px solid var(--border-strong); border-radius: var(--r-md);
+    background: var(--surface-2); padding: var(--sp-3); margin-bottom: var(--sp-3);
+  }
+  .nt-stream h4 { margin: 0 0 var(--sp-2); font-size: var(--fs-sm); font-family: var(--font-mono); color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+  .nt-log-row { display: flex; flex-wrap: wrap; gap: 4px; min-height: 30px; }
+  .nt-msg {
+    font-family: var(--font-mono); font-size: var(--fs-xs);
+    padding: 3px 6px; border-radius: var(--r-sm);
+    border: 1px solid var(--border); background: var(--surface);
+    animation: nt-in .25s ease-out;
+  }
+  .nt-msg.acked { border-color: color-mix(in srgb, var(--signal-green) 60%, var(--border)); background: color-mix(in srgb, var(--signal-green) 10%, var(--surface)); }
+  .nt-msg.pending { border-color: var(--signal-amber); background: color-mix(in srgb, var(--signal-amber) 14%, var(--surface)); }
+  .nt-msg.unmatched { opacity: .45; }
+  @keyframes nt-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+  .nt-legend { display: flex; flex-wrap: wrap; gap: var(--sp-3); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); margin: var(--sp-2) 0; }
+  .nt-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  .nt-log {
+    font-family: var(--font-mono); font-size: var(--fs-xs);
+    background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--r-sm);
+    padding: var(--sp-3); max-height: 190px; overflow-y: auto; white-space: pre-wrap; margin: 0;
+  }
+  .nt-log .ok { color: var(--signal-green); }
+  .nt-log .warn { color: var(--signal-amber); }
+  .nt-log .bad { color: var(--signal-red); }
+  .nt-log .info { color: var(--accent-strong); }
+  .nt-hidden { display: none; }
+
+  .nt-match { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
+  @media (max-width: 640px) { .nt-match { grid-template-columns: 1fr; } }
+  .nt-match input { width: 100%; font-family: var(--font-mono); }
+  .nt-verdict { font-family: var(--font-mono); font-size: var(--fs-sm); margin-top: var(--sp-3); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-sm); background: var(--surface-3); }
+  .nt-tok { display: inline-block; padding: 1px 5px; margin: 1px; border-radius: var(--r-sm); border: 1px solid var(--border-strong); }
+  .nt-tok.ok { border-color: var(--signal-green); }
+  .nt-tok.bad { border-color: var(--signal-red); }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · App Runtime &amp; Platform Abstractions · Sub-topic 34 / 41</p>
+  <h1>NATS</h1>
+  <p class="lead">
+    Sooner or later every microservice platform needs services to talk to each other without holding a
+    hard-coded address. That means fire-and-forget events, "ask anyone who can answer," work queues, and durable
+    streams that survive a consumer being down. Most teams end up with Kafka for one part, RabbitMQ for another,
+    and a sidecar or service mesh for the rest. <strong>NATS</strong> tries to cover all of it with one small Go
+    binary (about 20&nbsp;MB, no ZooKeeper, no JVM). The core is a very fast <em>subject-based</em> router that
+    gives at-most-once pub/sub, request-reply, and load-balanced queue groups. <strong>JetStream</strong> is a
+    persistence layer built into the same server. It adds streams, replayable consumers, acknowledgements, and a
+    Key-Value and Object Store on top.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    NATS was written by <strong>Derek Collison</strong> around 2010 as the message bus inside
+    <strong>Cloud Foundry</strong>. It started in Ruby and was rewritten in Go in 2012. It joined the CNCF as an
+    incubating project in <strong>2018</strong> and graduated at <strong>KubeCon + CloudNativeCon North America
+    2026</strong>, after a governance dispute in 2025 that nearly took it out of the foundation (covered
+    <a href="#governance">below</a>). You'll find it as the control-plane bus in edge and IoT fleets, as the event
+    backbone for trading, gaming and telco systems, inside platforms like Dapr (as a pub/sub component), and more
+    and more as the messaging layer between AI agents. Relative to Kubernetes, NATS is just a workload. You run it
+    as a StatefulSet, usually from the official Helm chart. It doesn't extend the Kubernetes API. Instead it gives
+    your Pods a shared address space of <em>subjects</em>.
+  </div>
+
+  <h2>The problem: addresses are the wrong abstraction</h2>
+  <p>
+    In Kubernetes you reach a service through its Service DNS name. That's point-to-point. The caller has to know
+    who it's talking to, and it has to wait. Three needs keep coming up that plain HTTP handles badly:
+  </p>
+  <ul>
+    <li><strong>Fan-out.</strong> "An order was created." Billing, shipping, analytics, and the audit log all care,
+      and the publisher shouldn't have to know about any of them.</li>
+    <li><strong>Location independence.</strong> "Somebody price this cart." Any healthy instance in any cluster or
+      region should be able to answer, and the caller shouldn't need a load balancer or service discovery to find one.</li>
+    <li><strong>Temporal decoupling.</strong> "Process these when you can." The consumer may be down, deploying, or
+      slow. The messages have to wait for it and be replayed in order.</li>
+  </ul>
+  <p>
+    Before NATS (and alongside it) teams reached for a broker for each need. NATS makes the <em>subject</em> the
+    address. Publishers send to a name like <code>orders.eu.created</code>, subscribers express interest in
+    patterns, and the server's only job is matching the two. Where the subscriber runs (which Pod, cluster, or
+    continent) is the server's concern, not the application's.
+  </p>
+
+  <h2>Core NATS: subjects, interest, and nothing else</h2>
+  <p>
+    A <span class="term" title="A dot-separated string such as orders.eu.created. Each dot-separated part is a token. Subjects are not declared or created in advance; they exist the moment someone publishes or subscribes to them.">subject</span>
+    is a dot-separated string of tokens. Nobody creates it ahead of time. Subscriptions can use two wildcards:
+  </p>
+  <table>
+    <thead><tr><th>Wildcard</th><th>Matches</th><th>Example</th></tr></thead>
+    <tbody>
+      <tr><td><code>*</code></td><td>Exactly <strong>one</strong> token, in any position</td><td><code>orders.*.created</code> matches <code>orders.eu.created</code>, but not <code>orders.eu.de.created</code></td></tr>
+      <tr><td><code>&gt;</code></td><td><strong>One or more</strong> tokens, and only as the last token</td><td><code>orders.&gt;</code> matches <code>orders.eu</code> and <code>orders.eu.de.created</code>, but not bare <code>orders</code></td></tr>
+    </tbody>
+  </table>
+  <p>
+    Clients speak a tiny line-based text protocol over TCP (port <code>4222</code>). After a
+    <code>CONNECT</code> handshake, the whole protocol is basically <code>PUB</code>, <code>SUB</code>,
+    <code>UNSUB</code>, <code>MSG</code>, and <code>PING</code>/<code>PONG</code>. You can drive it with
+    <code>telnet</code>:
+  </p>
+<pre><code>SUB orders.*.created 1          # subscribe, sid=1
+PUB orders.eu.created 11        # publish an 11-byte payload
+{"id":4711}
+MSG orders.eu.created 1 11      # server delivers to sid 1
+{"id":4711}</code></pre>
+  <p>
+    The delivery guarantee is <strong>at-most-once</strong>. The server keeps an in-memory interest graph (a
+    subject trie with a cache in front of it). When a message arrives it is written to the sockets of whoever is
+    interested <em>right now</em>, and then it's gone. If nobody is subscribed, the message is dropped. There's no
+    disk and no ack. This is a deliberate choice: it's why core NATS can move millions of messages per second per
+    server with sub-millisecond latency, and why the server can protect itself against a
+    <span class="term" title="A consumer that can't keep up. NATS buffers a bounded amount per connection; once the buffer is exceeded the server disconnects that client instead of letting it slow everyone else down.">slow consumer</span>
+    by simply disconnecting it.
+  </p>
+
+  <h3>Request-reply without a load balancer</h3>
+  <p>
+    Request-reply is built from plain pub/sub. The requester creates a unique
+    <span class="term" title="A randomly-named reply subject such as _INBOX.Xp3k9.1. Clients usually hold one wildcard subscription on _INBOX.<random>.> and multiplex all their requests through it.">inbox</span>
+    subject, subscribes to it, and publishes the request with that inbox set as the <code>reply-to</code> field.
+    Any responder publishes its answer to the reply subject. The requester takes the first reply and moves on.
+    If no one is subscribed to the request subject, the server tells the client right away with a
+    <strong>no-responders</strong> status (a 503 header), so the caller doesn't sit through a timeout.
+  </p>
+
+  <h3>Queue groups: load balancing for free</h3>
+  <p>
+    Subscribers that join with the same <span class="term" title="A name passed when subscribing (e.g. SUB orders.> workers 2). All members of one queue group share a subscription: each message goes to exactly one randomly-chosen member. There is no queue to declare; the group exists while it has members.">queue group</span>
+    name share the subscription. Each message goes to <em>one</em> random member of the group. Plain subscribers
+    and other groups still get their own copy. So for any one message the rule is: <strong>every plain matching
+    subscriber gets it, plus exactly one member of each matching queue group.</strong> Scaling a worker
+    Deployment from 3 to 30 replicas needs no configuration. The new Pods just join the group. Combine that with
+    request-reply and you have service discovery and load balancing in one primitive.
+  </p>
+
+  <h2>Playground: subject routing and JetStream</h2>
+  <p>
+    The routing below is real, implemented with NATS's actual matching rules. Publish to the preset subjects,
+    add your own subscribers, and take some offline. Then turn on JetStream. It creates a stream
+    <code>ORDERS</code> that captures <code>orders.&gt;</code>, plus a durable pull consumer <code>billing</code>
+    filtered to <code>orders.*.created</code>. Take <code>billing</code> offline, publish a few orders, and bring it
+    back to watch it replay the backlog.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">Subject router + JetStream consumer simulator</div>
+
+    <div class="nt-row">
+      <label for="ntSubj">subject</label>
+      <input type="text" id="ntSubj" value="orders.eu.created" size="24" />
+      <button class="btn" id="ntPub">PUB</button>
+      <button class="btn ghost" id="ntReq">REQUEST</button>
+      <button class="btn ghost" id="ntBurst">Publish 5 orders</button>
+    </div>
+    <div class="nt-presets" id="ntPresets"></div>
+
+    <div class="nt-row">
+      <label for="ntNewPat">new sub</label>
+      <input type="text" id="ntNewPat" value="orders.us.*" size="16" placeholder="pattern" />
+      <label for="ntNewQ">queue</label>
+      <input type="text" id="ntNewQ" value="" size="10" placeholder="(none)" />
+      <button class="btn ghost" id="ntAdd">Add subscriber</button>
+      <label><input type="checkbox" id="ntJs" /> JetStream: stream ORDERS ← <code>orders.&gt;</code></label>
+    </div>
+
+    <div class="nt-subs" id="ntSubs"></div>
+
+    <div class="nt-stream nt-hidden" id="ntStreamBox">
+      <h4>Stream ORDERS · consumer "billing" (durable, pull, AckPolicy=explicit, filter orders.*.created)</h4>
+      <div class="nt-log-row" id="ntStream"></div>
+      <div class="nt-legend">
+        <span><i style="background: color-mix(in srgb, var(--signal-green) 30%, var(--surface))"></i>acked by billing</span>
+        <span><i style="background: color-mix(in srgb, var(--signal-amber) 40%, var(--surface))"></i>pending: delivered, not acked / not yet delivered</span>
+        <span><i style="background: var(--surface-3)"></i>outside the consumer's filter</span>
+      </div>
+      <div class="nt-row">
+        <button class="btn ghost" id="ntConsToggle">Take billing offline</button>
+        <label><input type="checkbox" id="ntCrash" /> crash before ack (next message)</label>
+        <span class="nt-meta" id="ntConsState" style="font-family: var(--font-mono); font-size: var(--fs-xs);"></span>
+      </div>
+    </div>
+
+    <div class="nt-row">
+      <button class="btn ghost" id="ntReset">Reset</button>
+      <button class="btn ghost" id="ntClear">Clear log</button>
+    </div>
+    <pre class="nt-log" id="ntLog"></pre>
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">What to notice</span>
+    Publish <code>orders.eu.created</code>: <code>audit</code> (<code>orders.&gt;</code>) and <code>eu-dash</code>
+    each get a copy, and exactly one of the three <code>workers</code> queue members gets it. Publish
+    <code>payments.refund</code> with JetStream off: no interest, so the message is silently dropped. Take
+    <code>audit</code> offline and publish. It never sees that message, even after it comes back. That's
+    at-most-once. With JetStream on, the same message is stored in the stream with a sequence number, and the
+    publisher gets a <code>PubAck</code>. <code>billing</code> receives it when it's online or when it reconnects.
+    Tick "crash before ack" and the message is redelivered once <code>AckWait</code> expires, with its delivery
+    count incremented.
+  </div>
+
+  <h3>Check the matching rules yourself</h3>
+  <div class="widget">
+    <div class="widget-title">Wildcard matcher</div>
+    <div class="nt-match">
+      <div><label for="ntMP" style="font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint);">subscription pattern</label><input type="text" id="ntMP" value="telemetry.*.cpu.>" /></div>
+      <div><label for="ntMS" style="font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint);">published subject</label><input type="text" id="ntMS" value="telemetry.node7.cpu.core3.user" /></div>
+    </div>
+    <div class="nt-verdict" id="ntMV"></div>
+  </div>
+
+  <h2>JetStream: persistence inside the same server</h2>
+  <p>
+    Core NATS is deliberately forgetful. <strong>JetStream</strong> (enabled with <code>-js</code> or a
+    <code>jetstream {}</code> config block) adds durability without bolting on a second system. It replaced the
+    older, separate NATS Streaming / STAN project, which is now end-of-life. JetStream has two central objects.
+  </p>
+  <p>
+    A <strong>stream</strong> captures messages published on a set of subjects and stores them in order, each with
+    a sequence number. Publishers don't change anything. They still publish to <code>orders.eu.created</code>.
+    Because a stream is listening on that subject, the server persists the message and replies with a
+    <span class="term" title="A small reply carrying the stream name and the sequence number assigned to the stored message. A publisher that waits for it knows the message is durably stored (on a quorum of replicas, for R3/R5).">PubAck</span>.
+    Streams have limits (max messages, bytes, age, messages per subject) and a retention policy:
+  </p>
+  <table>
+    <thead><tr><th>Retention</th><th>Messages are removed when…</th><th>Use it for</th></tr></thead>
+    <tbody>
+      <tr><td><code>limits</code> (default)</td><td>a limit (age, count, bytes) is reached, like a Kafka topic</td><td>event log, replay, audit</td></tr>
+      <tr><td><code>interest</code></td><td>every consumer that exists has acked them</td><td>fan-out that shouldn't pile up</td></tr>
+      <tr><td><code>workqueue</code></td><td>any one consumer has acked them (each message is processed once)</td><td>job queues, like a classic RabbitMQ queue</td></tr>
+    </tbody>
+  </table>
+  <p>
+    A <strong>consumer</strong> is a server-side view into a stream: a cursor, a filter, and delivery state.
+    The server tracks it, not the client. That's the key difference from Kafka, where consumers commit their own
+    offsets. The main knobs:
+  </p>
+  <ul>
+    <li><strong>Durable vs. ephemeral.</strong> A durable consumer has a name and keeps its position across
+      disconnects (our <code>billing</code>). An ephemeral one disappears when inactive.</li>
+    <li><strong>Pull vs. push.</strong> Pull consumers <code>Fetch</code> batches when they're ready. This is the
+      recommended default and scales out naturally: several Pods pulling from the same durable consumer share the
+      work. Push consumers have the server send to a delivery subject.</li>
+    <li><strong>DeliverPolicy.</strong> Where to start: <code>all</code>, <code>last</code>, <code>new</code>,
+      <code>by_start_sequence</code>, <code>by_start_time</code>, or <code>last_per_subject</code>.</li>
+    <li><strong>AckPolicy, AckWait, MaxDeliver.</strong> With <code>explicit</code> acks, a message that isn't acked
+      within <code>AckWait</code> (default 30s) is redelivered, up to <code>MaxDeliver</code> times. Clients can
+      also <code>Nak</code> (redeliver now or after a delay), send <code>InProgress</code> to extend the deadline,
+      or <code>Term</code> to give up. <code>MaxAckPending</code> limits how many unacked messages can be in flight,
+      which gives you backpressure.</li>
+  </ul>
+
+  <div class="callout note">
+    <span class="callout-title">"Exactly once," precisely</span>
+    JetStream gives you at-least-once delivery, plus two features that together get you effectively-once.
+    On the publish side, set a <code>Nats-Msg-Id</code> header. The stream drops any repeat of that ID within its
+    <span class="term" title="A per-stream window (default 2 minutes) during which the server remembers Nats-Msg-Id values and silently discards republished duplicates, still returning a PubAck flagged duplicate.">duplicate window</span>,
+    so a publisher that retries after a lost PubAck doesn't store the message twice. On the consume side,
+    <em>double ack</em> (<code>AckSync</code>) waits for the server to confirm it recorded the ack, so you know the
+    message won't come back. Recent releases have added more stream-level primitives. 2.12 brought
+    <strong>atomic batch publish</strong> (a set of messages stored all-or-nothing), <strong>distributed
+    counters</strong> (<code>Nats-Incr</code> headers), and delayed message scheduling. 2.14 added faster batch
+    commits.
+  </div>
+
+  <h3>Replication: Raft, many times over</h3>
+  <p>
+    Each stream has a replica count, <code>R1</code>, <code>R3</code>, or <code>R5</code>. A replicated stream is
+    its own <span class="term" title="A consensus algorithm in which a leader appends entries to a log and an entry is committed once a majority (quorum) of replicas have persisted it. The same idea etcd uses for Kubernetes state.">Raft</span>
+    group: one server is the stream leader, writes are committed once a quorum has them, and if the leader dies a
+    follower takes over. Every replicated consumer is a separate Raft group too. On top of these sits the
+    <strong>meta group</strong>, a cluster-wide Raft group with a "meta leader" that handles the JetStream API
+    (create stream, create consumer) and decides placement. So a cluster with 200 R3 streams runs hundreds of
+    small Raft groups instead of one big log. If you've read the etcd deep-dive, this is the same quorum logic,
+    sharded per stream.
+  </p>
+
+  <h3>Key-Value and Object Store: streams in disguise</h3>
+  <p>
+    The <strong>Key-Value store</strong> is a stream named <code>KV_&lt;bucket&gt;</code> that captures
+    <code>$KV.&lt;bucket&gt;.&gt;</code>. A <code>put</code> publishes to <code>$KV.config.db.url</code>.
+    <code>MaxMsgsPerSubject</code> sets how many historical revisions you keep, and a <code>get</code> reads the
+    last message for that subject. Because it's a stream you get watch (a consumer on the key pattern),
+    compare-and-set (via the expected-last-sequence header), TTLs, and history at no extra cost. It works like a
+    lightweight etcd for application config, feature flags, and leader election. The <strong>Object Store</strong>
+    does the same thing for large blobs. It chunks a file into many messages in an <code>OBJ_&lt;bucket&gt;</code>
+    stream and keeps a metadata entry with a digest.
+  </p>
+
+  <h2>Topology: clusters, superclusters, leaf nodes</h2>
+  <figure>
+    <svg viewBox="0 0 760 250" width="100%" role="img" aria-label="Two three-node NATS clusters connected by gateways, with leaf nodes at the edge">
+      <g font-family="ui-monospace, monospace" font-size="12">
+        <rect x="20" y="30" width="270" height="150" rx="10" fill="var(--surface-2)" stroke="var(--border-strong)" />
+        <text x="32" y="50" fill="var(--text-muted)">cluster us-east (routes :6222)</text>
+        <rect x="470" y="30" width="270" height="150" rx="10" fill="var(--surface-2)" stroke="var(--border-strong)" />
+        <text x="482" y="50" fill="var(--text-muted)">cluster eu-west (routes :6222)</text>
+        <g fill="var(--surface)" stroke="var(--accent)" stroke-width="2">
+          <circle cx="80" cy="110" r="24" /><circle cx="155" cy="80" r="24" /><circle cx="230" cy="125" r="24" />
+          <circle cx="530" cy="125" r="24" /><circle cx="605" cy="80" r="24" /><circle cx="680" cy="110" r="24" />
+        </g>
+        <g stroke="var(--accent)" stroke-width="1.5" opacity=".7">
+          <line x1="80" y1="110" x2="155" y2="80" /><line x1="155" y1="80" x2="230" y2="125" /><line x1="80" y1="110" x2="230" y2="125" />
+          <line x1="530" y1="125" x2="605" y2="80" /><line x1="605" y1="80" x2="680" y2="110" /><line x1="530" y1="125" x2="680" y2="110" />
+        </g>
+        <g fill="var(--text)" text-anchor="middle"><text x="80" y="114">n1</text><text x="155" y="84">n2</text><text x="230" y="129">n3</text><text x="530" y="129">n4</text><text x="605" y="84">n5</text><text x="680" y="114">n6</text></g>
+        <line x1="254" y1="125" x2="506" y2="125" stroke="var(--accent-2)" stroke-width="3" stroke-dasharray="7 5" />
+        <text x="380" y="115" text-anchor="middle" fill="var(--cloud-cyan-deep)">gateway :7222 (supercluster)</text>
+        <g fill="var(--surface)" stroke="var(--signal-violet)" stroke-width="2">
+          <rect x="40" y="205" width="80" height="30" rx="6" /><rect x="140" y="205" width="80" height="30" rx="6" />
+          <rect x="590" y="205" width="110" height="30" rx="6" />
+        </g>
+        <g fill="var(--text)" text-anchor="middle"><text x="80" y="224">leaf: store</text><text x="180" y="224">leaf: truck</text><text x="645" y="224">leaf: factory</text></g>
+        <g stroke="var(--signal-violet)" stroke-width="1.5" stroke-dasharray="4 4">
+          <line x1="80" y1="205" x2="80" y2="134" /><line x1="180" y1="205" x2="155" y2="104" /><line x1="645" y1="205" x2="680" y2="134" />
+        </g>
+        <text x="380" y="224" text-anchor="middle" fill="var(--text-muted)">leafnode :7422 — edge servers dial in</text>
+      </g>
+    </svg>
+    <figcaption>Full-mesh routes inside a cluster, gateways between clusters, and leaf nodes extending the bus to the edge.</figcaption>
+  </figure>
+  <ul>
+    <li><strong>Cluster.</strong> Servers connect to each other in a full mesh of <em>routes</em> and share
+      subscription interest, so a client can connect to any node. Clients get the list of cluster members
+      automatically and reconnect elsewhere on failure. In Kubernetes this is the Helm chart's StatefulSet plus a
+      headless Service.</li>
+    <li><strong>Supercluster.</strong> Clusters joined by <em>gateways</em>. Gateways forward a message only to
+      clusters that have interest in it, and they learn that interest gradually rather than flooding it. That makes
+      multi-region practical. A request from <code>us-east</code> can be answered by a queue member in
+      <code>eu-west</code> when no local member exists.</li>
+    <li><strong>Leaf node.</strong> A server, possibly on a Raspberry Pi in a shop or a truck, that dials
+      <em>out</em> to a hub. It is a single outbound connection (good for NAT and firewalls), it can run its own
+      local JetStream, and it keeps serving local clients while the uplink is down. Streams can then
+      <em>mirror</em> or <em>source</em> data between edge and core. This is the main reason NATS shows up in edge
+      architectures, alongside KubeEdge.</li>
+  </ul>
+
+  <h2>Security: accounts and decentralized JWT auth</h2>
+  <p>
+    Multi-tenancy is built in. An <strong>account</strong> is an isolated subject namespace: <code>orders.&gt;</code>
+    in account A and in account B are entirely separate. Accounts share data only through explicit
+    <strong>exports</strong> and <strong>imports</strong> of streams (message flows) or services (request-reply
+    endpoints), which can be remapped to other subject names along the way.
+  </p>
+  <p>
+    Identity uses a three-level chain of <span class="term" title="Ed25519 key pairs encoded with a type prefix: O… operator, A… account, U… user. Only public keys are ever given to the server; the private seed stays with whoever signs.">NKeys</span>
+    and JWTs: an <strong>operator</strong> signs <strong>account</strong> JWTs, and an account signs
+    <strong>user</strong> JWTs that carry permissions (which subjects the user may publish or subscribe to). The
+    server only needs to trust the operator's public key. It then verifies any user by checking signatures, and
+    a client proves possession of its key by signing a server-issued nonce. "Decentralized" means a tenant can
+    create its own users offline, with the <code>nsc</code> tool, without touching the server config. Account JWTs
+    are distributed through a resolver, either the built-in one or an account server. For integrating with an
+    existing IdP there's <strong>auth callout</strong>, where the server delegates the auth decision to a service
+    you write. TLS and mTLS are supported on every port.
+  </p>
+
+  <h2>Running it on Kubernetes</h2>
+<pre><code>helm repo add nats https://nats-io.github.io/k8s/helm/charts/
+helm install nats nats/nats \
+  --set config.cluster.enabled=true --set config.cluster.replicas=3 \
+  --set config.jetstream.enabled=true \
+  --set config.jetstream.fileStore.pvc.size=10Gi
+
+# then, from a debug pod or the nats-box deployment:
+nats stream add ORDERS --subjects 'orders.&gt;' --replicas 3 --storage file
+nats consumer add ORDERS billing --pull --filter 'orders.*.created' --ack explicit
+nats pub orders.eu.created '{"id":4711}'
+nats consumer next ORDERS billing --ack</code></pre>
+  <p>
+    The chart runs a StatefulSet with a PVC per Pod for JetStream file storage, a headless Service for routes, a
+    client Service on 4222, and a <code>nats-box</code> utility Pod with the <code>nats</code> CLI. If you'd rather
+    manage streams GitOps-style, <strong>NACK</strong> (NATS Controllers for Kubernetes) provides
+    <code>Stream</code>, <code>Consumer</code>, <code>KeyValue</code>, and <code>ObjectStore</code> CRDs that a
+    controller reconciles into the JetStream API, so Argo CD or Flux can own them. Monitoring is on port
+    <code>8222</code> (<code>/varz</code>, <code>/connz</code>, <code>/jsz</code>), and the
+    <code>prometheus-nats-exporter</code> sidecar exposes it to Prometheus.
+  </p>
+
+  <h2>NATS vs. the things it gets compared with</h2>
+  <table>
+    <thead><tr><th></th><th>NATS (+ JetStream)</th><th>Apache Kafka</th><th>RabbitMQ</th></tr></thead>
+    <tbody>
+      <tr><td>Core model</td><td>Subject-based routing; streams are optional and capture subjects</td><td>Partitioned, replicated append-only log</td><td>AMQP broker: exchanges route to queues</td></tr>
+      <tr><td>Addressing</td><td>Hierarchical subjects with <code>*</code>/<code>&gt;</code> wildcards, created on the fly</td><td>Topics and partitions, created in advance</td><td>Exchanges, bindings, routing keys</td></tr>
+      <tr><td>Default delivery</td><td>At-most-once (core); at-least-once with dedup in JetStream</td><td>At-least-once; exactly-once via transactions</td><td>At-least-once with acks</td></tr>
+      <tr><td>Consumer state</td><td>Server-side consumers (cursor + ack state)</td><td>Client-committed offsets per consumer group</td><td>Messages leave the queue when acked</td></tr>
+      <tr><td>Request-reply</td><td>Built-in primitive</td><td>Not a native pattern</td><td>Possible (reply-to, direct reply)</td></tr>
+      <tr><td>Footprint</td><td>Single Go binary, runs from edge devices to supercluster</td><td>JVM brokers plus KRaft controllers; heavier</td><td>Erlang VM; moderate</td></tr>
+      <tr><td>Sweet spot</td><td>Service-to-service messaging, edge/IoT, multi-region, mixed patterns</td><td>High-throughput log, stream processing, the Kafka ecosystem (Connect, Streams)</td><td>Rich routing, classic enterprise work queues</td></tr>
+    </tbody>
+  </table>
+  <p>
+    Two neighbors from this landscape are easy to mix up with NATS. <strong>CloudEvents</strong> is an envelope
+    <em>format</em>. It has a NATS protocol binding, so you send CloudEvents <em>over</em> NATS. <strong>Dapr</strong>
+    pub/sub is an <em>abstraction API</em>. NATS JetStream is one of the brokers that can sit behind it.
+  </p>
+
+  <h2 id="governance">The 2025 governance fight</h2>
+  <p>
+    The project's history is part of why its graduation stood out. In April 2025, <strong>Synadia</strong>, the
+    company founded by Collison that employs most of the maintainers, told the CNCF it wanted to take NATS back,
+    and signaled it might relicense the server under the source-available Business Source License. The CNCF
+    publicly objected. The NATS trademark and the <code>nats.io</code> domain had never been formally handed over,
+    and the CNCF argued that leaving would break the promises made when the project joined. On <strong>May 1,
+    2025</strong> the two sides reached an agreement. Synadia transferred the NATS trademarks to the Linux
+    Foundation, and NATS stayed in the CNCF under <strong>Apache-2.0</strong>. Synadia still leads development and
+    sells commercial offerings around it. For adopters, the result is a vendor-neutral trademark and an open
+    license that can't be changed unilaterally, which is exactly what graduation is meant to certify.
+  </p>
+
+  <h2>Why it graduated</h2>
+  <p>
+    Graduation means broad production adoption, a healthy multi-company contributor base, a security audit, and
+    mature governance. NATS had the adoption for years, across finance, telco, automotive, retail edge, and many
+    platforms that embed it. It has more than 40 official and community client libraries. The 2025 agreement
+    settled the last open question, governance. When CNCF announced the graduation at KubeCon NA 2026, it framed
+    NATS as a production-ready communication layer between workloads and, increasingly, AI agents. When you see
+    "NATS" in a blog post, read it as: a lightweight, subject-addressed message bus that also does streaming,
+    and stretches from a single edge box to a global supercluster.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. Which subjects does the subscription <code>sensors.*.temp.&gt;</code> match?</p>
+      <button class="quiz-option" data-val="a"><code>sensors.room1.temp</code> and <code>sensors.room1.temp.c</code></button>
+      <button class="quiz-option" data-val="b"><code>sensors.room1.temp.c</code> but not <code>sensors.room1.temp</code>, because <code>&gt;</code> needs at least one token</button>
+      <button class="quiz-option" data-val="c"><code>sensors.a.b.temp.c</code>, because <code>*</code> can span tokens</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. Three plain subscribers and a queue group of 4 workers all match <code>jobs.resize</code>. How many deliveries does one publish produce?</p>
+      <button class="quiz-option" data-val="a">7</button>
+      <button class="quiz-option" data-val="b">1</button>
+      <button class="quiz-option" data-val="c">4: each plain subscriber gets a copy, plus exactly one member of the queue group</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. A core NATS (no JetStream) subscriber restarts for 10 seconds. What happens to messages published in that window?</p>
+      <button class="quiz-option" data-val="a">It never receives them. Core NATS is at-most-once and only delivers to current interest.</button>
+      <button class="quiz-option" data-val="b">The server buffers them on disk until it reconnects.</button>
+      <button class="quiz-option" data-val="c">The publisher gets an error and retries.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">4. A publisher's PubAck was lost on the network and it republishes the same order. How does JetStream avoid storing it twice?</p>
+      <button class="quiz-option" data-val="a">Streams reject identical payloads.</button>
+      <button class="quiz-option" data-val="b">The publisher sets a <code>Nats-Msg-Id</code> header, and the stream drops repeats within its duplicate window.</button>
+      <button class="quiz-option" data-val="c">The consumer filters duplicates by sequence number.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">5. What is a NATS Key-Value bucket under the hood?</p>
+      <button class="quiz-option" data-val="a">An embedded etcd instance.</button>
+      <button class="quiz-option" data-val="b">An in-memory map on the meta leader.</button>
+      <button class="quiz-option" data-val="c">A JetStream stream (<code>KV_&lt;bucket&gt;</code>) where each key is a subject and the last message per subject is the value.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">6. A shop's in-store server must keep working when its internet link drops and sync to the cloud later. Which NATS feature fits?</p>
+      <button class="quiz-option" data-val="a">A leaf node with local JetStream that sources or mirrors streams to and from the hub.</button>
+      <button class="quiz-option" data-val="b">A gateway connection, which is how a cluster joins a supercluster.</button>
+      <button class="quiz-option" data-val="c">A queue group spanning the shop and the cloud.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+  function el(id) { return document.getElementById(id); }
+
+  /* ---------- NATS subject matching (real rules) ---------- */
+  function validSubject(s) {
+    if (!s) return false;
+    var t = s.split(".");
+    for (var i = 0; i < t.length; i++) {
+      if (t[i] === "" || t[i] === "*" || t[i] === ">" || /\s/.test(t[i])) return false;
+    }
+    return true;
+  }
+  function validPattern(p) {
+    if (!p) return false;
+    var t = p.split(".");
+    for (var i = 0; i < t.length; i++) {
+      if (t[i] === "" || /\s/.test(t[i])) return false;
+      if (t[i] === ">" && i !== t.length - 1) return false;
+    }
+    return true;
+  }
+  function match(pattern, subject) {
+    var p = pattern.split("."), s = subject.split(".");
+    for (var i = 0; i < p.length; i++) {
+      if (p[i] === ">") return s.length > i;
+      if (i >= s.length) return false;
+      if (p[i] !== "*" && p[i] !== s[i]) return false;
+    }
+    return p.length === s.length;
+  }
+
+  /* ---------- Playground state ---------- */
+  var PRESETS = ["orders.eu.created", "orders.us.created", "orders.eu.shipped", "orders.eu.de.created", "payments.refund", "pricing.quote"];
+  var st, nextId, crashTimers = [];
+
+  function fresh() {
+    nextId = 1;
+    var subs = [
+      { name: "audit", pattern: "orders.>", queue: "" },
+      { name: "eu-dash", pattern: "orders.eu.*", queue: "" },
+      { name: "w1", pattern: "orders.*.created", queue: "workers" },
+      { name: "w2", pattern: "orders.*.created", queue: "workers" },
+      { name: "w3", pattern: "orders.*.created", queue: "workers" },
+      { name: "pricer", pattern: "pricing.>", queue: "pricers" }
+    ].map(function (s) { s.id = nextId++; s.online = true; s.inbox = []; return s; });
+    return {
+      subs: subs,
+      js: false,
+      stream: [], seq: 0,
+      cons: { online: true, acked: {}, deliveries: {}, inflight: {}, crashNext: false }
+    };
+  }
+
+  var logBox = el("ntLog");
+  function log(cls, text) {
+    var line = document.createElement("div");
+    if (cls) line.className = cls;
+    line.textContent = text;
+    logBox.appendChild(line);
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+
+  function renderPresets() {
+    var box = el("ntPresets"); box.innerHTML = "";
+    PRESETS.forEach(function (p) {
+      var b = document.createElement("button");
+      b.className = "btn ghost"; b.textContent = p;
+      b.addEventListener("click", function () { el("ntSubj").value = p; publish(p, false); });
+      box.appendChild(b);
+    });
+  }
+
+  function renderSubs(hits) {
+    hits = hits || {};
+    var box = el("ntSubs"); box.innerHTML = "";
+    st.subs.forEach(function (s) {
+      var card = document.createElement("div");
+      card.className = "nt-sub" + (s.queue ? " queue" : "") + (s.online ? "" : " off") + (hits[s.id] ? " hit" : "");
+      var head = document.createElement("div"); head.className = "nt-head";
+      var nm = document.createElement("span"); nm.className = "nt-name"; nm.textContent = s.name;
+      var ctl = document.createElement("span");
+      var tog = document.createElement("button"); tog.className = "btn ghost"; tog.textContent = s.online ? "offline" : "online";
+      tog.title = "Toggle this subscriber's connection";
+      tog.addEventListener("click", function () { s.online = !s.online; log("info", (s.online ? "↑ " : "↓ ") + s.name + (s.online ? " reconnected (missed messages are gone: core NATS has no replay)" : " disconnected")); renderSubs(); });
+      var del = document.createElement("button"); del.className = "btn ghost"; del.textContent = "×"; del.title = "Unsubscribe";
+      del.addEventListener("click", function () { st.subs = st.subs.filter(function (x) { return x !== s; }); log("info", "UNSUB " + s.name); renderSubs(); });
+      ctl.appendChild(tog); ctl.appendChild(document.createTextNode(" ")); ctl.appendChild(del);
+      head.appendChild(nm); head.appendChild(ctl);
+      var pat = document.createElement("div"); pat.className = "nt-pat"; pat.textContent = "SUB " + s.pattern;
+      var meta = document.createElement("div"); meta.className = "nt-meta";
+      meta.textContent = (s.queue ? "queue: " + s.queue : "plain subscriber") + " · " + s.inbox.length + " msg";
+      var inbox = document.createElement("div"); inbox.className = "nt-inbox";
+      s.inbox.slice(-6).reverse().forEach(function (m) { var d = document.createElement("div"); d.textContent = "← " + m; inbox.appendChild(d); });
+      card.appendChild(head); card.appendChild(pat); card.appendChild(meta); card.appendChild(inbox);
+      box.appendChild(card);
+    });
+    // JetStream consumer card
+    if (st.js) {
+      var c = document.createElement("div");
+      c.className = "nt-sub js" + (st.cons.online ? "" : " off") + (hits.billing ? " hit" : "");
+      var pending = pendingSeqs().length;
+      c.innerHTML = "";
+      var h = document.createElement("div"); h.className = "nt-head";
+      var n = document.createElement("span"); n.className = "nt-name"; n.textContent = "billing";
+      h.appendChild(n);
+      var p = document.createElement("div"); p.className = "nt-pat"; p.textContent = "JS consumer · orders.*.created";
+      var m = document.createElement("div"); m.className = "nt-meta"; m.textContent = (st.cons.online ? "online" : "OFFLINE") + " · pending " + pending;
+      c.appendChild(h); c.appendChild(p); c.appendChild(m);
+      box.appendChild(c);
+    }
+  }
+
+  function pendingSeqs() {
+    return st.stream.filter(function (m) { return match("orders.*.created", m.subject) && !st.cons.acked[m.seq]; }).map(function (m) { return m.seq; });
+  }
+
+  function renderStream() {
+    el("ntStreamBox").classList.toggle("nt-hidden", !st.js);
+    if (!st.js) return;
+    var box = el("ntStream"); box.innerHTML = "";
+    if (!st.stream.length) { var e = document.createElement("span"); e.className = "nt-meta"; e.style.fontFamily = "var(--font-mono)"; e.style.fontSize = "var(--fs-xs)"; e.textContent = "(empty — publish something under orders.>)"; box.appendChild(e); }
+    st.stream.forEach(function (m) {
+      var d = document.createElement("span");
+      var inFilter = match("orders.*.created", m.subject);
+      d.className = "nt-msg " + (!inFilter ? "unmatched" : (st.cons.acked[m.seq] ? "acked" : "pending"));
+      var dc = st.cons.deliveries[m.seq];
+      d.textContent = "#" + m.seq + " " + m.subject + (dc > 1 ? " ×" + dc : "");
+      d.title = inFilter ? (st.cons.acked[m.seq] ? "acked" : "pending") + (dc ? ", delivered " + dc + " time(s)" : ", not delivered yet") : "stored, but outside billing's filter";
+      box.appendChild(d);
+    });
+    el("ntConsToggle").textContent = st.cons.online ? "Take billing offline" : "Bring billing online";
+    var acks = Object.keys(st.cons.acked).length;
+    el("ntConsState").textContent = "stream msgs " + st.stream.length + " · acked " + acks + " · pending " + pendingSeqs().length;
+  }
+
+  function renderAll(hits) { renderSubs(hits); renderStream(); }
+
+  /* Deliver pending stream messages to billing (pull consumer fetching). */
+  function pumpConsumer(hits) {
+    if (!st.js || !st.cons.online) return;
+    pendingSeqs().forEach(function (seq) {
+      if (st.cons.inflight[seq]) return;
+      var m = st.stream[seq - 1];
+      st.cons.deliveries[seq] = (st.cons.deliveries[seq] || 0) + 1;
+      if (hits) hits.billing = true;
+      if (st.cons.crashNext) {
+        st.cons.crashNext = false; el("ntCrash").checked = false;
+        st.cons.inflight[seq] = true;
+        log("bad", "  ✗ billing got #" + seq + " " + m.subject + " (delivery " + st.cons.deliveries[seq] + ") and crashed before acking. AckWait timer running…");
+        var t = setTimeout(function () {
+          delete st.cons.inflight[seq];
+          if (!st.js) return;
+          log("warn", "  ⟳ AckWait expired for #" + seq + ": the server redelivers it");
+          var h = {}; pumpConsumer(h); renderAll(h);
+        }, 2200);
+        crashTimers.push(t);
+      } else {
+        st.cons.acked[seq] = true;
+        log("ok", "  ✓ billing fetched #" + seq + " " + m.subject + (st.cons.deliveries[seq] > 1 ? " (redelivery, count " + st.cons.deliveries[seq] + ")" : "") + " → +ACK");
+      }
+    });
+  }
+
+  var reqCounter = 0;
+  function publish(subject, asRequest) {
+    subject = subject.trim();
+    if (!validSubject(subject)) { log("bad", "✗ invalid publish subject \"" + subject + "\": no wildcards or empty tokens allowed when publishing"); return; }
+    var reply = asRequest ? "_INBOX.k3Xp9." + (++reqCounter) : "";
+    log("info", (asRequest ? "REQ " : "PUB ") + subject + (reply ? "  (reply-to " + reply + ")" : ""));
+    var hits = {}, delivered = [];
+    var groups = {};
+    st.subs.forEach(function (s) {
+      if (!s.online || !match(s.pattern, subject)) return;
+      if (s.queue) { (groups[s.queue] = groups[s.queue] || []).push(s); }
+      else { delivered.push(s); }
+    });
+    var qPicked = [];
+    Object.keys(groups).forEach(function (g) {
+      var members = groups[g];
+      var pick = members[Math.floor(Math.random() * members.length)];
+      qPicked.push({ g: g, s: pick, n: members.length });
+      delivered.push(pick);
+    });
+    delivered.forEach(function (s) { s.inbox.push(subject); hits[s.id] = true; });
+    var offlineMatches = st.subs.filter(function (s) { return !s.online && match(s.pattern, subject); });
+
+    if (delivered.length) {
+      var plain = delivered.filter(function (s) { return !s.queue; }).map(function (s) { return s.name; });
+      if (plain.length) log("ok", "  → fan-out to " + plain.join(", "));
+      qPicked.forEach(function (q) { log("ok", "  → queue group \"" + q.g + "\": 1 of " + q.n + " online members picked → " + q.s.name); });
+    }
+    offlineMatches.forEach(function (s) { log("warn", "  · " + s.name + " matches but is offline, so it misses this message (at-most-once)"); });
+
+    var stored = false;
+    if (st.js && match("orders.>", subject)) {
+      st.seq++;
+      st.stream.push({ seq: st.seq, subject: subject });
+      stored = true;
+      log("ok", "  ⛁ stored in stream ORDERS as seq " + st.seq + " → PubAck{stream:ORDERS, seq:" + st.seq + "}");
+      if (match("orders.*.created", subject) && !st.cons.online) log("warn", "  · billing is offline; seq " + st.seq + " waits in the stream");
+      pumpConsumer(hits);
+    }
+
+    if (asRequest) {
+      var responders = delivered;
+      if (!responders.length) {
+        log("bad", "  ✗ no responders: the server sends an immediate 503 status to " + reply + ", so there's no timeout to wait out");
+      } else {
+        log("ok", "  ⇠ reply from " + responders[0].name + " on " + reply + (responders.length > 1 ? " (first of " + responders.length + " responders wins; the others' replies are ignored)" : ""));
+      }
+    } else if (!delivered.length && !stored) {
+      log("warn", "  ∅ no interest in " + subject + ": message dropped, and the publisher isn't told");
+    }
+    renderAll(hits);
+    setTimeout(function () { renderSubs(); }, 700);
+  }
+
+  function reset() {
+    crashTimers.forEach(clearTimeout); crashTimers = [];
+    st = fresh(); reqCounter = 0;
+    el("ntJs").checked = false; el("ntCrash").checked = false;
+    logBox.innerHTML = "";
+    log("info", "Connected to nats://localhost:4222. Six subscriptions are active. Publish something.");
+    renderAll();
+  }
+
+  el("ntPub").addEventListener("click", function () { publish(el("ntSubj").value, false); });
+  el("ntReq").addEventListener("click", function () { publish(el("ntSubj").value, true); });
+  el("ntSubj").addEventListener("keydown", function (e) { if (e.key === "Enter") publish(el("ntSubj").value, false); });
+  el("ntBurst").addEventListener("click", function () {
+    var regions = ["eu", "us", "ap"];
+    for (var i = 0; i < 5; i++) publish("orders." + regions[i % 3] + ".created", false);
+  });
+  el("ntAdd").addEventListener("click", function () {
+    var p = el("ntNewPat").value.trim(), q = el("ntNewQ").value.trim();
+    if (!validPattern(p)) { log("bad", "✗ invalid pattern \"" + p + "\": tokens must be non-empty, and > may only appear last"); return; }
+    if (/\s|\./.test(q)) { log("bad", "✗ queue group names can't contain spaces or dots"); return; }
+    var s = { id: nextId++, name: "sub" + (nextId - 1), pattern: p, queue: q, online: true, inbox: [] };
+    st.subs.push(s);
+    log("info", "SUB " + p + (q ? " " + q : "") + "  (" + s.name + ")");
+    renderSubs();
+  });
+  el("ntJs").addEventListener("change", function () {
+    st.js = el("ntJs").checked;
+    if (st.js) log("info", "JetStream on: stream ORDERS {subjects:[orders.>], retention:limits, replicas:3} and consumer billing {durable, pull, filter:orders.*.created, ack:explicit}");
+    else { log("info", "JetStream off: the stream is gone; back to pure core NATS"); crashTimers.forEach(clearTimeout); crashTimers = []; st.stream = []; st.seq = 0; st.cons = { online: true, acked: {}, deliveries: {}, inflight: {}, crashNext: false }; }
+    renderAll();
+  });
+  el("ntConsToggle").addEventListener("click", function () {
+    st.cons.online = !st.cons.online;
+    if (st.cons.online) {
+      var n = pendingSeqs().filter(function (s) { return !st.cons.inflight[s]; }).length;
+      log("info", "↑ billing reconnected. The durable consumer remembers its ack state, so " + n + " pending message(s) get replayed in order");
+      var h = {}; pumpConsumer(h); renderAll(h);
+    } else {
+      log("info", "↓ billing disconnected. The consumer's state stays on the server");
+      renderAll();
+    }
+  });
+  el("ntCrash").addEventListener("change", function () { st.cons.crashNext = el("ntCrash").checked; });
+  el("ntReset").addEventListener("click", reset);
+  el("ntClear").addEventListener("click", function () { logBox.innerHTML = ""; });
+
+  renderPresets();
+  reset();
+
+  /* ---------- Wildcard matcher ---------- */
+  function renderMatcher() {
+    var p = el("ntMP").value.trim(), s = el("ntMS").value.trim(), out = el("ntMV");
+    out.innerHTML = "";
+    if (!validPattern(p)) { out.textContent = "✗ invalid pattern: tokens must be non-empty, and > may only be the last token"; return; }
+    if (!validSubject(s)) { out.textContent = "✗ invalid subject: published subjects can't contain wildcards or empty tokens"; return; }
+    var pt = p.split("."), stt = s.split(".");
+    var ok = match(p, s);
+    var line = document.createElement("div");
+    for (var i = 0; i < Math.max(pt.length, stt.length); i++) {
+      var tok = document.createElement("span");
+      var pp = pt[i], ss = stt[i];
+      var good;
+      if (pp === undefined) { good = pt[pt.length - 1] === ">"; tok.textContent = (good ? ">" : "∅") + " ⟷ " + ss; }
+      else if (pp === ">") { good = ss !== undefined; tok.textContent = "> ⟷ " + (good ? stt.slice(i).join(".") : "∅"); tok.className = "nt-tok " + (good ? "ok" : "bad"); line.appendChild(tok); break; }
+      else { good = ss !== undefined && (pp === "*" || pp === ss); tok.textContent = pp + " ⟷ " + (ss === undefined ? "∅" : ss); }
+      tok.className = "nt-tok " + (good ? "ok" : "bad");
+      line.appendChild(tok);
+    }
+    out.appendChild(line);
+    var v = document.createElement("div");
+    v.style.marginTop = "var(--sp-2)";
+    v.style.color = ok ? "var(--signal-green)" : "var(--signal-red)";
+    v.textContent = ok ? "✓ MATCH: a subscriber on this pattern receives the message" : "✗ NO MATCH";
+    out.appendChild(v);
+  }
+  el("ntMP").addEventListener("input", renderMatcher);
+  el("ntMS").addEventListener("input", renderMatcher);
+  renderMatcher();
+
+  /* ---------- Quiz ---------- */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) { if (o.getAttribute("data-val") === answer) o.classList.add("correct"); });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct ? "Correct." : "Not quite. The highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
