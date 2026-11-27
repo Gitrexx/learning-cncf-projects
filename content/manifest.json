@@ -420,7 +420,7 @@
       "summary": "The AI/ML platform on Kubernetes: pipelines, training, tuning, model registry (graduated 2026).",
       "prerequisites": ["kubernetes"],
       "file": "kubeflow.html",
-      "status": "planned"
+      "status": "done"
     }
   ]
 }

@@ -1,0 +1,813 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kubeflow — CNCF Graduated Projects</title>
+<link rel="stylesheet" href="../assets/theme.css" />
+<style>
+  /* ---- Page-specific wiring: ML-lifecycle pipeline explorer + Katib tuning simulator. ---- */
+  .kf-dag { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 6px; margin-bottom: var(--sp-3); }
+  .kf-node {
+    font-family: var(--font-mono); font-size: var(--fs-xs);
+    padding: var(--sp-2); text-align: center; cursor: pointer;
+    border: 1px solid var(--border-strong); border-top: 4px solid var(--border-strong);
+    border-radius: var(--r-sm); background: var(--surface-2); color: var(--text-muted);
+    transition: background .2s, border-color .2s, box-shadow .2s, color .2s;
+    min-width: 0;
+  }
+  .kf-node b { display: block; color: var(--text); font-size: var(--fs-sm); }
+  .kf-node .kf-st { display: block; margin-top: 3px; min-height: 1.3em; }
+  .kf-node:hover { border-color: var(--accent); }
+  .kf-node.sel { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-2) 40%, transparent); color: var(--text); }
+  .kf-node.running { border-top-color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 14%, var(--surface-2)); }
+  .kf-node.ran { border-top-color: var(--signal-green); }
+  .kf-node.ran .kf-st { color: var(--signal-green); }
+  .kf-node.cached { border-top-color: var(--signal-violet); }
+  .kf-node.cached .kf-st { color: var(--signal-violet); }
+  .kf-detail {
+    border: 1px solid var(--border-strong); border-radius: var(--r-md);
+    background: var(--surface-2); padding: var(--sp-4); min-height: 220px; margin-bottom: var(--sp-3);
+  }
+  .kf-detail h4 { margin: 0 0 var(--sp-2); }
+  .kf-detail pre { margin: var(--sp-3) 0 0; }
+  .kf-chain { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--accent-strong); margin: var(--sp-2) 0; word-break: break-word; }
+  .kf-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; margin-bottom: var(--sp-3); }
+  .kf-row label { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
+  .kf-log {
+    font-family: var(--font-mono); font-size: var(--fs-xs);
+    background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--r-sm);
+    padding: var(--sp-3); max-height: 170px; overflow-y: auto; white-space: pre-wrap; margin: 0;
+  }
+  .kf-log .ok { color: var(--signal-green); }
+  .kf-log .cache { color: var(--signal-violet); }
+  .kf-log .info { color: var(--accent-strong); }
+
+  .kf-tune { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); margin-bottom: var(--sp-3); }
+  @media (max-width: 640px) { .kf-tune { grid-template-columns: 1fr; } }
+  .kf-pane { min-width: 0; }
+  .kf-pane h4 { margin: 0 0 var(--sp-2); font-family: var(--font-mono); font-size: var(--fs-sm); display: flex; justify-content: space-between; gap: var(--sp-2); }
+  .kf-pane canvas { width: 100%; aspect-ratio: 1 / 1; display: block; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-3); }
+  .kf-curve { width: 100%; height: 180px; display: block; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-3); margin-bottom: var(--sp-3); }
+  .kf-axis { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); margin-top: 4px; }
+  .kf-best { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
+  .kf-legend { display: flex; flex-wrap: wrap; gap: var(--sp-3); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); margin-bottom: var(--sp-3); }
+  .kf-legend i { display: inline-block; width: 12px; height: 3px; margin-right: 5px; vertical-align: 3px; }
+</style>
+
+<main class="deepdive">
+
+  <p class="eyebrow">CNCF Graduated · App Runtime &amp; Platform Abstractions · Sub-topic 35 / 41</p>
+  <h1>Kubeflow</h1>
+  <p class="lead">
+    A data scientist has a notebook that trains a good model on a laptop. Getting from there to production
+    means a lot of plumbing: rerunning the same steps on fresh data every week, training on 16 GPUs across 4 nodes
+    instead of one, trying 200 hyperparameter settings without babysitting them, recording which dataset and code
+    produced which model, and handing the result to something that serves it. <strong>Kubeflow</strong> is the
+    open-source answer to that plumbing, built as Kubernetes controllers and CRDs. It isn't one tool. It's a
+    <em>family</em> of projects, one for each stage of the model lifecycle, which you can install together as a
+    platform or pick from one at a time.
+  </p>
+
+  <div class="callout key">
+    <span class="callout-title">Where this fits</span>
+    Kubeflow started at <strong>Google in 2017</strong> as "a simpler way to run TensorFlow jobs on Kubernetes"
+    (the name is <em>Kube</em> + Tensor<em>flow</em>). It quickly became framework-agnostic. It joined the CNCF as
+    an incubating project in <strong>2023</strong>. The TOC voted it to <strong>graduated</strong> on
+    <strong>24 July 2026</strong>, and CNCF announced it on 17 August 2026. It's the first ML platform to reach the
+    top tier. CNCF's graduation announcement counts more than 6,600 contributors from over 1,000 organizations and
+    about 260 million Python package downloads. Named users include Bloomberg, NVIDIA, Red Hat (it's the upstream
+    of OpenShift AI), LinkedIn, Spotify, and Capital One. Relative to Kubernetes, every part of Kubeflow is an
+    <strong>operator</strong>: you describe a training run, a tuning experiment, or a notebook server as a custom
+    resource, and a controller turns it into Pods, Jobs, and Services.
+  </div>
+
+  <h2>The problem: ML isn't one job, it's a lifecycle</h2>
+  <p>
+    A web service has a fairly simple shape: build an image, roll it out, scale it. An ML system has several
+    stages, and each one needs something different from the cluster:
+  </p>
+  <table>
+    <thead><tr><th>Stage</th><th>What it needs from the cluster</th><th>Kubeflow project</th></tr></thead>
+    <tbody>
+      <tr><td>Explore</td><td>Long-lived interactive environments with GPUs and persistent volumes</td><td><strong>Notebooks</strong></td></tr>
+      <tr><td>Prepare data</td><td>Large distributed batch jobs</td><td><strong>Spark Operator</strong></td></tr>
+      <tr><td>Train</td><td>Gang-scheduled, multi-node GPU jobs that know about torchrun, MPI, or JAX</td><td><strong>Trainer</strong></td></tr>
+      <tr><td>Tune</td><td>Many parallel trials, each scored on a metric, with a search algorithm choosing the next one</td><td><strong>Katib</strong></td></tr>
+      <tr><td>Orchestrate</td><td>A repeatable, versioned DAG of all the above, with caching and lineage</td><td><strong>Pipelines</strong></td></tr>
+      <tr><td>Track</td><td>A record of which model version came from which run, data, and parameters</td><td><strong>Model Registry</strong></td></tr>
+      <tr><td>Serve</td><td>Autoscaled inference endpoints</td><td><strong>KServe</strong> (born in Kubeflow, now its own CNCF project)</td></tr>
+    </tbody>
+  </table>
+  <p>
+    Before Kubeflow, teams either glued this together themselves (cron plus bash plus a shared NFS mount plus a
+    spreadsheet of model versions) or bought a managed platform such as SageMaker, Vertex AI, or Azure ML.
+    Kubeflow's pitch is to get that managed-platform experience on <em>any</em> Kubernetes cluster, including
+    on-prem GPU fleets, with the same RBAC, quotas, and GitOps you already use.
+  </p>
+
+  <h2>The architecture: a set of operators plus a shared shell</h2>
+  <figure>
+    <svg viewBox="0 0 720 300" role="img" aria-label="Kubeflow architecture: dashboard and profiles on top, component operators in the middle, Kubernetes at the bottom" style="width:100%;height:auto;font-family:var(--font-mono);font-size:12px">
+      <rect x="10" y="10" width="700" height="56" rx="8" fill="var(--surface-2)" stroke="var(--signal-violet)" />
+      <text x="24" y="32" fill="var(--text)" font-weight="700">Central Dashboard · Profiles (multi-tenancy) · Istio + oauth2-proxy / Dex (authn/z)</text>
+      <text x="24" y="52" fill="var(--text-muted)">Kubeflow SDK (python: TrainerClient, ModelRegistryClient, SparkClient …) · kfp SDK</text>
+      <g>
+        <rect x="10"  y="86" width="132" height="112" rx="8" fill="var(--surface-2)" stroke="var(--accent)" />
+        <rect x="152" y="86" width="132" height="112" rx="8" fill="var(--surface-2)" stroke="var(--accent)" />
+        <rect x="294" y="86" width="132" height="112" rx="8" fill="var(--surface-2)" stroke="var(--accent)" />
+        <rect x="436" y="86" width="132" height="112" rx="8" fill="var(--surface-2)" stroke="var(--accent)" />
+        <rect x="578" y="86" width="132" height="112" rx="8" fill="var(--surface-2)" stroke="var(--accent)" />
+        <text x="22"  y="108" fill="var(--text)" font-weight="700">Pipelines</text>
+        <text x="22"  y="128" fill="var(--text-muted)">API server</text>
+        <text x="22"  y="144" fill="var(--text-muted)">Argo Workflows</text>
+        <text x="22"  y="160" fill="var(--text-muted)">MySQL + S3</text>
+        <text x="22"  y="176" fill="var(--text-muted)">driver/launcher</text>
+        <text x="164" y="108" fill="var(--text)" font-weight="700">Trainer</text>
+        <text x="164" y="128" fill="var(--text-muted)">TrainJob</text>
+        <text x="164" y="144" fill="var(--text-muted)">TrainingRuntime</text>
+        <text x="164" y="160" fill="var(--text-muted)">→ JobSet</text>
+        <text x="306" y="108" fill="var(--text)" font-weight="700">Katib</text>
+        <text x="306" y="128" fill="var(--text-muted)">Experiment</text>
+        <text x="306" y="144" fill="var(--text-muted)">Suggestion</text>
+        <text x="306" y="160" fill="var(--text-muted)">Trial</text>
+        <text x="448" y="108" fill="var(--text)" font-weight="700">Notebooks</text>
+        <text x="448" y="128" fill="var(--text-muted)">Notebook CR</text>
+        <text x="448" y="144" fill="var(--text-muted)">→ StatefulSet</text>
+        <text x="448" y="160" fill="var(--text-muted)">Spark Operator</text>
+        <text x="590" y="108" fill="var(--text)" font-weight="700">Model Registry</text>
+        <text x="590" y="128" fill="var(--text-muted)">REST API</text>
+        <text x="590" y="144" fill="var(--text-muted)">models/versions</text>
+        <text x="590" y="160" fill="var(--text-muted)">→ KServe (sep.)</text>
+      </g>
+      <rect x="10" y="218" width="700" height="72" rx="8" fill="var(--surface-3)" stroke="var(--k8s-blue)" />
+      <text x="24" y="242" fill="var(--text)" font-weight="700">Kubernetes</text>
+      <text x="24" y="262" fill="var(--text-muted)">namespaces · RBAC · Pods/Jobs · GPUs (device plugins / DRA) · Kueue quotas · PVCs · object storage</text>
+      <text x="24" y="280" fill="var(--text-faint)">each box above is a controller watching its own CRDs; install all (AI Reference Platform) or just one</text>
+    </svg>
+    <figcaption>Kubeflow is a stack of independent operators with a shared multi-tenant UI and auth layer on top.</figcaption>
+  </figure>
+  <p>
+    There are two ways to consume it, and the difference matters when you read blog posts:
+  </p>
+  <ul>
+    <li><strong>Standalone components.</strong> Install only Kubeflow Pipelines, or only Trainer, with its own
+      manifests or Helm chart. Many production users do this. For example, they run KFP for orchestration and nothing
+      else, or use Trainer under their own scheduler.</li>
+    <li><strong>The Kubeflow AI Reference Platform.</strong> A tested, versioned bundle of all the components, plus
+      the <span class="term" title="A web UI that links all Kubeflow apps (notebooks, pipelines, experiments, models) and lets users switch between their namespaces.">Central Dashboard</span>,
+      Istio, an auth stack (Dex and oauth2-proxy), and cert-manager, installed from the <code>kubeflow/manifests</code>
+      repo. It was renamed from "Kubeflow Platform" around release 1.11 (late 2025) and has since moved to
+      calendar versions such as <code>26.03</code>. Vendor distributions such as Red Hat OpenShift AI, Charmed
+      Kubeflow, and the cloud packagings build on it.</li>
+  </ul>
+
+  <h3>Multi-tenancy: Profiles</h3>
+  <p>
+    A <code>Profile</code> is a cluster-scoped CRD that represents one user or team. The profile controller turns
+    each Profile into a <strong>namespace</strong>, plus RoleBindings for the owner and contributors, an Istio
+    <code>AuthorizationPolicy</code> that admits only requests carrying those users' identity headers, and
+    optional ResourceQuotas. Everything a user creates (notebooks, pipeline runs, TrainJobs) lives in their profile
+    namespace. If you know Kubernetes, this is just "namespace-per-tenant" automated, with the mesh enforcing it at
+    the HTTP layer for the web apps.
+  </p>
+
+  <h2>Kubeflow Pipelines (KFP): ML workflows as containerized DAGs</h2>
+  <p>
+    Pipelines is the project most people mean when they say "we use Kubeflow." You write Python. Each step is a
+    <span class="term" title="A self-contained step with typed inputs and outputs that runs in its own container. A lightweight Python component is a decorated function whose source is shipped to and executed inside a base image.">component</span>,
+    and the pipeline is a function that wires components together by their inputs and outputs:
+  </p>
+<pre><code>from kfp import dsl, compiler
+
+@dsl.component(base_image="python:3.12", packages_to_install=["pandas"])
+def preprocess(raw: dsl.Input[dsl.Dataset], clean: dsl.Output[dsl.Dataset]):
+    import pandas as pd
+    pd.read_csv(raw.path).dropna().to_csv(clean.path, index=False)
+
+@dsl.component(base_image="pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime")
+def train(data: dsl.Input[dsl.Dataset], lr: float, model: dsl.Output[dsl.Model]):
+    ...  # write weights to model.path
+
+@dsl.pipeline(name="churn")
+def churn(lr: float = 3e-4):
+    ing = dsl.importer(artifact_uri="s3://data/churn.csv", artifact_class=dsl.Dataset)
+    prep = preprocess(raw=ing.output)
+    train(data=prep.outputs["clean"], lr=lr).set_accelerator_type("nvidia.com/gpu").set_accelerator_limit(1)
+
+compiler.Compiler().compile(churn, "churn.yaml")   # → platform-neutral IR</code></pre>
+  <p>
+    The compiler doesn't produce Kubernetes YAML directly. It produces an
+    <span class="term" title="Intermediate Representation: a protobuf-defined PipelineSpec (serialized as YAML) describing components, their containers, typed inputs/outputs, and the DAG. It's backend-neutral: the same file runs on open-source KFP or on Google Vertex AI Pipelines.">IR</span>
+    (<code>PipelineSpec</code>). That portability is a big deal: the same compiled file runs on open-source KFP
+    and on Google's managed Vertex AI Pipelines. When you submit a run, this is what happens:
+  </p>
+  <ol>
+    <li>The <strong>KFP API server</strong> stores the pipeline version and run in <strong>MySQL</strong>, then
+      compiles the IR into an <strong>Argo Workflows</strong> <code>Workflow</code>. Argo is the default and main
+      execution engine (<a href="argo.html">see the Argo deep-dive</a>). There was a Tekton backend, but it's no
+      longer the main path.</li>
+    <li>For each task, Argo first runs a <strong>driver</strong>. The driver resolves the task's inputs from
+      upstream outputs, computes a <strong>cache key</strong> (a hash of the component spec and its input values
+      and artifacts), and checks whether an identical execution has already succeeded. If it has, the task is
+      marked cached and its outputs are reused without starting a Pod.</li>
+    <li>Otherwise the user's container runs, wrapped by a small Go <strong>launcher</strong> injected as its
+      entrypoint. The launcher downloads input artifacts from object storage (S3, GCS, or the in-cluster store),
+      runs your code, uploads output artifacts, and records the execution and its artifacts for
+      <span class="term" title="The record of which artifacts (datasets, models, metrics) were consumed and produced by which executions. It lets you answer 'which data and which run produced this model?'">lineage</span>.</li>
+    <li>A <strong>persistence agent</strong> watches Workflow status and syncs it back to the API server.
+      The <strong>ScheduledWorkflow</strong> controller handles recurring runs ("retrain every Monday").</li>
+  </ol>
+
+  <h2>Explore it: the ML lifecycle as a pipeline</h2>
+  <p>
+    Below is a typical end-to-end pipeline. <strong>Click a step</strong> to see which Kubeflow component does the
+    work and which Kubernetes resources actually appear in the cluster. Then <strong>run</strong> it, run it again
+    with caching on, and change an input to see which steps the cache key invalidates.
+  </p>
+
+  <div class="widget">
+    <div class="widget-title">ML-lifecycle pipeline explorer</div>
+    <div class="kf-dag" id="kfDag"></div>
+    <div class="kf-detail" id="kfDetail"></div>
+    <div class="kf-row">
+      <button class="btn" id="kfRun">Run pipeline</button>
+      <label><input type="checkbox" id="kfCache" checked /> enable caching</label>
+      <label><input type="checkbox" id="kfNewData" /> new raw data</label>
+      <label><input type="checkbox" id="kfNewLr" /> change train <code>lr</code></label>
+      <button class="btn ghost" id="kfReset">Reset</button>
+    </div>
+    <pre class="kf-log" id="kfLog"></pre>
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">What to notice</span>
+    The first run executes every step. Run again with nothing changed: every task's cache key matches a previous
+    success, so the whole thing completes almost immediately and no Pods start. Tick <em>change train lr</em>:
+    <code>ingest</code> and <code>preprocess</code> stay cached, but <code>train</code> has a new input, so it
+    reruns, and everything downstream reruns because its input artifact (the model) is new. Tick <em>new raw
+    data</em> and the change propagates from the first step. Caching only works because components are
+    <strong>pure functions of their inputs</strong>. If a step reads "today's date" or a mutable table without
+    taking it as an input, the cache gives you stale results. In that case you turn caching off per task with
+    <code>.set_caching_options(False)</code>.
+  </div>
+
+  <h2>Kubeflow Trainer: distributed training as one CRD</h2>
+  <p>
+    Distributed training is awkward for plain Kubernetes. A 4-node PyTorch job needs 4 Pods that all start
+    together (<span class="term" title="Scheduling a group of Pods all-or-nothing: either every worker gets placed, or none do. Without it, two jobs can each grab half the GPUs and deadlock waiting for the rest.">gang scheduling</span>).
+    Each Pod needs to know its rank, the world size, and the address of rank 0 (<code>MASTER_ADDR</code>). If one
+    Pod fails, the whole group usually has to restart. A Deployment or a single Job can't express any of that.
+  </p>
+  <p>
+    The old <strong>Training Operator</strong> (v1) solved it with one CRD per framework: <code>TFJob</code>,
+    <code>PyTorchJob</code>, <code>MPIJob</code>, <code>XGBoostJob</code>, and so on, each with its own controller
+    logic. <strong>Kubeflow Trainer v2</strong> (released 2025, the current line) replaces them with a split that
+    platform teams will recognize:
+  </p>
+  <ul>
+    <li><strong><code>TrainingRuntime</code> / <code>ClusterTrainingRuntime</code></strong>, written by the
+      <em>platform engineer</em>. A reusable blueprint: a JobSet template, an <code>mlPolicy</code> (torch with
+      <code>numProcPerNode</code>, or MPI with SSH setup), and optional dataset and model
+      <em>initializers</em> that pre-download from Hugging Face or S3 into a shared volume. Kubeflow ships
+      built-ins such as <code>torch-distributed</code>, DeepSpeed, MLX, JAX, XGBoost, and LLM fine-tuning
+      runtimes.</li>
+    <li><strong><code>TrainJob</code></strong>, written by the <em>data scientist</em>. A short object that says
+      "this image, this command, this many nodes, using that runtime."</li>
+  </ul>
+<pre><code>apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainJob
+metadata:
+  name: churn-ddp
+  namespace: team-ml            # a Profile namespace
+spec:
+  runtimeRef:
+    kind: ClusterTrainingRuntime
+    name: torch-distributed
+  trainer:
+    image: registry.example.com/churn-train:1.4
+    command: ["python", "train.py", "--lr", "3e-4"]
+    numNodes: 4
+    resourcesPerNode:
+      limits: { nvidia.com/gpu: 2 }</code></pre>
+  <p>
+    The Trainer controller merges the TrainJob into the runtime and creates a <strong>JobSet</strong> (a
+    Kubernetes SIG project for groups of Jobs with a headless Service for Pod discovery). It injects the torchrun
+    environment (<code>PET_NNODES</code>, <code>PET_NPROC_PER_NODE</code>, <code>PET_MASTER_ADDR</code>,
+    and so on), and hands gang admission and quota to <strong>Kueue</strong> or another gang scheduler (Volcano,
+    the coscheduling plugin). Most users never write the YAML. They call
+    <code>TrainerClient().train(...)</code> from the Python <strong>Kubeflow SDK</strong> in a notebook, which
+    creates the TrainJob for them.
+  </p>
+  <div class="callout note">
+    <span class="callout-title">Reading old blog posts</span>
+    If a tutorial says <code>kind: PyTorchJob</code> with <code>apiVersion: kubeflow.org/v1</code>, that's the
+    Training Operator v1 API. It's still widely deployed, but new work targets <code>TrainJob</code>. The Kubeflow
+    docs have a migration guide.
+  </div>
+
+  <h2>Katib: hyperparameter tuning as a control loop</h2>
+  <p>
+    Training has knobs (learning rate, batch size, dropout, number of layers) that the model doesn't learn by
+    itself. Finding good values means training many times and comparing a metric. <strong>Katib</strong> (Arabic
+    for "secretary") automates that with three CRDs:
+  </p>
+  <ul>
+    <li><strong><code>Experiment</code></strong>: the search space, the objective (for example, minimize
+      <code>val_loss</code>, with an optional goal that ends the experiment early), the algorithm, and the budget
+      (<code>maxTrialCount</code>, <code>parallelTrialCount</code>, <code>maxFailedTrialCount</code>), plus a
+      <strong>trial template</strong>: any Kubernetes resource (a Job, a TrainJob, an Argo Workflow) with
+      placeholders for the parameters.</li>
+    <li><strong><code>Suggestion</code></strong>: the experiment controller asks the suggestion service, a gRPC
+      service running the chosen algorithm, for the next N parameter sets. It sends along every completed trial's
+      result.</li>
+    <li><strong><code>Trial</code></strong>: one parameter set. The trial controller fills in the template, runs
+      it, and a <strong>metrics collector</strong> (a sidecar that parses <code>val_loss=0.231</code> lines from
+      stdout, reads TensorFlow event files, or receives pushed metrics) reports the objective to Katib's DB.</li>
+  </ul>
+<pre><code>apiVersion: kubeflow.org/v1beta1
+kind: Experiment
+spec:
+  objective: { type: minimize, objectiveMetricName: val_loss, goal: 0.05 }
+  algorithm: { algorithmName: bayesianoptimization }   # random, grid, tpe, cmaes, hyperband, pbt…
+  maxTrialCount: 30
+  parallelTrialCount: 3
+  earlyStopping: { algorithmName: medianstop }       # kill trials doing worse than the median
+  parameters:
+    - name: lr
+      parameterType: double
+      feasibleSpace: { min: "1e-5", max: "1e-1", distribution: logUniform }
+    - name: dropout
+      parameterType: double
+      feasibleSpace: { min: "0.0", max: "0.6" }
+  trialTemplate: { ... }   # e.g. a TrainJob with ${trialParameters.lr}</code></pre>
+  <p>
+    The algorithm choice matters most when trials are expensive. <strong>Random search</strong> samples
+    independently. It's simple, parallelizes perfectly, and works surprisingly well, but it never learns from
+    earlier trials. <strong>Bayesian optimization</strong> fits a cheap
+    <span class="term" title="A model of the objective function fitted to the trials seen so far — classically a Gaussian process — that predicts both an expected loss and an uncertainty for every untried configuration.">surrogate model</span>
+    to the trials so far and chooses the next point by maximizing an
+    <span class="term" title="A score trading off exploitation (where the surrogate predicts low loss) against exploration (where it's very uncertain). Expected Improvement (EI) is the classic one: how much below the current best do we expect this point to land?">acquisition function</span>,
+    so each new trial goes where it's most likely to beat the current best. Try both below.
+  </p>
+
+  <h2>Simulate it: random search vs Bayesian optimization</h2>
+  <div class="widget">
+    <div class="widget-title">Katib tuning simulator · objective: minimize val_loss(lr, dropout)</div>
+    <p class="muted" style="margin-top:0">
+      Both panels show the same hidden loss surface (brighter means lower loss). It has a broad, decent basin and
+      a narrower, better one. Each dot is a finished trial. The ring marks the best so far. The Bayesian side
+      starts with 5 random trials, like Katib's initial points, then fits a Gaussian-process surrogate and picks
+      the candidate with the highest Expected Improvement. Uncheck "reveal surface" to see what the algorithm sees.
+    </p>
+    <div class="kf-row">
+      <button class="btn" id="ktStep">Run 1 trial (each)</button>
+      <button class="btn ghost" id="ktRun">Run to budget (30)</button>
+      <button class="btn ghost" id="ktReset">New seed</button>
+      <label><input type="checkbox" id="ktReveal" checked /> reveal surface</label>
+      <label><input type="checkbox" id="ktNoise" /> noisy metric</label>
+    </div>
+    <div class="kf-tune">
+      <div class="kf-pane">
+        <h4><span>random</span><span class="kf-best" id="ktBestR"></span></h4>
+        <canvas id="ktCanR" width="300" height="300"></canvas>
+      </div>
+      <div class="kf-pane">
+        <h4><span>bayesianoptimization</span><span class="kf-best" id="ktBestB"></span></h4>
+        <canvas id="ktCanB" width="300" height="300"></canvas>
+      </div>
+    </div>
+    <div class="kf-axis">x: learning rate (log scale, 1e-5 → 1e-1) · y: dropout (0 → 0.6)</div>
+    <h4 style="margin:var(--sp-3) 0 var(--sp-2)">Best val_loss so far, by trial number</h4>
+    <div class="kf-legend">
+      <span><i style="background:var(--signal-amber)"></i>random</span>
+      <span><i style="background:var(--accent)"></i>bayesian (GP + EI)</span>
+      <span><i style="background:var(--signal-green)"></i>global optimum</span>
+    </div>
+    <canvas class="kf-curve" id="ktCurve" width="640" height="180"></canvas>
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">What to notice</span>
+    Over several seeds, Bayesian optimization usually reaches a lower loss in fewer trials. After the initial
+    random points it packs its trials into the promising region and refines there. Random search scatters its
+    trials evenly and sometimes finds the narrow basin by luck. Bayesian optimization isn't always better, though.
+    With a noisy metric, or when Katib runs many trials in parallel (each batch has to be chosen before the
+    previous one reports back), its advantage shrinks. Random search stays a strong, cheap baseline. That's why
+    Katib offers both, plus Hyperband (stops weak trials early with a small budget), TPE, CMA-ES, and
+    population-based training.
+  </div>
+
+  <h2>The rest of the family</h2>
+  <ul>
+    <li><strong>Notebooks.</strong> A <code>Notebook</code> CR (created from the dashboard's form) becomes a
+      StatefulSet with a PVC for the home directory, a Service, and an Istio VirtualService so it's reachable at
+      <code>/notebook/&lt;ns&gt;/&lt;name&gt;/</code>. Images exist for JupyterLab, VS Code (code-server), and
+      RStudio. A culling controller can stop idle notebooks to free their GPUs.</li>
+    <li><strong>Spark Operator.</strong> <code>SparkApplication</code> CRDs for running Apache Spark on
+      Kubernetes. It was donated to Kubeflow in 2024 and covers the "prepare a lot of data" stage. Recent releases
+      add Spark 4 and Spark Connect.</li>
+    <li><strong>Model Registry.</strong> A metadata service with a REST API. It records registered models,
+      their versions, and the artifact URIs, linked back to the pipeline run that produced them. It's the
+      handoff point to serving: "deploy version 7 of <code>churn</code>." The project is broadening into a
+      catalog of models and other AI assets, so you may see it under new names in recent releases.</li>
+    <li><strong>Kubeflow SDK.</strong> A newer, unified Python package (<code>pip install kubeflow</code>) that
+      wraps Trainer, Katib, Model Registry, and Spark behind one client API, so a data scientist never has to
+      touch <code>kubectl</code>.</li>
+    <li><strong>KServe</strong> is <em>not</em> part of Kubeflow any more. It started as KFServing inside
+      Kubeflow and became an independent CNCF project for inference (<code>InferenceService</code>, autoscaling
+      including scale-to-zero via <a href="knative.html">Knative</a>, LLM runtimes). The platform bundle still
+      installs it, and the Model Registry points at it.</li>
+  </ul>
+
+  <h2>Where you'd reach for it</h2>
+  <ul>
+    <li>You already run Kubernetes (often an on-prem or multi-cloud <strong>GPU fleet</strong>) and want ML to
+      share its scheduling, quotas, identity, and GitOps, rather than running a separate ML silo.</li>
+    <li>You need <strong>repeatable, versioned training pipelines</strong> with caching and lineage: weekly
+      retrains, regulated industries that must show "which data produced this model."</li>
+    <li>You run <strong>multi-node training or LLM fine-tuning</strong> and want platform engineers to own the
+      runtime blueprints while researchers just submit jobs.</li>
+    <li>You want to avoid lock-in. KFP's IR runs on Vertex AI as well as on your own cluster.</li>
+  </ul>
+  <p>
+    The trade-off is operational weight. The full platform is a lot of moving parts: Istio, an auth stack,
+    MySQL, object storage, Argo, and half a dozen controllers. A three-person data team on a single cloud may get
+    more done with SageMaker or Vertex AI. That's why so many teams install just KFP or just Trainer, or buy a
+    distribution.
+  </p>
+
+  <div class="callout warn">
+    <span class="callout-title">Often confused with</span>
+    <strong>Argo Workflows</strong>: KFP <em>runs on</em> Argo. Argo is a generic DAG engine, and KFP adds typed
+    ML artifacts, caching, lineage, and a Python SDK on top. <strong>MLflow</strong>: mainly experiment tracking
+    and a model registry. It overlaps with Model Registry and Katib's results UI, but it doesn't orchestrate
+    Kubernetes workloads, and many teams use both. <strong>Ray / KubeRay</strong>: a distributed compute framework
+    you program against. Kubeflow schedules jobs; Ray <em>is</em> the job's runtime, and the two are often
+    combined. <strong>Kueue / Volcano</strong>: batch quota and gang schedulers that Trainer and Katib
+    <em>use</em>. They don't replace them. <strong>KServe</strong>: serving, now a separate project.
+  </div>
+
+  <h2>Why it graduated</h2>
+  <p>
+    Graduation recognizes maturity, not novelty. Kubeflow had years of production use at large organizations, a
+    vendor-diverse maintainer base (Google, Red Hat, NVIDIA, Apple, Bloomberg, IBM, Canonical, and others), a
+    third-party security audit, and a formal steering committee for governance. It has become the reference
+    answer to "how do you run the ML lifecycle on Kubernetes." That matters more now that AI training and
+    inference are among the biggest workloads in the CNCF landscape. CNCF's own framing was that graduation is a
+    vote for <strong>Kubernetes as the AI control plane</strong>.
+  </p>
+
+  <h2>Check your understanding</h2>
+  <div class="quiz" id="quiz">
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">1. What does the KFP compiler output when you compile a Python pipeline?</p>
+      <button class="quiz-option" data-val="a">A Helm chart with one Deployment per step.</button>
+      <button class="quiz-option" data-val="b">A backend-neutral IR (PipelineSpec YAML). The KFP backend later turns it into an Argo Workflow, and Vertex AI can run the same file.</button>
+      <button class="quiz-option" data-val="c">A Dockerfile that bakes all steps into one image.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">2. You rerun a pipeline with caching on and change only the training step's <code>lr</code> parameter. What runs?</p>
+      <button class="quiz-option" data-val="a">Every step, because the pipeline version changed.</button>
+      <button class="quiz-option" data-val="b">Only the training step.</button>
+      <button class="quiz-option" data-val="c">Training and everything downstream of it. Upstream steps are cache hits because their cache keys (spec + inputs) are unchanged.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">3. In Trainer v2, who usually writes the <code>ClusterTrainingRuntime</code>, and what does a <code>TrainJob</code> become in the cluster?</p>
+      <button class="quiz-option" data-val="a">A platform engineer writes the runtime. The TrainJob is merged with it into a JobSet (Jobs + headless Service) with the distributed-training env injected.</button>
+      <button class="quiz-option" data-val="b">The data scientist writes it. The TrainJob becomes a Deployment with N replicas.</button>
+      <button class="quiz-option" data-val="c">Katib generates it. The TrainJob becomes a PyTorchJob.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="b">
+      <p class="quiz-q">4. How does Katib learn a trial's objective value?</p>
+      <button class="quiz-option" data-val="a">It reads the trained model and evaluates it itself.</button>
+      <button class="quiz-option" data-val="b">A metrics collector (for example, a sidecar parsing <code>val_loss=…</code> from stdout) reports it, and the Suggestion service uses all results to propose the next trials.</button>
+      <button class="quiz-option" data-val="c">From Prometheus scrapes of the training Pods.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <p class="quiz-q">5. Why can random search beat Bayesian optimization in practice?</p>
+      <button class="quiz-option" data-val="a">Random search uses a better surrogate model.</button>
+      <button class="quiz-option" data-val="b">Bayesian optimization can't handle continuous parameters.</button>
+      <button class="quiz-option" data-val="c">With high parallelism or a noisy metric, the surrogate has less to learn from per decision. Random search is trivially parallel and has no model to mislead it.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <p class="quiz-q">6. A colleague says "we serve our models with Kubeflow." What are they most likely running?</p>
+      <button class="quiz-option" data-val="a">KServe <code>InferenceService</code>s. KServe was born in Kubeflow and is installed by the platform bundle, but it's now a separate CNCF project.</button>
+      <button class="quiz-option" data-val="b">Kubeflow Pipelines with a long-running serve step.</button>
+      <button class="quiz-option" data-val="c">Katib Trials that never finish.</button>
+      <p class="quiz-feedback"></p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+  function el(id) { return document.getElementById(id); }
+  function cssVar(name, fallback) {
+    var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  }
+
+  /* =================== Pipeline explorer =================== */
+  var STEPS = [
+    { id: "ingest", label: "ingest", dur: 700,
+      comp: "Spark Operator (via a KFP task)",
+      chain: "KFP task → Argo Pod (driver) → SparkApplication CR → spark-driver Pod + executor Pods",
+      text: "Pull a week of raw events from the lake and write a Parquet snapshot. Large data prep is a good fit for Spark. The KFP step just submits a SparkApplication and waits, and its output artifact is the snapshot URI in object storage.",
+      yaml: "apiVersion: sparkoperator.k8s.io/v1beta2\nkind: SparkApplication\nspec:\n  type: Python\n  mainApplicationFile: s3://jobs/ingest.py\n  executor: { instances: 8, cores: 4 }" },
+    { id: "preprocess", label: "preprocess", dur: 600,
+      comp: "KFP lightweight Python component",
+      chain: "KFP task → driver (cache check) → Pod running your image, wrapped by the KFP launcher",
+      text: "Clean, split, and featurize. A plain @dsl.component: the launcher downloads the input Dataset artifact, runs the function, and uploads the output Datasets (train/val) to object storage. It records the execution for lineage.",
+      yaml: "@dsl.component(base_image=\"python:3.12\")\ndef preprocess(raw: Input[Dataset],\n               train: Output[Dataset],\n               val: Output[Dataset]): ..." },
+    { id: "train", label: "train", dur: 1300,
+      comp: "Kubeflow Trainer (TrainJob)",
+      chain: "KFP task → TrainJob → (ClusterTrainingRuntime merge) → JobSet → 4 Jobs → 4 GPU Pods, gang-admitted by Kueue",
+      text: "Distributed data-parallel training on 4 nodes × 2 GPUs. The step creates a TrainJob from the torch-distributed runtime. Trainer injects the torchrun rendezvous environment, and the JobSet's headless Service gives every rank a stable DNS name for rank 0.",
+      yaml: "kind: TrainJob\nspec:\n  runtimeRef: { kind: ClusterTrainingRuntime, name: torch-distributed }\n  trainer:\n    numNodes: 4\n    resourcesPerNode: { limits: { nvidia.com/gpu: 2 } }" },
+    { id: "tune", label: "tune", dur: 1500,
+      comp: "Katib (Experiment)",
+      chain: "KFP task → Experiment → Suggestion (gRPC algorithm service) → Trials → one TrainJob/Job per trial + metrics collector",
+      text: "Search lr and dropout around the baseline. Katib runs parallelTrialCount trials at a time, collects val_loss from each, asks the Suggestion service for the next parameters, and stops at maxTrialCount or when the goal is reached. The best trial's parameters are the step's output.",
+      yaml: "kind: Experiment\nspec:\n  objective: { type: minimize, objectiveMetricName: val_loss }\n  algorithm: { algorithmName: bayesianoptimization }\n  maxTrialCount: 30\n  parallelTrialCount: 3" },
+    { id: "register", label: "register", dur: 400,
+      comp: "Model Registry",
+      chain: "KFP task → Pod → REST call to the Model Registry service (no CRD; rows in its DB)",
+      text: "Record RegisteredModel \"churn\", a new ModelVersion, and its artifact URI, with metadata linking back to this pipeline run, its dataset, and its hyperparameters. This answers \"where did model v7 come from?\" months later.",
+      yaml: "from kubeflow.model_registry import ModelRegistryClient  # SDK\nclient.register_model(\"churn\", uri=model.uri,\n                      version=\"v7\", model_format_name=\"pytorch\")" },
+    { id: "serve", label: "serve", dur: 800,
+      comp: "KServe (separate CNCF project)",
+      chain: "KFP task → InferenceService → predictor Deployment (or Knative Service) + autoscaler + route",
+      text: "Roll the new version out as an inference endpoint, optionally as a canary. KServe pulls the model from storage into a model-server runtime (Triton, vLLM, a sklearn/torch server) and autoscales it, including scale-to-zero with Knative.",
+      yaml: "apiVersion: serving.kserve.io/v1beta1\nkind: InferenceService\nspec:\n  predictor:\n    model:\n      modelFormat: { name: pytorch }\n      storageUri: s3://models/churn/v7" }
+  ];
+  var dagEl = el("kfDag"), detailEl = el("kfDetail"), logEl = el("kfLog");
+  var selected = "train", running = false, history, nodeState;
+
+  function resetPipe() {
+    history = {};      // stepId -> cache key of the last successful execution
+    nodeState = {};
+    el("kfNewData").checked = false; el("kfNewLr").checked = false;
+    logEl.innerHTML = "";
+    plog("info", "Pipeline 'churn' uploaded. Compiled IR stored by the KFP API server.");
+    renderDag();
+  }
+  function plog(cls, msg) {
+    var line = document.createElement("div");
+    line.className = cls; line.textContent = msg;
+    logEl.appendChild(line); logEl.scrollTop = logEl.scrollHeight;
+  }
+  function renderDag() {
+    dagEl.innerHTML = "";
+    STEPS.forEach(function (s, i) {
+      var n = document.createElement("div");
+      n.className = "kf-node" + (s.id === selected ? " sel" : "") + (nodeState[s.id] ? " " + nodeState[s.id] : "");
+      var st = nodeState[s.id] === "running" ? "▶ running" : nodeState[s.id] === "ran" ? "✓ executed" : nodeState[s.id] === "cached" ? "⟲ cached" : "";
+      n.innerHTML = "<b>" + (i + 1) + ". " + s.label + "</b>" + s.comp.split(" (")[0] + "<span class='kf-st'>" + st + "</span>";
+      n.addEventListener("click", function () { selected = s.id; renderDag(); renderDetail(); });
+      dagEl.appendChild(n);
+    });
+  }
+  function renderDetail() {
+    var s = STEPS.filter(function (x) { return x.id === selected; })[0];
+    detailEl.innerHTML = "";
+    var h = document.createElement("h4"); h.textContent = s.label + " · " + s.comp; detailEl.appendChild(h);
+    var c = document.createElement("div"); c.className = "kf-chain"; c.textContent = s.chain; detailEl.appendChild(c);
+    var p = document.createElement("p"); p.textContent = s.text; p.style.margin = "0"; detailEl.appendChild(p);
+    var pre = document.createElement("pre"); var code = document.createElement("code"); code.textContent = s.yaml; pre.appendChild(code); detailEl.appendChild(pre);
+  }
+  function hash(str) { var h = 2166136261; for (var i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return ("0000000" + (h >>> 0).toString(16)).slice(-8); }
+
+  function runPipe() {
+    if (running) return;
+    running = true; el("kfRun").disabled = true;
+    nodeState = {}; renderDag();
+    var caching = el("kfCache").checked;
+    var inputs = {
+      ingest: "raw=" + (el("kfNewData").checked ? "s3://data/week-48" : "s3://data/week-47"),
+      preprocess: "", train: "lr=" + (el("kfNewLr").checked ? "1e-3" : "3e-4"), tune: "space=v1", register: "", serve: ""
+    };
+    plog("info", "— run submitted → Argo Workflow churn-" + hash(String(Date.now())).slice(0, 5) + " created (caching " + (caching ? "on" : "off") + ")");
+    var upstreamKey = "";
+    var i = 0;
+    function next() {
+      if (i >= STEPS.length) {
+        plog("ok", "— run Succeeded. Persistence agent synced status to the API server.");
+        running = false; el("kfRun").disabled = false; return;
+      }
+      var s = STEPS[i];
+      // cache key = hash(component spec + resolved inputs, incl. upstream artifact identity)
+      var key = hash(s.id + "|" + s.yaml + "|" + inputs[s.id] + "|" + upstreamKey);
+      if (caching && history[s.id] === key) {
+        nodeState[s.id] = "cached"; renderDag();
+        plog("cache", "driver[" + s.label + "]: cache key " + key + " hit → reuse outputs, no Pod created");
+        upstreamKey = key; i++;
+        setTimeout(next, 180);
+        return;
+      }
+      nodeState[s.id] = "running"; renderDag();
+      plog("", "driver[" + s.label + "]: cache key " + key + (caching ? " miss" : " (caching off)") + " → " + s.chain.split(" → ").slice(1).join(" → "));
+      setTimeout(function () {
+        nodeState[s.id] = "ran"; renderDag();
+        history[s.id] = key;
+        plog("ok", "launcher[" + s.label + "]: outputs uploaded, execution recorded (" + (s.dur / 100).toFixed(1) + " min simulated)");
+        upstreamKey = key; i++;
+        next();
+      }, s.dur);
+    }
+    next();
+  }
+  el("kfRun").addEventListener("click", runPipe);
+  el("kfReset").addEventListener("click", function () { if (!running) resetPipe(); });
+  resetPipe(); renderDetail();
+
+  /* =================== Katib tuning simulator =================== */
+  // Hidden objective on [0,1]^2. x = log10(lr) mapped from [-5,-1], y = dropout/0.6.
+  function trueLoss(x, y) {
+    var broad  = 0.42 * Math.exp(-(((x - 0.30) * (x - 0.30)) / 0.045 + ((y - 0.62) * (y - 0.62)) / 0.09));
+    var narrow = 0.70 * Math.exp(-(((x - 0.71) * (x - 0.71)) / 0.012 + ((y - 0.28) * (y - 0.28)) / 0.025));
+    var ripple = 0.04 * Math.sin(9 * x) * Math.cos(7 * y);
+    var edge = 0.25 * Math.pow(x - 0.5, 2) + 0.1 * Math.pow(y - 0.4, 2);
+    return 0.95 - broad - narrow + ripple + edge;
+  }
+  var GRID = 60, OPT = Infinity;
+  for (var gi = 0; gi <= 200; gi++) for (var gj = 0; gj <= 200; gj++) OPT = Math.min(OPT, trueLoss(gi / 200, gj / 200));
+
+  var rngState;
+  function rand() { rngState = (Math.imul(rngState, 1664525) + 1013904223) >>> 0; return rngState / 4294967296; }
+  function gauss() { var u = rand() || 1e-9, v = rand(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+
+  var BUDGET = 30, N_INIT = 5, kt, timer = null;
+  function observe(x, y) { return trueLoss(x, y) + (el("ktNoise").checked ? 0.05 * gauss() : 0); }
+
+  function resetTune() {
+    if (timer) { clearInterval(timer); timer = null; }
+    rngState = (Math.random() * 4294967296) >>> 0;
+    kt = { R: [], B: [] };
+    drawAll();
+  }
+
+  // --- Gaussian process (RBF kernel) + Expected Improvement ---
+  var LS = 0.13, NOISE = 1e-4;
+  function kern(a, b) { var dx = a[0] - b[0], dy = a[1] - b[1]; return Math.exp(-(dx * dx + dy * dy) / (2 * LS * LS)); }
+  function cholesky(A) {
+    var n = A.length, L = [], i, j, k;
+    for (i = 0; i < n; i++) { L.push(new Array(n).fill(0)); }
+    for (i = 0; i < n; i++) for (j = 0; j <= i; j++) {
+      var s = A[i][j];
+      for (k = 0; k < j; k++) s -= L[i][k] * L[j][k];
+      L[i][j] = i === j ? Math.sqrt(Math.max(s, 1e-12)) : s / L[j][j];
+    }
+    return L;
+  }
+  function fwd(L, b) { var n = b.length, x = new Array(n); for (var i = 0; i < n; i++) { var s = b[i]; for (var k = 0; k < i; k++) s -= L[i][k] * x[k]; x[i] = s / L[i][i]; } return x; }
+  function bwd(L, b) { var n = b.length, x = new Array(n); for (var i = n - 1; i >= 0; i--) { var s = b[i]; for (var k = i + 1; k < n; k++) s -= L[k][i] * x[k]; x[i] = s / L[i][i]; } return x; }
+  function erf(x) { var t = 1 / (1 + 0.3275911 * Math.abs(x)); var y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x); return x >= 0 ? y : -y; }
+  function Phi(z) { return 0.5 * (1 + erf(z / Math.SQRT2)); }
+  function phi(z) { return Math.exp(-z * z / 2) / Math.sqrt(2 * Math.PI); }
+
+  function suggestBayes(trials) {
+    if (trials.length < N_INIT) return [rand(), rand()];
+    var X = trials.map(function (t) { return [t.x, t.y]; });
+    var ys = trials.map(function (t) { return t.v; });
+    var mean = ys.reduce(function (a, b) { return a + b; }, 0) / ys.length;
+    var sd = Math.sqrt(ys.reduce(function (a, b) { return a + (b - mean) * (b - mean); }, 0) / ys.length) || 1;
+    var yn = ys.map(function (v) { return (v - mean) / sd; });
+    var noise = el("ktNoise").checked ? 0.05 : NOISE;
+    var K = X.map(function (a, i) { return X.map(function (b, j) { return kern(a, b) + (i === j ? noise : 0); }); });
+    var L = cholesky(K);
+    var alpha = bwd(L, fwd(L, yn));
+    var best = Math.min.apply(null, yn), bestEI = -1, pick = null;
+    var C = 48;
+    for (var i = 0; i < C; i++) for (var j = 0; j < C; j++) {
+      var p = [(i + rand()) / C, (j + rand()) / C];
+      var ks = X.map(function (a) { return kern(a, p); });
+      var mu = 0; for (var k = 0; k < ks.length; k++) mu += ks[k] * alpha[k];
+      var v = fwd(L, ks), vv = 0; for (k = 0; k < v.length; k++) vv += v[k] * v[k];
+      var sig = Math.sqrt(Math.max(1 - vv, 1e-9));
+      var imp = best - mu - 0.05, z = imp / sig;
+      var ei = imp * Phi(z) + sig * phi(z);
+      if (ei > bestEI) { bestEI = ei; pick = p; }
+    }
+    return pick;
+  }
+
+  function stepTune() {
+    if (kt.R.length >= BUDGET) return false;
+    var rx = rand(), ry = rand();
+    kt.R.push({ x: rx, y: ry, v: observe(rx, ry) });
+    var b = suggestBayes(kt.B);
+    kt.B.push({ x: b[0], y: b[1], v: observe(b[0], b[1]) });
+    drawAll();
+    return kt.R.length < BUDGET;
+  }
+
+  // --- drawing ---
+  var surfCache = null;
+  function hexToRgb(c) {
+    var m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(c);
+    if (m) { var h = m[1]; if (h.length === 3) h = h.replace(/./g, function (ch) { return ch + ch; }); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]; }
+    m = /rgba?\(([^)]+)\)/.exec(c);
+    if (m) { var p = m[1].split(/[ ,]+/).map(Number); return [p[0], p[1], p[2]]; }
+    return [50, 108, 229];
+  }
+  function bestOf(arr, n) { var b = Infinity; for (var i = 0; i < Math.min(n, arr.length); i++) b = Math.min(b, trueLoss(arr[i].x, arr[i].y)); return b; }
+
+  function drawPanel(canvas, trials, color) {
+    var ctx = canvas.getContext("2d"), W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    if (el("ktReveal").checked) {
+      var acc = hexToRgb(cssVar("--cloud-cyan", "#00b4d8"));
+      if (!surfCache) {
+        surfCache = [];
+        var lo = Infinity, hi = -Infinity;
+        for (var i = 0; i < GRID; i++) { surfCache.push([]); for (var j = 0; j < GRID; j++) { var v = trueLoss((i + .5) / GRID, (j + .5) / GRID); surfCache[i].push(v); lo = Math.min(lo, v); hi = Math.max(hi, v); } }
+        surfCache.lo = lo; surfCache.hi = hi;
+      }
+      var cw = W / GRID, ch = H / GRID;
+      for (i = 0; i < GRID; i++) for (j = 0; j < GRID; j++) {
+        var t = 1 - (surfCache[i][j] - surfCache.lo) / (surfCache.hi - surfCache.lo);
+        ctx.fillStyle = "rgba(" + acc[0] + "," + acc[1] + "," + acc[2] + "," + (0.04 + 0.62 * Math.pow(t, 2.2)).toFixed(3) + ")";
+        ctx.fillRect(i * cw, H - (j + 1) * ch, cw + 1, ch + 1);
+      }
+    }
+    var bi = -1, bv = Infinity;
+    trials.forEach(function (tr, k) { if (tr.v < bv) { bv = tr.v; bi = k; } });
+    trials.forEach(function (tr, k) {
+      ctx.beginPath(); ctx.arc(tr.x * W, H - tr.y * H, 4, 0, Math.PI * 2);
+      ctx.fillStyle = color; ctx.globalAlpha = 0.35 + 0.65 * (k + 1) / trials.length; ctx.fill(); ctx.globalAlpha = 1;
+    });
+    if (bi >= 0) {
+      ctx.beginPath(); ctx.arc(trials[bi].x * W, H - trials[bi].y * H, 9, 0, Math.PI * 2);
+      ctx.strokeStyle = cssVar("--signal-green", "#22c55e"); ctx.lineWidth = 2.5; ctx.stroke();
+    }
+  }
+
+  function drawCurve() {
+    var c = el("ktCurve"), ctx = c.getContext("2d");
+    var W = c.width = Math.max(300, Math.round(c.clientWidth || 640)), H = c.height;
+    ctx.clearRect(0, 0, W, H);
+    var pad = 30, top = 10, maxV = 1.05, minV = OPT - 0.05;
+    function px(n) { return pad + (W - pad - 10) * (n - 1) / (BUDGET - 1); }
+    function py(v) { return top + (H - top - 22) * (maxV - v) / (maxV - minV); }
+    ctx.strokeStyle = cssVar("--border-strong", "#888"); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pad, top); ctx.lineTo(pad, H - 22); ctx.lineTo(W - 10, H - 22); ctx.stroke();
+    ctx.fillStyle = cssVar("--text-faint", "#888"); ctx.font = "11px " + cssVar("--font-mono", "monospace");
+    ctx.fillText("1", pad - 3, H - 8); ctx.fillText(String(BUDGET), W - 24, H - 8); ctx.fillText("trial", W / 2 - 12, H - 8);
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = cssVar("--signal-green", "#22c55e");
+    ctx.beginPath(); ctx.moveTo(pad, py(OPT)); ctx.lineTo(W - 10, py(OPT)); ctx.stroke(); ctx.setLineDash([]);
+    function line(arr, color) {
+      if (!arr.length) return;
+      ctx.strokeStyle = color; ctx.lineWidth = 2.5; ctx.beginPath();
+      for (var n = 1; n <= arr.length; n++) { var v = bestOf(arr, n); if (n === 1) ctx.moveTo(px(n), py(v)); else ctx.lineTo(px(n), py(v)); }
+      ctx.stroke();
+    }
+    line(kt.R, cssVar("--signal-amber", "#f59e0b"));
+    line(kt.B, cssVar("--accent", "#326ce5"));
+  }
+
+  function drawAll() {
+    drawPanel(el("ktCanR"), kt.R, cssVar("--signal-amber", "#f59e0b"));
+    drawPanel(el("ktCanB"), kt.B, cssVar("--accent", "#326ce5"));
+    function lbl(arr) {
+      if (!arr.length) return "0 / " + BUDGET + " trials";
+      var b = bestOf(arr, arr.length);
+      return arr.length + "/" + BUDGET + " · best " + b.toFixed(3) + " (gap " + (b - OPT).toFixed(3) + ")";
+    }
+    el("ktBestR").textContent = lbl(kt.R);
+    el("ktBestB").textContent = lbl(kt.B);
+    drawCurve();
+  }
+
+  el("ktStep").addEventListener("click", function () { if (!timer) stepTune(); });
+  el("ktRun").addEventListener("click", function () {
+    if (timer) return;
+    timer = setInterval(function () { if (!stepTune()) { clearInterval(timer); timer = null; } }, 140);
+  });
+  el("ktReset").addEventListener("click", resetTune);
+  el("ktReveal").addEventListener("change", drawAll);
+  el("ktNoise").addEventListener("change", resetTune);
+  window.addEventListener("resize", function () { if (kt) drawCurve(); });
+  resetTune();
+
+  /* =================== Quiz =================== */
+  document.querySelectorAll(".quiz-block").forEach(function (block) {
+    var answer = block.getAttribute("data-answer");
+    var feedback = block.querySelector(".quiz-feedback");
+    var options = block.querySelectorAll(".quiz-option");
+    options.forEach(function (opt) {
+      opt.addEventListener("click", function () {
+        var correct = opt.getAttribute("data-val") === answer;
+        options.forEach(function (o) { o.disabled = true; });
+        options.forEach(function (o) { if (o.getAttribute("data-val") === answer) o.classList.add("correct"); });
+        if (!correct) opt.classList.add("wrong");
+        feedback.textContent = correct ? "Correct." : "Not quite. The highlighted option is correct.";
+      });
+    });
+  });
+})();
+</script>
